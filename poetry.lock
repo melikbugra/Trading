@@ -3145,8 +3145,10 @@ prettytable = "^3.9.0"
 torch = "^2.5.1"
 
 [package.source]
-type = "directory"
-url = "rl_baselines_repo"
+type = "git"
+url = "https://github.com/melikbugra/rl-baselines.git"
+reference = "HEAD"
+resolved_reference = "8c5ab775680e67e166e77102158ecefed42cda62"
 
 [[package]]
 name = "rsa"
@@ -3998,4 +4000,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11"
-content-hash = "cd4bcbae3619965aab518434fbc46190011c33af3375e19d85232984cf487e50"
+content-hash = "619e8d635efd4e25b9ac3c4e18b29c4db815652b94f4a0e94b8decd1c5496c7f"
