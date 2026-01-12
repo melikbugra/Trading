@@ -1,0 +1,33 @@
+# Version Control
+**/.git
+**/.gitignore
+**/.vscode
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/venv
+**/env
+
+# Node / Web
+node_modules/
+**/node_modules/
+financia/ui/node_modules/
+**/dist
+**/build
+**/coverage
+npm-debug.log*
+
+# Data & DB
+*.db
+*.sqlite3
+data/
+portfolio.db
+models/*.zip
+!models/ppo_short_mid_agent
+
+# Project specific
+financia/ui/dist
+financia/ui/.vite

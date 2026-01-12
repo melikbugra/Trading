@@ -62,6 +62,11 @@ MODEL_PATH = "models/ppo_short_mid_agent"
 async def startup_event():
     global inference_engine
     
+    # Print all routes for debugging
+    print("Registered Routes:")
+    for route in app.routes:
+        print(f" - {route.path} ({getattr(route, 'methods', 'WS')})")
+    
     # Initialize DB
     print("Initializing Database...")
     init_db()
@@ -97,6 +102,14 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+@app.get("/ws")
+def ws_status_check():
+    """
+    Debug Endpoint to check if /ws is reachable via HTTP.
+    If this returns 200 but WS fails, it means Upgrade headers are stripped (Nginx).
+    """
+    return {"status": "WebSocket endpoint is active. If you are seeing this, your connection was NOT upgraded to WebSocket (check Nginx settings)."}
 
 # -- API Endpoints --
 

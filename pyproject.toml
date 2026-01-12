@@ -22,6 +22,8 @@ dependencies = [
     "websockets (>=13.0,<15.0)"
 ]
 
+[tool.poetry.dependencies]
+torch = { version = ">=2.0.0", source = "pytorch" }
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
