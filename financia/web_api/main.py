@@ -176,13 +176,13 @@ def analyze_single_ticker_db(ticker: str):
                 new_decision = result["decision"]
                 old_decision = item.last_decision
                 
-                # Check for Alert Condition (Status changed TO SELL)
-                # If old wasn't SELL/STRONG SELL and new IS SELL/STRONG SELL
-                if old_decision not in ["SELL", "STRONG SELL"] and new_decision in ["SELL", "STRONG SELL"]:
-                    print(f"!!! TRIGGERING SELL ALERT FOR {ticker} !!!")
-                    EmailService.send_sell_alert(
+                # Check for Alert Condition (Any Status Change)
+                if old_decision != new_decision:
+                    print(f"!!! TRIGGERING ALERT FOR {ticker}: {old_decision} -> {new_decision} !!!")
+                    EmailService.send_decision_alert(
                         ticker=ticker, 
-                        decision=new_decision, 
+                        old_decision=old_decision,
+                        new_decision=new_decision, 
                         price=result["price"], 
                         score=result.get("final_score", 0.0)
                     )
