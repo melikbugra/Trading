@@ -1733,7 +1733,7 @@ optuna = ["optuna (>=4.1.0,<5.0.0)"]
 type = "git"
 url = "https://github.com/melikbugra/rl-baselines.git"
 reference = "HEAD"
-resolved_reference = "a38cd97459f79ed519527a3a78e2c0c86ece269e"
+resolved_reference = "1b86a51df3a4ad60432af1dfc083892dad9ef2df"
 
 [[package]]
 name = "scikit-learn"
