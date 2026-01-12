@@ -21,9 +21,13 @@ export default function Dashboard() {
     useEffect(() => {
         fetchPortfolio(); // Initial load
 
-        // Request Notification Permission
-        if (Notification.permission !== "granted") {
-            Notification.requestPermission();
+        // Request Notification Permission (Safely)
+        if ('Notification' in window && Notification.permission !== "granted") {
+            try {
+                Notification.requestPermission();
+            } catch (e) {
+                console.warn("Notification permission request failed:", e);
+            }
         }
     }, []);
 
@@ -87,11 +91,15 @@ export default function Dashboard() {
     };
 
     const sendNotification = (ticker, decision) => {
-        if (Notification.permission === "granted") {
-            new Notification(`Signal Alert: ${ticker}`, {
-                body: `Model changed decision to: ${decision}`,
-                icon: '/vite.svg'
-            });
+        if ('Notification' in window && Notification.permission === "granted") {
+            try {
+                new Notification(`Signal Alert: ${ticker}`, {
+                    body: `Model changed decision to: ${decision}`,
+                    icon: '/vite.svg'
+                });
+            } catch (e) {
+                console.warn("Notification creation failed:", e);
+            }
         }
     };
 
