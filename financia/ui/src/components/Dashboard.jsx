@@ -215,10 +215,11 @@ export default function Dashboard() {
                     <RecommendationsModal onClose={() => setShowRecs(false)} />
                 )}
             </div>
-            );
+        </div>
+    );
 }
 
-            function StockCard({item, onRemove, onClick}) {
+function StockCard({ item, onRemove, onClick }) {
     const getStatusColor = (status) => {
         switch (status) {
             case 'BUY': return 'bg-green-900/30 border-green-500/50 text-green-400';
@@ -241,58 +242,58 @@ export default function Dashboard() {
         if (!vol) return '0';
         if (vol >= 1000000) return (vol / 1000000).toFixed(1) + 'M';
         if (vol >= 1000) return (vol / 1000).toFixed(1) + 'K';
-            return vol.toFixed(0);
+        return vol.toFixed(0);
     };
 
-            return (
-            <div
-                onClick={onClick}
-                className={`p-6 rounded-xl border-2 backdrop-blur-sm relative group transition-all duration-300 hover:scale-[1.02] cursor-pointer ${getStatusColor(item.last_decision)}`}
+    return (
+        <div
+            onClick={onClick}
+            className={`p-6 rounded-xl border-2 backdrop-blur-sm relative group transition-all duration-300 hover:scale-[1.02] cursor-pointer ${getStatusColor(item.last_decision)}`}
+        >
+            <button
+                onClick={(e) => onRemove(e, item.ticker)}
+                className="absolute top-4 right-4 p-1 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition z-10"
             >
-                <button
-                    onClick={(e) => onRemove(e, item.ticker)}
-                    className="absolute top-4 right-4 p-1 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition z-10"
-                >
-                    <Trash2 size={18} />
-                </button>
+                <Trash2 size={18} />
+            </button>
 
-                <div className="flex justify-between items-start mb-4">
-                    <div>
-                        <h2 className="text-2xl font-black tracking-wider">{item.ticker.replace('.IS', '')}</h2>
-                        <div className="flex flex-col gap-0.5 mt-1">
-                            <p className="text-sm opacity-70">{item.last_updated}</p>
-                            {item.last_volume > 0 && (
-                                <p className="text-xs font-mono opacity-60">
-                                    HACİM: {formatVolume(item.last_volume)}
-                                    {item.last_volume_ratio > 0 && (
-                                        <span className={`ml-1 ${item.last_volume_ratio >= 1.5 ? 'text-green-400 font-bold' : item.last_volume_ratio <= 0.5 ? 'text-red-400' : 'text-gray-400'}`}>
-                                            ({item.last_volume_ratio.toFixed(2)}x)
-                                        </span>
-                                    )}
-                                </p>
-                            )}
-                        </div>
+            <div className="flex justify-between items-start mb-4">
+                <div>
+                    <h2 className="text-2xl font-black tracking-wider">{item.ticker.replace('.IS', '')}</h2>
+                    <div className="flex flex-col gap-0.5 mt-1">
+                        <p className="text-sm opacity-70">{item.last_updated}</p>
+                        {item.last_volume > 0 && (
+                            <p className="text-xs font-mono opacity-60">
+                                HACİM: {formatVolume(item.last_volume)}
+                                {item.last_volume_ratio > 0 && (
+                                    <span className={`ml-1 ${item.last_volume_ratio >= 1.5 ? 'text-green-400 font-bold' : item.last_volume_ratio <= 0.5 ? 'text-red-400' : 'text-gray-400'}`}>
+                                        ({item.last_volume_ratio.toFixed(2)}x)
+                                    </span>
+                                )}
+                            </p>
+                        )}
                     </div>
-                    <div className="p-2 rounded-full bg-white/5">
-                        {getIcon(item.last_decision)}
+                </div>
+                <div className="p-2 rounded-full bg-white/5">
+                    {getIcon(item.last_decision)}
+                </div>
+            </div>
+
+            <div className="mt-6 flex items-end justify-between">
+                <div>
+                    <span className="text-xs uppercase tracking-widest opacity-60">FİYAT</span>
+                    <div className="text-3xl font-mono font-medium">
+                        {item.last_price > 0 ? item.last_price.toFixed(2) : '-.--'} <span className="text-lg">TL</span>
                     </div>
                 </div>
 
-                <div className="mt-6 flex items-end justify-between">
-                    <div>
-                        <span className="text-xs uppercase tracking-widest opacity-60">FİYAT</span>
-                        <div className="text-3xl font-mono font-medium">
-                            {item.last_price > 0 ? item.last_price.toFixed(2) : '-.--'} <span className="text-lg">TL</span>
-                        </div>
-                    </div>
-
-                    <div className="text-right">
-                        <span className="text-xs uppercase tracking-widest opacity-60">KARAR</span>
-                        <div className="text-xl font-bold">
-                            {item.last_decision}
-                        </div>
+                <div className="text-right">
+                    <span className="text-xs uppercase tracking-widest opacity-60">KARAR</span>
+                    <div className="text-xl font-bold">
+                        {item.last_decision}
                     </div>
                 </div>
             </div>
-            );
+        </div>
+    );
 }
