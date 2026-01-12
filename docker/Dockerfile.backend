@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies (e.g. for building some python packages)
+RUN apt-get update && apt-get install -y gcc curl git && rm -rf /var/lib/apt/lists/*
+
+# Install Poetry
+RUN curl -sSL https://install.python-poetry.org | python3 -
+ENV PATH="/root/.local/bin:$PATH"
+
+# Copy Project Config
+COPY pyproject.toml poetry.lock ./
+
+# Install Dependencies FIRST (Caching layer)
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-interaction --no-ansi --no-root
+
+# THEN Copy Source Code
+COPY financia ./financia
+COPY models ./models
+COPY data ./data
+
+
+# Expose Port
+EXPOSE 8000
+
+# Run
+CMD ["python", "-m", "financia.web_api.main"]
