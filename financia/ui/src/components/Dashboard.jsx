@@ -166,39 +166,39 @@ export default function Dashboard() {
                             <RefreshCw size={20} />
                         </button>
                     </div>
-
-                    {/* Add Stock Form */}
-                    <form onSubmit={addTicker} className="flex gap-4 mb-12">
-                        <input
-                            type="text"
-                            placeholder="Hisse Ekle (Örn: THYAO)"
-                            value={newTicker}
-                            onChange={(e) => setNewTicker(e.target.value)}
-                            className="flex-1 p-4 rounded-lg bg-gray-800 border border-gray-700 focus:outline-none focus:border-green-500 text-lg uppercase"
-                        />
-                        <button type="submit" disabled={loading} className="px-8 py-4 bg-green-600 rounded-lg font-bold hover:bg-green-700 transition disabled:opacity-50">
-                            {loading ? 'Ekleniyor...' : <Plus size={24} />}
-                        </button>
-                    </form>
-
-                    {/* Grid */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {portfolio.map((item) => (
-                            <StockCard
-                                key={item.ticker}
-                                item={item}
-                                onRemove={removeTicker}
-                                onClick={() => setSelectedItem(item)}
-                            />
-                        ))}
-                    </div>
-
-                    {portfolio.length === 0 && (
-                        <div className="text-center text-gray-500 mt-20">
-                            Takip edilen hisse yok. Başlamak için yukarıdan ekleyin.
-                        </div>
-                    )}
                 </div>
+
+                {/* Add Stock Form */}
+                <form onSubmit={addTicker} className="flex gap-4 mb-12">
+                    <input
+                        type="text"
+                        placeholder="Hisse Ekle (Örn: THYAO)"
+                        value={newTicker}
+                        onChange={(e) => setNewTicker(e.target.value)}
+                        className="flex-1 p-4 rounded-lg bg-gray-800 border border-gray-700 focus:outline-none focus:border-green-500 text-lg uppercase"
+                    />
+                    <button type="submit" disabled={loading} className="px-8 py-4 bg-green-600 rounded-lg font-bold hover:bg-green-700 transition disabled:opacity-50">
+                        {loading ? 'Ekleniyor...' : <Plus size={24} />}
+                    </button>
+                </form>
+
+                {/* Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {portfolio.map((item) => (
+                        <StockCard
+                            key={item.ticker}
+                            item={item}
+                            onRemove={removeTicker}
+                            onClick={() => setSelectedItem(item)}
+                        />
+                    ))}
+                </div>
+
+                {portfolio.length === 0 && (
+                    <div className="text-center text-gray-500 mt-20">
+                        Takip edilen hisse yok. Başlamak için yukarıdan ekleyin.
+                    </div>
+                )}
 
                 {/* Details Modal */}
                 {selectedItem && (
