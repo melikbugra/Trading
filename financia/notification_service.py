@@ -55,18 +55,26 @@ class EmailService:
             print(f"[EmailService] Failed to send email: {e}")
 
     @staticmethod
-    def send_sell_alert(ticker, decision, price, score):
-        subject = f"🚨 SATIŞ EMRİ: {ticker} Signal Changed to {decision}"
+    @staticmethod
+    def send_decision_alert(ticker, old_decision, new_decision, price, score):
+        # Determine emoji based on decision
+        emoji = "ℹ️"
+        if "SELL" in new_decision:
+            emoji = "🚨"
+        elif "BUY" in new_decision:
+            emoji = "🟢"
+        
+        subject = f"{emoji} Signal Update: {ticker} ({old_decision} ➡️ {new_decision})"
+        
         body = f"""
-        RL Trading Bot Alert
+        RL Trading Bot Signal Check
         
         TICKER:   {ticker}
-        DECISION: {decision} (Changed to SELL)
+        CHANGE:   {old_decision}  ➡️  {new_decision}
         PRICE:    {price:.2f} ₺
         SCORE:    {score:.2f}
         
-        The system has detected a SELL signal based on technical indicators. 
-        Please check your portfolio and consider taking action.
+        The technical decision for this stock has changed.
         
         Dashboard: http://localhost:5173
         """
