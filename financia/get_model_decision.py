@@ -29,6 +29,7 @@ class InferenceEngine:
             print("Dataset not found, fetching live sample for shape...")
             analyzer = StockAnalyzer("THYAO.IS", horizon="short-mid")
             df = analyzer.prepare_rl_features().head(100)
+            df['Ticker'] = "THYAO.IS" # TradingEnv requires Ticker column
             
         env = TradingEnv(df)
         env.spec = SimpleNamespace(id="TradingEnv-v0")
