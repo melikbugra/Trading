@@ -247,7 +247,10 @@ def analyze_single_ticker_db(ticker: str):
                     "last_price": item.last_price,
                     "last_updated": item.last_updated,
                     "last_volume": item.last_volume,
-                    "last_volume_ratio": item.last_volume_ratio
+                    "last_volume_ratio": item.last_volume_ratio,
+                    "final_score": item.final_score,
+                    "category_scores": item.category_scores,
+                    "indicator_details": item.indicator_details
                 }
             }))
             loop.close()
