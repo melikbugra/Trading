@@ -10,7 +10,7 @@ RUN curl -sSL https://install.python-poetry.org | python3 -
 ENV PATH="/root/.local/bin:$PATH"
 
 # Copy Project Config
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml ./
 
 # Install Dependencies FIRST (Caching layer)
 RUN poetry config virtualenvs.create false \
