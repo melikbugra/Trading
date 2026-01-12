@@ -19,7 +19,7 @@ RUN poetry config virtualenvs.create false \
 # THEN Copy Source Code
 COPY financia ./financia
 COPY models ./models
-COPY data ./data
+
 
 
 # Expose Port
