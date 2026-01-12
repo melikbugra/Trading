@@ -37,7 +37,7 @@ export default function PinLogin({ onLogin }) {
                         onChange={(e) => setPin(e.target.value)}
                         className={`w-full bg-black/50 border ${error ? 'border-red-500' : 'border-gray-700 focus:border-blue-500'} rounded-xl px-4 py-3 text-white text-center text-2xl tracking-[0.5em] outline-none transition-all`}
                         placeholder="••••"
-                        maxLength={6}
+                        maxLength={50}
                         autoFocus
                     />
 
@@ -54,9 +54,7 @@ export default function PinLogin({ onLogin }) {
                         GİRİŞ
                     </button>
 
-                    <div className="text-xs text-gray-700 mt-4">
-                        Varsayılan PIN: 1234
-                    </div>
+
                 </form>
             </div>
         </div>
