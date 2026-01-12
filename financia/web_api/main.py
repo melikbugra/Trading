@@ -275,6 +275,19 @@ def run_market_scanner():
     """
     print("--- Market Scanner Started ---")
     
+    # Broadcast SCAN_STARTED
+    import asyncio
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(manager.broadcast({
+            "type": "SCAN_STARTED",
+            "data": {}
+        }))
+        loop.close()
+    except Exception as e:
+        print(f"WS Broadcast Error: {e}")
+    
     # Clean old recommendations? 
     # Or strict update? Let's clear table to keep it fresh top picks.
     db = SessionLocal()
@@ -343,6 +356,19 @@ def run_market_scanner():
                 loop.close()
         
     print("--- Market Scanner Finished ---")
+
+    # Broadcast SCAN_FINISHED
+    import asyncio
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(manager.broadcast({
+            "type": "SCAN_FINISHED",
+            "data": {}
+        }))
+        loop.close()
+    except Exception as e:
+        print(f"WS Broadcast Error: {e}")
 
 if __name__ == "__main__":
     import uvicorn
