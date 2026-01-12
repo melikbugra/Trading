@@ -176,8 +176,8 @@ def analyze_single_ticker_db(ticker: str):
                 new_decision = result["decision"]
                 old_decision = item.last_decision
                 
-                # Check for Alert Condition (Any Status Change)
-                if old_decision != new_decision:
+                # Check for Alert Condition (Status Change, excluding initial PENDING)
+                if old_decision != new_decision and old_decision != "PENDING":
                     print(f"!!! TRIGGERING ALERT FOR {ticker}: {old_decision} -> {new_decision} !!!")
                     EmailService.send_decision_alert(
                         ticker=ticker, 

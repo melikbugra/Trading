@@ -42,7 +42,7 @@ export default function Dashboard() {
             if (portfolio.length > 0) {
                 newData.forEach(newItem => {
                     const oldItem = portfolio.find(p => p.ticker === newItem.ticker);
-                    if (oldItem && oldItem.last_decision !== newItem.last_decision && newItem.last_decision !== 'PENDING') {
+                    if (oldItem && oldItem.last_decision !== newItem.last_decision && newItem.last_decision !== 'PENDING' && oldItem.last_decision !== 'PENDING') {
                         sendNotification(newItem.ticker, newItem.last_decision);
                     }
                 });
