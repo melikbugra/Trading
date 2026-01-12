@@ -7,18 +7,17 @@ export const useWebSocket = () => useContext(WebSocketContext);
 export const WebSocketProvider = ({ children }) => {
     const [lastMessage, setLastMessage] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
+    const [isScanning, setIsScanning] = useState(false);
     const wsRef = useRef(null);
 
     // Get API Endpoint (Convert http/https to ws/wss)
     const getWsUrl = () => {
         const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-        // If API URL is relative or absolute http, convert
         if (apiUrl.startsWith('http')) {
             return apiUrl.replace('http', 'ws') + '/ws';
         }
-        // Fallback for production if running on same origin
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${protocol}//${window.location.host}/api/ws`; // Assumption if proxy
+        return `${protocol}//${window.location.host}/api/ws`;
     };
 
     const connect = () => {
@@ -37,6 +36,13 @@ export const WebSocketProvider = ({ children }) => {
             try {
                 const updatedData = JSON.parse(event.data);
                 setLastMessage(updatedData);
+
+                // Global Scanner State Management
+                if (updatedData.type === 'SCAN_STARTED') {
+                    setIsScanning(true);
+                } else if (updatedData.type === 'SCAN_FINISHED') {
+                    setIsScanning(false);
+                }
             } catch (err) {
                 console.error("WS Parse Error:", err);
             }
@@ -45,7 +51,7 @@ export const WebSocketProvider = ({ children }) => {
         ws.onclose = () => {
             console.log("WebSocket Disconnected. Reconnecting...");
             setIsConnected(false);
-            setTimeout(connect, 3000); // Reconnect after 3s
+            setTimeout(connect, 3000);
         };
 
         ws.onerror = (err) => {
@@ -62,7 +68,7 @@ export const WebSocketProvider = ({ children }) => {
     }, []);
 
     return (
-        <WebSocketContext.Provider value={{ lastMessage, isConnected }}>
+        <WebSocketContext.Provider value={{ lastMessage, isConnected, isScanning }}>
             {children}
         </WebSocketContext.Provider>
     );

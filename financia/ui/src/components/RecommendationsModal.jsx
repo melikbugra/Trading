@@ -8,24 +8,27 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 export default function RecommendationsModal({ onClose }) {
     const [recs, setRecs] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [scanning, setScanning] = useState(false);
 
-    const { lastMessage } = useWebSocket();
+    // Scanning state is now global
+
+    const { lastMessage, isScanning } = useWebSocket();
 
     useEffect(() => {
         fetchRecs();
     }, []);
 
     useEffect(() => {
-        if (lastMessage && lastMessage.type === 'RECOMMENDATION_UPDATE') {
-            const newItem = lastMessage.data;
-            setRecs(prev => {
-                // Remove existing if present (to update)
-                const filtered = prev.filter(r => r.ticker !== newItem.ticker);
-                const updated = [...filtered, newItem];
-                // Sort by Score DESC
-                return updated.sort((a, b) => b.score - a.score);
-            });
+        if (lastMessage) {
+            if (lastMessage.type === 'RECOMMENDATION_UPDATE') {
+                const newItem = lastMessage.data;
+                setRecs(prev => {
+                    const filtered = prev.filter(r => r.ticker !== newItem.ticker);
+                    const updated = [...filtered, newItem];
+                    return updated.sort((a, b) => b.score - a.score);
+                });
+
+                // SCAN_STARTED/FINISHED are handled in Context
+            }
         }
     }, [lastMessage]);
 
@@ -40,13 +43,10 @@ export default function RecommendationsModal({ onClose }) {
 
     const runScanner = async () => {
         try {
-            setScanning(true);
+            // isScanning will update automatically via WS event
             await axios.post(`${API_URL}/recommendations/scan`);
-            // Reset spinner after a short delay since background job continues
-            setTimeout(() => setScanning(false), 2000);
         } catch (err) {
             console.error("Error starting scan:", err);
-            setScanning(false);
         }
     };
 
@@ -75,11 +75,11 @@ export default function RecommendationsModal({ onClose }) {
                     </div>
                     <button
                         onClick={runScanner}
-                        disabled={scanning}
-                        className={`flex items-center gap-2 px-6 py-2 rounded-lg font-bold transition ${scanning ? 'bg-gray-700 text-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+                        disabled={isScanning}
+                        className={`flex items-center gap-2 px-6 py-2 rounded-lg font-bold transition ${isScanning ? 'bg-gray-700 text-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
                     >
-                        <RefreshCw size={18} className={scanning ? "animate-spin" : ""} />
-                        {scanning ? "TARANIYOR..." : "PIYASAYI TARA"}
+                        <RefreshCw size={18} className={isScanning ? "animate-spin" : ""} />
+                        {isScanning ? "TARANIYOR..." : "PIYASAYI TARA"}
                     </button>
                 </div>
 
