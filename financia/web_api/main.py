@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 from financia.web_api.database import init_db, get_db, PortfolioItemDB, RecommendationDB, SessionLocal
 from financia.get_model_decision import InferenceEngine
 from financia.data_generator import BIST100
+from financia.web_api.websocket_manager import manager
+from fastapi import WebSocket, WebSocketDisconnect
 
 app = FastAPI(title="RL Trading Dashboard API")
 
@@ -83,6 +85,18 @@ async def startup_event():
             
     thread = threading.Thread(target=scheduler_loop, daemon=True)
     thread.start()
+
+# -- WebSocket Endpoint --
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive, maybe listen for client "pings" or subscription requests
+            # For now, simplistic: just listen (discard input)
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
 
 # -- API Endpoints --
 
@@ -198,6 +212,33 @@ def analyze_single_ticker_db(ticker: str):
                 item.indicator_details = result.get("indicator_details", [])
             
             db.commit()
+            
+            # Broadcast Update via WebSocket
+            import asyncio
+            # Since this runs in a thread (background task), we can't await directly on the loop of main thread easily.
+            # However, manager.broadcast is 'async def'. 
+            # Solution: Use asyncio.run() if in separate thread, OR better: use manager.broadcast_sync wrapper if we made one.
+            # Actually, standard pattern for FastAPI background tasks pushing to WS is tricky.
+            # Best approach for simple app: 
+            # Just Run broadcast logic. 
+            # Note: BackgroundTasks run in threadpool.
+            
+            # Creating a fire-and-forget sync wrapper for broadcast
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(manager.broadcast({
+                "type": "PORTFOLIO_UPDATE",
+                "data": {
+                    "ticker": item.ticker,
+                    "last_decision": item.last_decision,
+                    "last_price": item.last_price,
+                    "last_updated": item.last_updated,
+                    "last_volume": item.last_volume,
+                    "last_volume_ratio": item.last_volume_ratio
+                }
+            }))
+            loop.close()
+
         db.close()
     except Exception as e:
         print(f"DB Update Error {ticker}: {e}")
@@ -259,8 +300,31 @@ def run_market_scanner():
                 )
                 db.add(rec)
                 db.commit()
+                db.commit()
                 db.close()
                 print(f"Scanner: Recommended {ticker} (Score: {score}, Div: {div_count})")
+                
+                # Broadcast Recommendation Update (or just signal "RECS_UPDATED")
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                # Send full list? Too heavy potentially. Just signal refresh needed.
+                # Or send the single new item.
+                # Let's signal a refresh for now to keep frontend simple (re-fetch whole list) 
+                # OR send the item to append.
+                # Efficient: Send item.
+                loop.run_until_complete(manager.broadcast({
+                    "type": "RECOMMENDATION_UPDATE",
+                    "data": {
+                        "ticker": ticker,
+                        "score": score,
+                        "decision": decision,
+                        "price": result["price"],
+                        "divergence_count": div_count,
+                        "last_updated": (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                }))
+                loop.close()
         
     print("--- Market Scanner Finished ---")
 

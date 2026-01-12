@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { X, RefreshCw, TrendingUp, AlertTriangle, Zap } from 'lucide-react';
+import { useWebSocket } from '../contexts/WebSocketContext';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -9,11 +10,24 @@ export default function RecommendationsModal({ onClose }) {
     const [loading, setLoading] = useState(false);
     const [scanning, setScanning] = useState(false);
 
+    const { lastMessage } = useWebSocket();
+
     useEffect(() => {
         fetchRecs();
-        const interval = setInterval(fetchRecs, 10000); // Live poll
-        return () => clearInterval(interval);
     }, []);
+
+    useEffect(() => {
+        if (lastMessage && lastMessage.type === 'RECOMMENDATION_UPDATE') {
+            const newItem = lastMessage.data;
+            setRecs(prev => {
+                // Remove existing if present (to update)
+                const filtered = prev.filter(r => r.ticker !== newItem.ticker);
+                const updated = [...filtered, newItem];
+                // Sort by Score DESC
+                return updated.sort((a, b) => b.score - a.score);
+            });
+        }
+    }, [lastMessage]);
 
     const fetchRecs = async () => {
         try {
