@@ -5,6 +5,7 @@ import DetailsModal from './DetailsModal';
 import HelpModal from './HelpModal';
 import RecommendationsModal from './RecommendationsModal';
 import { useWebSocket } from '../contexts/WebSocketContext';
+import { useToast } from '../contexts/ToastContext';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -17,6 +18,7 @@ export default function Dashboard() {
     const [showRecs, setShowRecs] = useState(false);
 
     const { lastMessage, isConnected } = useWebSocket();
+    const { addToast } = useToast();
 
     useEffect(() => {
         fetchPortfolio(); // Initial load
@@ -119,10 +121,12 @@ export default function Dashboard() {
         try {
             setLoading(true);
             await axios.post(`${API_URL}/portfolio`, { ticker: tickerToSend });
+            addToast(`${tickerToSend} portföye eklendi.`, "success");
             setNewTicker('');
             fetchPortfolio();
         } catch (err) {
             console.error("Error adding ticker:", err);
+            addToast("Hisse eklenirken hata oluştu.", "error");
         } finally {
             setLoading(false);
         }
@@ -134,18 +138,21 @@ export default function Dashboard() {
         try {
             await axios.delete(`${API_URL}/portfolio/${ticker}`);
             if (selectedItem?.ticker === ticker) setSelectedItem(null);
+            addToast(`${ticker} listeden silindi.`, "success");
             fetchPortfolio();
         } catch (err) {
             console.error("Error removing ticker:", err);
+            addToast("Silme işlemi başarısız oldu.", "error");
         }
     };
 
     const refreshAll = async () => {
         try {
+            addToast("Arka plan analizi başlatıldı.", "info");
             await axios.post(`${API_URL}/refresh`);
-            alert("Analysis triggered in background.");
         } catch (err) {
             console.error("Error refreshing:", err);
+            addToast("Analiz başlatılamadı.", "error");
         }
     };
 

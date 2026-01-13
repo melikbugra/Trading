@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { X, RefreshCw, TrendingUp, AlertTriangle, Zap } from 'lucide-react';
 import { useWebSocket } from '../contexts/WebSocketContext';
+import { useToast } from '../contexts/ToastContext';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -12,6 +13,7 @@ export default function RecommendationsModal({ onClose }) {
     // Scanning state is now global
 
     const { lastMessage, isScanning } = useWebSocket();
+    const { addToast } = useToast();
 
     useEffect(() => {
         fetchRecs();
@@ -27,7 +29,9 @@ export default function RecommendationsModal({ onClose }) {
                     return updated.sort((a, b) => b.score - a.score);
                 });
 
-                // SCAN_STARTED/FINISHED are handled in Context
+            } else if (lastMessage.type === 'SCAN_FINISHED') {
+                // Global context update handles isScanning state.
+                addToast("Piyasa taraması tamamlandı!", "success");
             }
         }
     }, [lastMessage]);
@@ -47,6 +51,7 @@ export default function RecommendationsModal({ onClose }) {
             await axios.post(`${API_URL}/recommendations/scan`);
         } catch (err) {
             console.error("Error starting scan:", err);
+            addToast("Tarama başlatılamadı.", "error");
         }
     };
 
