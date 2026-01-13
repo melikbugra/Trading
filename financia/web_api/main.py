@@ -86,7 +86,7 @@ async def startup_event():
                 print("--- Scheduler: Finished. Sleeping for 15m ---")
             except Exception as e:
                 print(f"Scheduler Error: {e}")
-            time.sleep(900)
+            time.sleep(60)
             
     thread = threading.Thread(target=scheduler_loop, daemon=True)
     thread.start()
