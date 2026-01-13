@@ -19,7 +19,7 @@ class StockAnalyzer:
         # Configure fetching parameters based on horizon if not provided
         if period is None or interval is None:
             if self.horizon == 'short':
-                _period = "6mo" # Need enough data for 200-period MA
+                _period = "730d" # Max available hourly data (approx 2 years)
                 _interval = "60m"
             elif self.horizon == 'short-mid':
                 _period = "2y" # Fetch ~2 years of 1h data to resample

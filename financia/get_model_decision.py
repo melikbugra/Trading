@@ -20,16 +20,21 @@ class InferenceEngine:
         self.device = 'cpu'
         
     def get_dummy_env(self):
-        # Try to load from parquet to get correct shape
-        parquet_path = "data/dataset_short_mid.parquet"
-        if os.path.exists(parquet_path):
-            df = pd.read_parquet(parquet_path).head(100)
-        else:
-            # Fallback: Fetch live one just for shape
-            print("Dataset not found, fetching live sample for shape...")
-            analyzer = StockAnalyzer("THYAO.IS", horizon="short-mid")
-            df = analyzer.prepare_rl_features().head(100)
-            df['Ticker'] = "THYAO.IS" # TradingEnv requires Ticker column
+        # Always fetch a live sample to determine correct observation shape
+        # This ensures the model initializes with constraints matching the current Analyzer logic
+        try:
+           # Use a liquid stock for reliable shape detection
+           analyzer = StockAnalyzer("THYAO.IS", horizon="short") 
+           df = analyzer.prepare_rl_features().head(100)
+           df['Ticker'] = "THYAO.IS" 
+        except Exception:
+           # Ultimate fallback if no internet or API fail (should not happen in prod)
+           # Create a dummy DF with expected columns? No, better to fail loud.
+           # Or try another ticker.
+           print("Warning: Could not fetch live shape, trying fallback ticker...")
+           analyzer = StockAnalyzer("GARAN.IS", horizon="short")
+           df = analyzer.prepare_rl_features().head(100)
+           df['Ticker'] = "GARAN.IS"
             
         env = TradingEnv(df)
         env.spec = SimpleNamespace(id="TradingEnv-v0")
@@ -68,6 +73,17 @@ class InferenceEngine:
             if analyzer.data is None or analyzer.data.empty:
                 return {"error": "No data found"}
                 
+            # Capture Live Data (for UI display) before dropping it for analysis
+            live_price = float(analyzer.data['Close'].iloc[-1])
+            live_volume = float(analyzer.data['Volume'].iloc[-1])
+            live_timestamp = str(analyzer.data.index[-1])
+            
+            # --- STABLE SIGNAL LOGIC ---
+            # User Strategy: Use ONLY closed 1H candles for decision to prevent repainting.
+            # We drop the last row (Current Open Candle) from the dataset.
+            if len(analyzer.data) > 1:
+                analyzer.data = analyzer.data.iloc[:-1]
+            
             df = analyzer.prepare_rl_features()
             if df.empty:
                  return {"error": "Not enough data"}
@@ -98,12 +114,15 @@ class InferenceEngine:
             decision = action_map.get(int(action), "UNKNOWN")
             
             # Perform Full Technical Analysis for UI Details
+            # Now calculated on CLOSED DATA (analyzer.data is already stripped)
             indicators = ["RSI", "MACD", "BB", "MA", "DMI", "SAR", "STOCH", "STOCHRSI", "SUPERTREND", "ICHIMOKU", "ALLIGATOR", "AWESOME", "MFI", "CMF", "WAVETREND", "KAMA", "GATOR", "DEMAND_INDEX", "WILLIAMS_R", "AROON", "DEMA", "MEDIAN", "FISHER"]
             
             df_decisions = analyzer.get_indicator_decisions(*indicators)
             score, category_scores = analyzer.calculate_final_score(df_decisions)
             
-            # Volume Ratio Calculation
+            # Volume Ratio Calculation (on closed data?)
+            # Maybe keep live volume ratio?
+            # Let's use closed volume for ratio consistency with decision
             vol = analyzer.data['Volume']
             vol_ma = vol.rolling(window=20).mean()
             vol_ratio = 0.0
@@ -117,10 +136,10 @@ class InferenceEngine:
             return {
                 "decision": decision,
                 "action_code": int(action),
-                "price": float(analyzer.data['Close'].iloc[-1]),
-                "volume": float(analyzer.data['Volume'].iloc[-1]),
-                "volume_ratio": vol_ratio,
-                "timestamp": str(df.index[-1]),
+                "price": live_price, # Show User LIVE Price
+                "volume": live_volume, # Show User LIVE Volume
+                "volume_ratio": vol_ratio, # Ratio based on CLOSED candle
+                "timestamp": str(df.index[-1]), # Timestamp of the SIGNAL candle (Closed)
                 # New Fields
                 "final_score": float(score),
                 "category_scores": category_scores,

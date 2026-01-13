@@ -56,7 +56,7 @@ class RecommendationItem(BaseModel):
 
 # Global Engine
 inference_engine = None
-MODEL_PATH = "models/ppo_short_mid_agent"
+MODEL_PATH = "models/ppo_short_agent"
 
 @app.on_event("startup")
 async def startup_event():
@@ -78,15 +78,39 @@ async def startup_event():
     
     # Start Scheduler
     def scheduler_loop():
+        # BIST Market Hours: 09:55 - 18:10 (Broadly 09:00 - 18:30 for safety)
+        # Timezone: UTC+3 (Istanbul)
         time.sleep(10)
         while True:
             try:
-                print("--- Scheduler: Starting Automatic Analysis ---")
-                run_analysis_job_db()
-                print("--- Scheduler: Finished. Sleeping for 15m ---")
+                # Calculate Istanbul Time (UTC+3) manually if server is UTC
+                now_utc = datetime.utcnow()
+                now_tr = now_utc + timedelta(hours=3)
+                
+                hour = now_tr.hour
+                weekday = now_tr.weekday() # 0=Mon, 6=Sun
+                
+                # Market Range: 09:00 to 18:30
+                market_open = (hour >= 9) and (
+                    (hour < 18) or (hour == 18 and now_tr.minute <= 30)
+                )
+                
+                # Check Weekend
+                is_weekday = weekday < 5
+                
+                if market_open and is_weekday:
+                    print(f"--- Scheduler: Market Open ({now_tr.strftime('%H:%M')}) - Starting Automatic Analysis ---")
+                    run_analysis_job_db()
+                    print("--- Scheduler: Finished. Sleeping for 1m ---")
+                    time.sleep(60)
+                else:
+                    # Market Closed - Sleep longer (e.g. 5 minutes)
+                    # print(f"--- Scheduler: Market Closed ({now_tr.strftime('%H:%M')}). Sleeping... ---")
+                    time.sleep(300)
+                    
             except Exception as e:
                 print(f"Scheduler Error: {e}")
-            time.sleep(60)
+                time.sleep(60)
             
     thread = threading.Thread(target=scheduler_loop, daemon=True)
     thread.start()
@@ -179,7 +203,7 @@ def analyze_single_ticker_core(ticker: str):
     try:
         # Check cache or throttle? 
         # For now, just run.
-        result = inference_engine.analyze_ticker(ticker, horizon='short-mid')
+        result = inference_engine.analyze_ticker(ticker, horizon='short')
         return result
     except Exception as e:
         print(f"Core Analysis Error {ticker}: {e}")
