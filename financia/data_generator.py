@@ -68,9 +68,26 @@ def generate_dataset(horizon, output_file, period=None, interval=None):
     # Concatenate
     final_df = pd.concat(all_data, ignore_index=True)
     
-    # Save to Parquet
+    # Determine Date Range for Archival Filename
+    # 'Date' or 'Datetime' column is created by reset_index() depending on index name
+    date_col = 'Date' if 'Date' in final_df.columns else 'Datetime'
+    
+    if date_col in final_df.columns:
+        final_df[date_col] = pd.to_datetime(final_df[date_col])
+        min_date = final_df[date_col].min().strftime("%Y%m%d")
+        max_date = final_df[date_col].max().strftime("%Y%m%d")
+        
+        # Split extension
+        base_name, ext = os.path.splitext(output_file)
+        versioned_file = f"{base_name}_{min_date}_{max_date}{ext}"
+        
+        # Save Versioned Copy (Archival)
+        final_df.to_parquet(versioned_file, index=False)
+        print(f"Saved Versioned Copy: {versioned_file}")
+        
+    # Save Standard Copy (For Pipeline/Training)
     final_df.to_parquet(output_file, index=False)
-    print(f"Saved {len(final_df)} rows to {output_file}")
+    print(f"Saved {len(final_df)} rows to Standard Path: {output_file}")
     print("Columns:", list(final_df.columns))
 
 if __name__ == "__main__":

@@ -338,16 +338,167 @@ def evaluate_specific_ticker(ticker, days, model_path, initial_balance=10000):
     print(f"Plot saved to {plot_path}")
 
 
+def backtest_production_simulation(ticker, model_path, initial_balance=10000):
+    print(f"\n--- Production Simulation: {ticker} (Last 5 Days / 1m Resolution / 15m Latency) ---")
+    
+    # 1. Fetch 1M Data (Execution Data)
+    print("Fetching 1m Execution Data (Max 7 days)...")
+    analyzer_1m = StockAnalyzer(ticker, horizon='short', period='7d', interval='1m')
+    if analyzer_1m.data is None or analyzer_1m.data.empty:
+        print("Error: Could not fetch 1m data.")
+        return
+    
+    df_exec = analyzer_1m.data
+    # Determine simulation start/end from 1m data
+    sim_start = df_exec.index.min()
+    sim_end = df_exec.index.max()
+    print(f"Execution Data: {len(df_exec)} bars from {sim_start} to {sim_end}")
+    
+    # 2. Fetch 1H Data (Signal Data)
+    # We need enough history for indicators, but covering the simulation period
+    print("Fetching 1h Signal Data (2 Years for Indicator Warmup)...")
+    analyzer_1h = StockAnalyzer(ticker, horizon='short', period='730d', interval='1h')
+    
+    # 3. Prepare Model
+    if not model_path.endswith(".ckpt"): model_path += ".ckpt"
+    print(f"Loading Model: {model_path}")
+    
+    # We need a dummy env to load the model architecture
+    dummy_df = analyzer_1h.prepare_rl_features().head(100)
+    dummy_df['Ticker'] = ticker
+    dummy_env = TradingEnv(dummy_df)
+    dummy_env.spec = SimpleNamespace(id="TradingEnv-v0")
+    
+    start_time = datetime.now()
+    try:
+        model = PPO(env=dummy_env, network_type="mlp", device='cpu')
+        model.load(model_path)
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        return
+
+    # 4. Generate All Decision Signals (Vectorized)
+    print("Generating Signals on 1h Data...")
+    df_signals = analyzer_1h.prepare_rl_features()
+    
+    signal_cache = {} # Timestamp -> Action Code
+    
+    feature_cols = [c for c in df_signals.columns if c not in ['Date', 'Ticker', 'Timestamp', 'Close']]
+    
+    relevant_signals = df_signals[df_signals.index >= (sim_start - timedelta(days=1))]
+    
+    print(f"Processing {len(relevant_signals)} hourly candles for signals...")
+    
+    for idx, row in relevant_signals.iterrows():
+        obs = row[feature_cols].values.astype(np.float32)
+        account_obs = np.array([0.0, 0.0, 0.0], dtype=np.float32) # Neutral state
+        final_obs = np.concatenate([obs, account_obs])
+        
+        obs_tensor = model.state_to_torch(final_obs)
+        action_tensor = model.agent.select_greedy_action(obs_tensor, eval=True)
+        action = action_tensor.item()
+        
+        # Determine Execution Time: Signal applies 1h 15m after candle OPEN (idx)
+        # Assuming yfinance labels by open time:
+        # Candle 10:00 -> Closes 11:00 -> Latency 15m -> Avail 11:15
+        signal_valid_from = idx + timedelta(hours=1, minutes=15)
+        signal_cache[signal_valid_from] = action
+
+    # 5. Simulate Loop Over 1m Data
+    print("Simulating Execution...")
+    
+    balance = initial_balance
+    shares = 0
+    equity_curve = []
+    trades = []
+    
+    current_signal = 0 # HOLD
+    last_signal_time = None
+    
+    sorted_signal_times = sorted(signal_cache.keys())
+    next_signal_idx = 0
+    
+    # We can iterate through 1m bars
+    for ts, row in df_exec.iterrows():
+        price = row['Close']
+        
+        # Check if we have a new signal update
+        while next_signal_idx < len(sorted_signal_times) and ts >= sorted_signal_times[next_signal_idx]:
+             last_signal_time = sorted_signal_times[next_signal_idx]
+             current_signal = signal_cache[last_signal_time]
+             next_signal_idx += 1
+             
+        # Execute Strategy based on Current Signal
+        if current_signal == 1: # BUY
+             if shares == 0:
+                 shares = balance / price
+                 balance = 0
+                 trades.append({'step': ts, 'type': 'buy', 'price': price, 'value': shares * price})
+                 
+        elif current_signal == 2: # SELL
+             if shares > 0:
+                 balance = shares * price
+                 trades.append({'step': ts, 'type': 'sell', 'price': price, 'value': balance})
+                 shares = 0
+        
+        # Calculate Net Worth
+        net_worth = balance + (shares * price)
+        equity_curve.append(net_worth)
+        
+    # 6. Report
+    final_net_worth = equity_curve[-1] if equity_curve else initial_balance
+    profit = final_net_worth - initial_balance
+    roi = (profit / initial_balance) * 100
+    
+    print("\n" + "="*50)
+    print(f" PRODUCTION SIMULATION RESULTS: {ticker}")
+    print(f" (Logic: 1H Signal (Closed) -> Executed at Hour:15)")
+    print("="*50)
+    print(f"Period:      {sim_start} - {sim_end}")
+    print(f"Initial:     ₺{initial_balance:,.2f}")
+    print(f"Final:       ₺{final_net_worth:,.2f}")
+    print(f"Profit:      ₺{profit:,.2f}")
+    print(f"ROI:         {roi:.2f}%")
+    print(f"Trades:      {len(trades)}")
+    print("-" * 50)
+    
+    # Print Trades
+    print(f" {'TIME':<22} | {'ACTION':<6} | {'PRICE':<10}")
+    for t in trades:
+         print(f" {str(t['step']):<22} | {t['type'].upper():<6} | ₺{t['price']:<9.2f}")
+    print("="*50)
+
+    # Plot
+    plt.figure(figsize=(12, 6))
+    plt.plot(df_exec.index, equity_curve, label='Simulated Equity')
+    plt.plot(df_exec.index, df_exec['Close'] * (initial_balance / df_exec['Close'].iloc[0]), alpha=0.5, label='Buy & Hold')
+    plt.title(f'Production Simulation: {ticker} (15m Latency)')
+    plt.xlabel('Date')
+    plt.ylabel('Value')
+    plt.legend()
+    plt.grid(True)
+    
+    os.makedirs("results", exist_ok=True)
+    plot_path = f"results/sim_{ticker}_production.png"
+    plt.savefig(plot_path)
+    print(f"Plot saved to {plot_path}")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RL Agent Evaluation")
     parser.add_argument("--ticker", type=str, help="Specific ticker to evaluate (e.g., THYAO.IS)")
     parser.add_argument("--days", type=int, default=30, help="Number of days to evaluate (used with --ticker)")
     parser.add_argument("--model", type=str, default="models/ppo_short_mid_agent", help="Path to model file")
     parser.add_argument("--balance", type=float, default=10000, help="Initial balance for the simulation")
+    parser.add_argument("--simulation", action="store_true", help="Run Production Simulation (15m latency, 1m execution)")
     
     args = parser.parse_args()
     
-    if args.ticker:
+    if args.simulation:
+        if not args.ticker:
+            print("Error: --simulation requires --ticker")
+        else:
+            backtest_production_simulation(args.ticker, args.model, args.balance)
+    elif args.ticker:
         evaluate_specific_ticker(args.ticker, args.days, args.model, args.balance)
     else:
         evaluate_agent("data/dataset_short_mid.parquet", args.model, args.balance)

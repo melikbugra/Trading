@@ -153,38 +153,48 @@ class TradingEnv(gym.Env):
     def _take_action(self, action, current_price):
         # 0: HOLD, 1: BUY, 2: SELL
         
-        commission = 0.001 # 0.1%
+        commission = 0.0 # User has 0% commission
+        
+        # Slippage Simulation
+        # User requested to remove slippage.
+        slippage = 0.0
         
         if action == 1: # BUY
             # Buy with all available balance
             if self.balance > 0:
+                # Price moves UP against us when buying (Worst case assumption due to delay)
+                executed_price = current_price * (1 + slippage)
+                
                 # Calculate shares we can buy
-                cost = current_price * (1 + commission)
+                # Commission is 0, so cost is just price
+                cost = executed_price * (1 + commission)
                 shares_to_buy = int(self.balance / cost)
                 
                 if shares_to_buy > 0:
-                    total_cost = shares_to_buy * current_price * (1 + commission)
+                    total_cost = shares_to_buy * executed_price * (1 + commission)
                     self.balance -= total_cost
                     
                     # Update Avg Cost
                     total_shares = self.shares_held + shares_to_buy
-                    # New avg cost = old_total_val + new_total_val / total_shares (simplified: weighted avg of price paid)
-                    # Actually keeping track of avg entry price
+                    
                     old_cost_basis = self.shares_held * self.avg_cost
-                    new_cost_basis = shares_to_buy * current_price # Before commission? Entry price logic
+                    new_cost_basis = shares_to_buy * executed_price
                     self.avg_cost = (old_cost_basis + new_cost_basis) / total_shares
                     
                     self.shares_held += shares_to_buy
-                    self.trades.append({'step': self.current_step, 'type': 'buy', 'price': current_price})
+                    self.trades.append({'step': self.current_step, 'type': 'buy', 'price': executed_price})
                     
         elif action == 2: # SELL
             # Sell all shares
             if self.shares_held > 0:
-                revenue = self.shares_held * current_price * (1 - commission)
+                # Price moves DOWN against us when selling
+                executed_price = current_price * (1 - slippage)
+                
+                revenue = self.shares_held * executed_price * (1 - commission)
                 self.balance += revenue
                 self.shares_held = 0
                 self.avg_cost = 0
-                self.trades.append({'step': self.current_step, 'type': 'sell', 'price': current_price})
+                self.trades.append({'step': self.current_step, 'type': 'sell', 'price': executed_price})
                 
     def _calculate_reward(self, prev_net_worth):
         # Reward = Change in Net Worth - Time Penalty
