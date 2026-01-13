@@ -48,6 +48,8 @@ export default function RecommendationsModal({ onClose }) {
     const runScanner = async () => {
         try {
             // isScanning will update automatically via WS event
+            // Clear old results immediately
+            setRecs([]);
             await axios.post(`${API_URL}/recommendations/scan`);
         } catch (err) {
             console.error("Error starting scan:", err);

@@ -179,7 +179,7 @@ def refresh_analysis(background_tasks: BackgroundTasks):
 
 # -- Recommendations Endpoint --
 @app.get("/recommendations", response_model=List[RecommendationItem])
-def get_recommendations(limit: int = 5, db: Session = Depends(get_db)):
+def get_recommendations(limit: int = 15, db: Session = Depends(get_db)):
     # Order by Score DESC, then Divergence Count DESC
     items = db.query(RecommendationDB)\
               .order_by(RecommendationDB.score.desc(), RecommendationDB.divergence_count.desc())\
