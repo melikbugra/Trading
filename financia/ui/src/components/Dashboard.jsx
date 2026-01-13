@@ -134,8 +134,10 @@ export default function Dashboard() {
 
     const removeTicker = async (e, ticker) => {
         e.stopPropagation(); // Prevent opening modal
-        if (!confirm(`Remove ${ticker}?`)) return;
+        // Instant delete - No native confirmation
+
         try {
+            // Optimistic UI update could be here, but for now just await
             await axios.delete(`${API_URL}/portfolio/${ticker}`);
             if (selectedItem?.ticker === ticker) setSelectedItem(null);
             addToast(`${ticker} listeden silindi.`, "success");
