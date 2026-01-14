@@ -115,7 +115,7 @@ class InferenceEngine:
             
             # Perform Full Technical Analysis for UI Details
             # Now calculated on CLOSED DATA (analyzer.data is already stripped)
-            indicators = ["RSI", "MACD", "BB", "MA", "DMI", "SAR", "STOCH", "STOCHRSI", "SUPERTREND", "ICHIMOKU", "ALLIGATOR", "AWESOME", "MFI", "CMF", "WAVETREND", "KAMA", "GATOR", "DEMAND_INDEX", "WILLIAMS_R", "AROON", "DEMA", "MEDIAN", "FISHER"]
+            indicators = ["RSI", "MACD", "BB", "MA", "DMI", "SAR", "STOCH", "STOCHRSI", "SUPERTREND", "ICHIMOKU", "ALLIGATOR", "AWESOME", "MFI", "CMF", "WAVETREND", "KAMA", "GATOR", "DEMAND_INDEX", "WILLIAMS_R", "AROON", "DEMA", "MEDIAN", "FISHER", "VWAP", "OBV", "CCI"]
             
             df_decisions = analyzer.get_indicator_decisions(*indicators)
             score, category_scores = analyzer.calculate_final_score(df_decisions)

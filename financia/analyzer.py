@@ -66,7 +66,75 @@ class StockAnalyzer:
             print(f"Warning: No data found for ticker {ticker}")
             self.data = pd.DataFrame() # Empty DF
 
+    def _calculate_divergence_series(self, indicator, window=60):
+        """
+        Calculates divergence signal for the entire series.
+        Returns a Series of 1 (Bullish), -1 (Bearish), 0 (None).
+        """
+        price = self.data['Close']
+        div_series = pd.Series(0, index=self.data.index, dtype=float)
+        
+        # Identify Peaks and Troughs (Simple Shift)
+        # 1 means Peak, -1 means Trough, 0 means None
+        
+        # We need peaks of Price AND Indicator
+        # This is a bit heavy loop for Python.
+        # Let's try to be efficient.
+        # Just iterate from window to end.
+        
+        # Pre-compute peaks? No, peaks are contextual to the window? 
+        # Actually peaks are local maxima, independent of window edge (mostly).
+        
+        # Let's use the exact logic from _check_divergence but slid over time.
+        # To avoid lag, we only care if a divergence JUST completed?
+        # Or if we represent a "State" of divergence?
+        # RL usually benefits from "State".
+        
+        # Optimization: run _check_divergence logic on every row? 
+        # With 3000 rows, it might take 1-2 seconds. Acceptable for prep.
+        
+        # BUT _check_divergence needs 'self' to access data['Close']. 
+        # It slices via iloc. 
+        # Let's replicate logic in a loop.
+        
+        close_vals = price.values
+        ind_vals = indicator.values
+        div_out = np.zeros(len(price))
+        
+        for i in range(window, len(price)):
+            # Window slice
+            p_slice = close_vals[i-window:i+1]
+            i_slice = ind_vals[i-window:i+1]
+            
+            # Find Peaks (Indices in slice)
+            # Naive peak finding: val > prev and val > next
+            # We need at least 2 peaks.
+            
+            # This is complex to code in one shot without error.
+            # Alternative: Detection of "Divergence Condition" usually happens when a new peak/trough is confirmed.
+            # Let's use a simplified heuristic for RL efficiency.
+            # "Is Current Price Making Lower Low while Indicator Making Higher Low?" (Rolling Correlation?)
+            # Rolling Correlation of Price vs Indicator.
+            # If Corr is negative -> Divergence? 
+            # Normal: Price Up, Ind Up (Corr > 0).
+            # Divergence: Price Up, Ind Down (Corr < 0).
+            # THIS IS MUCH FASTER AND ROBUST!
+            # Bullish Div: Price Down, Ind Up.
+            # Bearish Div: Price Up, Ind Down.
+            # In both cases, Correlation becomes negative.
+            
+            pass 
+        
+        # REPLACING WITH ROLLING CORRELATION APPROACH
+        # It acts as a proxy for divergence.
+        # If Correlation(Price, Indicator) < -0.5 (or similar threshold), it indicates potential divergence.
+        # Let's return the Correlation itself! The RL can learn "Negative Correlation = Divergence".
+        # This is strictly better than binary 1/0/1 because it's continuous.
+        
+        return price.rolling(window=window).corr(indicator).fillna(0)
+
     def _check_divergence(self, indicator, lookback=60):
+
         """
         Checks for divergence between Price and Indicator.
         Returns: 
@@ -1302,8 +1370,17 @@ class StockAnalyzer:
                 decision, med_val, div = self.get_median_decision()
                 results.append({"Indicator": "MEDIAN", "Decision": decision, "Value": f"{med_val:.2f}", "Divergence": div})
             elif indicator == "FISHER":
-                decision, fish_val, div = self.get_fisher_decision()
-                results.append({"Indicator": "FISHER", "Decision": decision, "Value": f"F:{fish_val:.2f}", "Divergence": div})
+                decision, fisher_val, div = self.get_fisher_decision()
+                results.append({"Indicator": "FISHER", "Decision": decision, "Value": f"F:{fisher_val:.2f}", "Divergence": div})
+            elif indicator == "VWAP":
+                decision, (vwap_val, _), div = self.get_vwap_decision()
+                results.append({"Indicator": "VWAP", "Decision": decision, "Value": f"{vwap_val:.2f}", "Divergence": div})
+            elif indicator == "OBV":
+                decision, (obv_val, obv_ma), div = self.get_obv_decision()
+                results.append({"Indicator": "OBV", "Decision": decision, "Value": f"{obv_val:.0f}", "Divergence": div})
+            elif indicator == "CCI":
+                decision, (cci_val, _), div = self.get_cci_decision()
+                results.append({"Indicator": "CCI", "Decision": decision, "Value": f"{cci_val:.2f}", "Divergence": div})
             else:
                 results.append({"Indicator": indicator, "Decision": "UNKNOWN", "Value": "N/A", "Divergence": 0})
         
@@ -1398,6 +1475,47 @@ class StockAnalyzer:
         # Divergence Check
         div = self._check_divergence(k)
         return decision, (curr_k, curr_d), div
+
+    def _calculate_vwap(self):
+        """
+        Calculates Intraday VWAP (Volume Weighted Average Price).
+        Resets daily based on date index.
+        """
+        df = self.data.copy()
+        # Typical Price
+        df['TP'] = (df['High'] + df['Low'] + df['Close']) / 3
+        df['TPV'] = df['TP'] * df['Volume']
+        
+        # Group by Date to reset accumulation
+        cum_tpv = df.groupby(df.index.date)['TPV'].cumsum()
+        cum_vol = df.groupby(df.index.date)['Volume'].cumsum()
+        
+        vwap = cum_tpv / cum_vol
+        return vwap
+
+    def _calculate_obv(self):
+        """
+        Calculates On-Balance Volume (OBV).
+        """
+        change = self.data['Close'].diff()
+        direction = np.zeros(len(change))
+        direction[change > 0] = 1
+        direction[change < 0] = -1
+        
+        obv = (direction * self.data['Volume']).cumsum()
+        return obv
+
+    def _calculate_cci(self, window=20):
+        """
+        Calculates Commodity Channel Index (CCI).
+        """
+        tp = (self.data['High'] + self.data['Low'] + self.data['Close']) / 3
+        sma_tp = tp.rolling(window).mean()
+        # Mean Absolute Deviation
+        mad = tp.rolling(window).apply(lambda x: np.abs(x - x.mean()).mean())
+        
+        cci = (tp - sma_tp) / (0.015 * mad)
+        return cci
 
     def _calculate_atr(self, period=10):
         """
@@ -1561,6 +1679,63 @@ class StockAnalyzer:
              
         return decision, (curr_short, curr_long), 0
 
+    def get_vwap_decision(self):
+        """
+        Returns decision based on VWAP.
+        Price > VWAP -> BUY (Bullish Trend)
+        Price < VWAP -> SELL (Bearish Trend)
+        """
+        vwap = self._calculate_vwap()
+        current_price = self.data['Close'].iloc[-1]
+        current_vwap = vwap.iloc[-1]
+        
+        if current_price > current_vwap:
+            decision = "BUY"
+        else:
+            decision = "SELL"
+            
+        return decision, (current_vwap, 0), 0
+
+    def get_obv_decision(self):
+        """
+        Returns decision based on OBV.
+        Using 20-period MA crossover logic.
+        """
+        obv = self._calculate_obv()
+        obv_ma = obv.rolling(window=20).mean()
+        
+        curr_obv = obv.iloc[-1]
+        curr_ma = obv_ma.iloc[-1]
+        
+        # Divergence Check on OBV? Harder.
+        # Simple trend check
+        if curr_obv > curr_ma:
+            decision = "BUY"
+        else:
+            decision = "SELL"
+            
+        return decision, (curr_obv, curr_ma), 0
+
+    def get_cci_decision(self):
+        """
+        Returns decision based on CCI.
+        CCI > 100 -> BUY (Momentum)
+        CCI < -100 -> SELL (Momentum)
+        Else -> HOLD
+        """
+        cci = self._calculate_cci()
+        curr_cci = cci.iloc[-1]
+        div = self._check_divergence(cci)
+        
+        if curr_cci > 100:
+            decision = "BUY"
+        elif curr_cci < -100:
+            decision = "SELL"
+        else:
+            decision = "HOLD"
+            
+        return decision, (curr_cci, 0), div
+
     def calculate_final_score(self, df_decisions):
         """
         Aggregates all indicator decisions into a final score (0-100).
@@ -1580,15 +1755,15 @@ class StockAnalyzer:
         }
         
         # Categories and Weights
-        # Trend (40%): MA, DEMA, KAMA, SUPERTREND, ICHIMOKU, SAR, ALLIGATOR, AROON
-        # Momentum (30%): RSI, STOCH, WILLIAMS_R, FISHER, WAVETREND, AWESOME, MACD, STOCHRSI
-        # Volume (20%): MFI, CMF, DEMAND_INDEX
+        # Trend (40%): MA, DEMA, KAMA, SUPERTREND, ICHIMOKU, SAR, ALLIGATOR, AROON, VWAP
+        # Momentum (30%): RSI, STOCH, WILLIAMS_R, FISHER, WAVETREND, AWESOME, MACD, STOCHRSI, DMI, CCI
+        # Volume (20%): MFI, CMF, DEMAND_INDEX, OBV
         # Other (10%): BB, MEDIAN, GATOR
         
         categories = {
-            "TREND": ["MA", "DEMA", "KAMA", "SUPERTREND", "ICHIMOKU", "SAR", "ALLIGATOR", "AROON"],
-            "MOMENTUM": ["RSI", "STOCH", "WILLIAMS_R", "FISHER", "WAVETREND", "AWESOME", "MACD", "STOCHRSI", "DMI"],
-            "VOLUME": ["MFI", "CMF", "DEMAND_INDEX"],
+            "TREND": ["MA", "DEMA", "KAMA", "SUPERTREND", "ICHIMOKU", "SAR", "ALLIGATOR", "AROON", "VWAP"],
+            "MOMENTUM": ["RSI", "STOCH", "WILLIAMS_R", "FISHER", "WAVETREND", "AWESOME", "MACD", "STOCHRSI", "DMI", "CCI"],
+            "VOLUME": ["MFI", "CMF", "DEMAND_INDEX", "OBV"],
             "OTHER": ["BB", "MEDIAN", "GATOR"]
         }
         
@@ -1796,8 +1971,41 @@ class StockAnalyzer:
         di = self._calculate_demand_index()
         df['Demand_Index_Norm'] = di / 100.0
         
+        # --- 5. New Indicators (VWAP, OBV, CCI) ---
+        # VWAP Distance
+        vwap = self._calculate_vwap()
+        df['Dist_VWAP'] = (df['Close'] - vwap) / df['Close']
+        
+        # CCI Normalized
+        cci = self._calculate_cci()
+        df['CCI_Norm'] = cci / 100.0
+        
+        # OBV (Z-Score of OBV to normalize)
+        obv = self._calculate_obv()
+        obv_mean = obv.rolling(window=20).mean()
+        obv_std = obv.rolling(window=20).std().replace(0, 1) # Avoid div by zero
+        df['OBV_Z'] = (obv - obv_mean) / obv_std
+        
+        # --- 6. Divergence Proxies (Rolling Correlation - Window 30) ---
+        # Correlation between Price and Indicator.
+        # Negative correlation implies Divergence.
+        window_corr = 30
+        df['RSI_Correl'] = df['Close'].rolling(window_corr).corr(rsi)
+        df['MACD_Correl'] = df['Close'].rolling(window_corr).corr(macd)
+        df['CCI_Correl'] = df['Close'].rolling(window_corr).corr(cci)
+        df['OBV_Correl'] = df['Close'].rolling(window_corr).corr(obv)
+        df['Stoch_Correl'] = df['Close'].rolling(window_corr).corr(stoch_k)
+        df['Williams_Correl'] = df['Close'].rolling(window_corr).corr(wr)
+        df['Fisher_Correl'] = df['Close'].rolling(window_corr).corr(fisher)
+        df['CMF_Correl'] = df['Close'].rolling(window_corr).corr(cmf)
+        df['MFI_Correl'] = df['Close'].rolling(window_corr).corr(mfi)
+        df['Demand_Correl'] = df['Close'].rolling(window_corr).corr(di)
+        
         # --- CLEANUP ---
-        # Drop initial NaNs generated by rolling windows (Lookback ~ 200)
+        # 1. Replace Infinite values (caused by div by zero) with 0
+        df.replace([np.inf, -np.inf], 0, inplace=True)
+        
+        # 2. Drop initial NaNs generated by rolling windows (Lookback ~ 200)
         df.dropna(inplace=True)
         
         # Select only Feature Columns
@@ -1809,7 +2017,11 @@ class StockAnalyzer:
             'Dist_SAR', 'Alligator_Spread', 'Aroon_Osc', 'Dist_Median',
             'RSI_Norm', 'Stoch_K_Norm', 'Williams_Norm', 'Fisher_Norm', 
             'MACD_Norm', 'ADX_Norm', 'DMI_Dir', 'CMF', 'MFI_Norm', 'WaveTrend_Diff',
-            'Rel_Volume', 'ATR_Pct', 'BB_Width', 'Demand_Index_Norm'
+            'Rel_Volume', 'ATR_Pct', 'BB_Width', 'Demand_Index_Norm',
+            'Dist_VWAP', 'CCI_Norm', 'OBV_Z',
+            'RSI_Correl', 'MACD_Correl', 'CCI_Correl', 'OBV_Correl',
+            'Stoch_Correl', 'Williams_Correl', 'Fisher_Correl', 
+            'CMF_Correl', 'MFI_Correl', 'Demand_Correl'
         ]
         
         # Ensure all columns exist (some might be missing if method failed?)
