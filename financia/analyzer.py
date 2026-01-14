@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 
 class StockAnalyzer:
-    def __init__(self, ticker, horizon='medium', period=None, interval=None):
+    def __init__(self, ticker, horizon='medium', period=None, interval=None, start=None, end=None):
         """
         Initializes the StockAnalyzer with a specific stock ticker and trading horizon.
         
@@ -12,6 +12,8 @@ class StockAnalyzer:
             horizon (str): Trading horizon ('short', 'medium', 'long').
             period (str, optional): Override default period.
             interval (str, optional): Override default interval.
+            start (str/datetime, optional): Start date for fetching data.
+            end (str/datetime, optional): End date for fetching data.
         """
         self.ticker = ticker
         self.horizon = horizon.lower()
@@ -36,7 +38,13 @@ class StockAnalyzer:
         use_interval = interval if interval else _interval
             
         self.stock = yf.Ticker(ticker)
-        self.data = self.stock.history(period=use_period, interval=use_interval)
+        
+        # Fetch Data
+        if start:
+            # If start is provided, use start/end (ignore period)
+            self.data = self.stock.history(start=start, end=end, interval=use_interval)
+        else:
+            self.data = self.stock.history(period=use_period, interval=use_interval)
         
         # Fix for yfinance returning MultiIndex columns
         if isinstance(self.data.columns, pd.MultiIndex):

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Plus, Trash2, RefreshCw, TrendingUp, TrendingDown, Minus, Book, Zap } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, TrendingUp, TrendingDown, Minus, Book, Zap, Activity, Clock } from 'lucide-react';
 import DetailsModal from './DetailsModal';
 import HelpModal from './HelpModal';
 import RecommendationsModal from './RecommendationsModal';
@@ -16,12 +16,14 @@ export default function Dashboard() {
     const [selectedItem, setSelectedItem] = useState(null);
     const [showHelp, setShowHelp] = useState(false);
     const [showRecs, setShowRecs] = useState(false);
+    const [isLiveMode, setIsLiveMode] = useState(false);
 
     const { lastMessage, isConnected } = useWebSocket();
     const { addToast } = useToast();
 
     useEffect(() => {
         fetchPortfolio(); // Initial load
+        fetchLiveModeSetting(); // Get current mode setting
 
         // Request Notification Permission (Safely)
         if ('Notification' in window && Notification.permission !== "granted") {
@@ -105,6 +107,27 @@ export default function Dashboard() {
         }
     };
 
+    const fetchLiveModeSetting = async () => {
+        try {
+            const res = await axios.get(`${API_URL}/settings/live-mode`);
+            setIsLiveMode(res.data.enabled);
+        } catch (err) {
+            console.error("Error fetching live mode setting:", err);
+        }
+    };
+
+    const toggleLiveMode = async () => {
+        try {
+            const newValue = !isLiveMode;
+            await axios.post(`${API_URL}/settings/live-mode`, { enabled: newValue });
+            setIsLiveMode(newValue);
+            addToast(newValue ? "Canlı Mod Aktif (Dakikalık)" : "Saatlik Mod Aktif (Stabil)", "success");
+        } catch (err) {
+            console.error("Error toggling live mode:", err);
+            addToast("Mod değiştirilemedi.", "error");
+        }
+    };
+
     const addTicker = async (e) => {
         e.preventDefault();
         if (!newTicker) return;
@@ -173,6 +196,15 @@ export default function Dashboard() {
                             <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
                             {isConnected ? 'LIVE' : 'OFFLINE'}
                         </div>
+                        {/* Live/Stable Mode Toggle */}
+                        <button
+                            onClick={toggleLiveMode}
+                            className={`flex items-center gap-2 px-3 py-1 rounded border text-xs font-mono transition ${isLiveMode ? 'bg-yellow-600/20 border-yellow-500/50 text-yellow-400' : 'bg-gray-900 border-gray-700 text-gray-400 hover:text-white'}`}
+                            title={isLiveMode ? 'Canlı Mum (Dakikalık Tepki)' : 'Kapanmış Mum (Saatlik Stabil)'}
+                        >
+                            {isLiveMode ? <Activity size={14} /> : <Clock size={14} />}
+                            {isLiveMode ? 'CANLI' : 'SAATLİK'}
+                        </button>
                         <button onClick={() => setShowRecs(true)} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white rounded transition font-bold text-sm shadow-lg shadow-purple-900/20 animate-pulse">
                             <Zap size={18} fill="currentColor" className="text-yellow-300" /> AI TAVSİYE
                         </button>

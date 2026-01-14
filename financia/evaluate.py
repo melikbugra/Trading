@@ -7,7 +7,7 @@ import os
 from types import SimpleNamespace
 import torch
 
-def evaluate_agent(dataset_path, model_path, initial_balance=10000):
+def evaluate_agent(dataset_path, model_path, initial_balance=10000, random_mode=False):
     print(f"Loading data from {dataset_path}...")
     df = pd.read_parquet(dataset_path)
     
@@ -23,20 +23,23 @@ def evaluate_agent(dataset_path, model_path, initial_balance=10000):
     # Patch spec
     env.spec = SimpleNamespace(id="TradingEnv-v0")
     
-    # Load Model
-    # model_path might be missing extension if passed from CLI default
-    if not model_path.endswith(".ckpt"):
-        model_path += ".ckpt"
+    if not random_mode:
+        # Load Model
+        # model_path might be missing extension if passed from CLI default
+        if not model_path.endswith(".ckpt"):
+            model_path += ".ckpt"
+            
+        print(f"Loading model from {model_path}...")
         
-    print(f"Loading model from {model_path}...")
-    
-    # Init PPO instance
-    model = PPO(
-        env=env,
-        network_type="mlp",
-        device='cpu'
-    )
-    model.load(model_path)
+        # Init PPO instance
+        model = PPO(
+            env=env,
+            network_type="mlp",
+            device='cpu'
+        )
+        model.load(model_path)
+    else:
+        print("Running in RANDOM MODE (No model loaded)")
     
     # Run Simulation
     obs, _ = env.reset()
@@ -50,14 +53,17 @@ def evaluate_agent(dataset_path, model_path, initial_balance=10000):
     
     steps = 0
     while not done:
-        # Convert obs to tensor for PPO
-        obs_tensor = model.state_to_torch(obs)
-        action_tensor = model.agent.select_greedy_action(obs_tensor, eval=True)
-        
-        if model.agent.action_type == "discrete":
-            action = action_tensor.item()
+        if random_mode:
+             action = env.action_space.sample()
         else:
-            action = action_tensor.item()
+            # Convert obs to tensor for PPO
+            obs_tensor = model.state_to_torch(obs)
+            action_tensor = model.agent.select_greedy_action(obs_tensor, eval=True)
+            
+            if model.agent.action_type == "discrete":
+                action = action_tensor.item()
+            else:
+                action = action_tensor.item()
             
         obs, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
@@ -194,7 +200,8 @@ def evaluate_agent(dataset_path, model_path, initial_balance=10000):
     # Plotting
     plt.figure(figsize=(12, 6))
     plt.plot(net_worths, label='Equity Curve')
-    plt.title(f'Backtest Results: {model_path}')
+    title_suffix = " (RANDOM)" if random_mode else f": {model_path}"
+    plt.title(f'Backtest Results{title_suffix}')
     plt.xlabel('Steps')
     plt.ylabel('Net Worth')
     plt.legend()
@@ -210,7 +217,57 @@ import argparse
 from financia.analyzer import StockAnalyzer
 from datetime import datetime, timedelta
 
-def evaluate_specific_ticker(ticker, days, model_path, initial_balance=10000):
+def calculate_oracle_profit(prices, initial_balance=10000, fee=0.001):
+    """
+    Calculates the theoretical maximum profit using Dynamic Programming.
+    States: 0=Cash, 1=Held
+    """
+    cash = initial_balance
+    shares = 0
+    
+    # DP States
+    # dp_cash[t] = max cash at time t
+    # dp_shares[t] = max shares at time t
+    
+    # Vectorized approach is hard due to path dependency.
+    # Fast loop is fine for <100k points.
+    
+    # Actually, greedy strategy works for strictly positive fee?
+    # "Buy if price will go up enough to cover fee"
+    # The optimal strategy is to hold whenever price is rising and cash whenever falling.
+    # We just need to handle the fee threshold.
+    # Standard DP:
+    # State 0 (Cash): max(Stay Cash, Sell Shares) -> Wait, we don't have shares in State 0.
+    # We have previous states.
+    
+    # cash[t] = max(cash[t-1], shares[t-1] * p[t] * (1-fee))
+    # shares[t] = max(shares[t-1], cash[t-1] / p[t] * (1-fee))  <- (1-fee) because buying reduces purchasing power
+    
+    n = len(prices)
+    if n == 0: return initial_balance
+    
+    dp_cash = np.zeros(n)
+    dp_shares = np.zeros(n)
+    
+    dp_cash[0] = initial_balance
+    dp_shares[0] = initial_balance / prices[0] * (1 - fee)
+    
+    for i in range(1, n):
+        curr_price = prices[i]
+        
+        # Option 1: To have CASH at i
+        # - We had CASH at i-1 and kept it.
+        # - We had SHARES at i-1 and SOLD them.
+        dp_cash[i] = max(dp_cash[i-1], dp_shares[i-1] * curr_price * (1 - fee))
+        
+        # Option 2: To have SHARES at i
+        # - We had SHARES at i-1 and kept them.
+        # - We had CASH at i-1 and BOUGHT shares.
+        dp_shares[i] = max(dp_shares[i-1], dp_cash[i-1] / curr_price * (1 - fee))
+        
+    return dp_cash[-1]
+
+def evaluate_specific_ticker(ticker, days, model_path, initial_balance=10000, random_mode=False, oracle_mode=False, live_mode=False):
     print(f"\n--- Specific Ticker Evaluation: {ticker} (Last {days} days) ---")
     
     # 1. Fetch Data & Generate Features (reuse logic from DataGenerator)
@@ -221,6 +278,12 @@ def evaluate_specific_ticker(ticker, days, model_path, initial_balance=10000):
         if analyzer.data is None or len(analyzer.data) < 200:
             print(f"Error: Not enough data for {ticker}")
             return
+        # Drop last candle for stable signals (unless live_mode)
+        if not live_mode and len(analyzer.data) > 1:
+            analyzer.data = analyzer.data.iloc[:-1]
+            print("Using STABLE mode (Closed candles only)")
+        else:
+            print("Using LIVE mode (Including developing candle)")
 
         df = analyzer.prepare_rl_features()
         
@@ -252,16 +315,22 @@ def evaluate_specific_ticker(ticker, days, model_path, initial_balance=10000):
     env.spec = SimpleNamespace(id="TradingEnv-v0")
     
     # Load Model
-    if not model_path.endswith(".ckpt"):
-        model_path += ".ckpt"
-        
-    print(f"Loading model from {model_path}...")
-    try:
-        model = PPO(env=env, network_type="mlp", device='cpu')
-        model.load(model_path)
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        return
+    model = None
+    if not random_mode and not oracle_mode:
+        if not model_path.endswith(".ckpt"):
+            model_path += ".ckpt"
+            
+        print(f"Loading model from {model_path}...")
+        try:
+            model = PPO(env=env, network_type="mlp", device='cpu')
+            model.load(model_path)
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            return
+    elif random_mode:
+        print("Running in RANDOM MODE")
+    elif oracle_mode:
+        print("Running in ORACLE MODE (Max Potential Calculation)")
 
     # Run Simulation
     print("Running simulation...")
@@ -271,9 +340,19 @@ def evaluate_specific_ticker(ticker, days, model_path, initial_balance=10000):
     net_worths = []
     
     while not done:
-        obs_tensor = model.state_to_torch(obs)
-        action_tensor = model.agent.select_greedy_action(obs_tensor, eval=True)
-        action = action_tensor.item()
+        if oracle_mode:
+             # Just run creating random actions just to step through env?
+             # Or better: Just calculate oracle profit on the DF directly and skip simulation.
+             # Env requires actions.
+             # Let's just break here if oracle mode, calculate and print.
+             break
+        
+        if random_mode:
+            action = env.action_space.sample()
+        else:
+            obs_tensor = model.state_to_torch(obs)
+            action_tensor = model.agent.select_greedy_action(obs_tensor, eval=True)
+            action = action_tensor.item()
             
         obs, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
@@ -281,52 +360,70 @@ def evaluate_specific_ticker(ticker, days, model_path, initial_balance=10000):
         net_worths.append(info['net_worth'])
         
     # Report Results
-    initial = env.initial_balance
-    final = env.net_worth
-    profit = final - initial
-    roi = (profit / initial) * 100
-    
-    print("\n" + "="*40)
-    print(f" RESULTS FOR {ticker} (Last {days} Days)")
-    print("="*40)
-    print(f"Initial: ₺{initial:,.2f}")
-    print(f"Final:   ₺{final:,.2f}")
-    print(f"Profit:  ₺{profit:,.2f}")
-    print(f"ROI:     {roi:.2f}%")
-    
-    # Trades Summary
-    trades = env.trades
-    total_trades = len(trades) // 2 # Rough estimate of round trips
-    print(f"Trades:  {len(trades)} executions")
-    
-    # Detailed Trade Log
-    if len(trades) > 0:
-        print("\n" + "="*44)
-        print(f" {'DATE / TIME':<22} | {'TYPE':<6} | {'PRICE':<10}")
-        print("-" * 44)
+    if not oracle_mode:
+        initial = env.initial_balance
+        final = env.net_worth
+        profit = final - initial
+        roi = (profit / initial) * 100
         
-        # Identify Date Column
-        date_col = 'index'
-        if 'Date' in df.columns: date_col = 'Date'
-        elif 'Datetime' in df.columns: date_col = 'Datetime'
+        print("\n" + "="*40)
+        print(f" RESULTS FOR {ticker} (Last {days} Days)")
+        print("="*40)
+        print(f"Initial: ₺{initial:,.2f}")
+        print(f"Final:   ₺{final:,.2f}")
+        print(f"Profit:  ₺{profit:,.2f}")
+        print(f"ROI:     {roi:.2f}%")
         
-        for t in trades:
-            step = t['step']
-            price = t['price']
-            action = t['type'].upper() # buy/sell
+        # Trades Summary
+        trades = env.trades
+        total_trades = len(trades) // 2 # Rough estimate of round trips
+        print(f"Trades:  {len(trades)} executions")
+        
+        # Detailed Trade Log
+        if len(trades) > 0:
+            print("\n" + "="*44)
+            print(f" {'DATE / TIME':<22} | {'TYPE':<6} | {'PRICE':<10}")
+            print("-" * 44)
             
-            # Get Date from DataFrame
-            # step corresponds to df index after reset_index
-            date_str = str(df.iloc[step][date_col])
+            # Identify Date Column
+            date_col = 'index'
+            if 'Date' in df.columns: date_col = 'Date'
+            elif 'Datetime' in df.columns: date_col = 'Datetime'
             
-            print(f" {date_str:<22} | {action:<6} | ₺{price:<9.2f}")
-            
-    print("="*40)
+            for t in trades:
+                step = t['step']
+                price = t['price']
+                action = t['type'].upper() # buy/sell
+                
+                # Get Date from DataFrame
+                # step corresponds to df index after reset_index
+                date_str = str(df.iloc[step][date_col])
+                
+                print(f" {date_str:<22} | {action:<6} | ₺{price:<9.2f}")
+                
+        print("="*40)
+    
+    # Oracle Benchmark
+    if oracle_mode:
+        prices = df['Close'].values
+        # Need to re-calculate if the earlier simulation was skipped
+        # But simulation logic loop skipped, so 'prices' is safe.
+        max_possible = calculate_oracle_profit(prices, initial_balance)
+        
+        profit_oracle = max_possible - initial_balance
+        roi_oracle = (profit_oracle / initial_balance) * 100
+        
+        print(f"\n[ORACLE BENCHMARK - MAXIMUM THEORETICAL PROFIT]")
+        print(f"Max Possible: ₺{max_possible:,.2f}")
+        print(f"Max Profit:   ₺{profit_oracle:,.2f}")
+        print(f"Max ROI:      {roi_oracle:.2f}%")
+        print("="*40)
     
     # Plot
     plt.figure(figsize=(10, 5))
     plt.plot(net_worths, label=f'{ticker} Equity')
-    plt.title(f'Evaluation: {ticker} (Last {days} Days)')
+    title_suffix = " (RANDOM)" if random_mode else ""
+    plt.title(f'Evaluation: {ticker} (Last {days} Days){title_suffix}')
     plt.xlabel('Steps (4H Bars)')
     plt.ylabel('Net Worth')
     plt.legend()
@@ -338,8 +435,9 @@ def evaluate_specific_ticker(ticker, days, model_path, initial_balance=10000):
     print(f"Plot saved to {plot_path}")
 
 
-def backtest_production_simulation(ticker, model_path, initial_balance=10000):
-    print(f"\n--- Production Simulation: {ticker} (Last 5 Days / 1m Resolution / 15m Latency) ---")
+def backtest_production_simulation(ticker, model_path, initial_balance=10000, random_mode=False, live_mode=False):
+    mode_label = "LIVE (Developing Candle)" if live_mode else "STABLE (Closed Candles)"
+    print(f"\n--- Production Simulation: {ticker} (Last 5 Days / 1m Resolution / 15m Latency) [{mode_label}] ---")
     
     # 1. Fetch 1M Data (Execution Data)
     print("Fetching 1m Execution Data (Max 7 days)...")
@@ -360,49 +458,133 @@ def backtest_production_simulation(ticker, model_path, initial_balance=10000):
     analyzer_1h = StockAnalyzer(ticker, horizon='short', period='730d', interval='1h')
     
     # 3. Prepare Model
-    if not model_path.endswith(".ckpt"): model_path += ".ckpt"
-    print(f"Loading Model: {model_path}")
-    
-    # We need a dummy env to load the model architecture
-    dummy_df = analyzer_1h.prepare_rl_features().head(100)
-    dummy_df['Ticker'] = ticker
-    dummy_env = TradingEnv(dummy_df)
-    dummy_env.spec = SimpleNamespace(id="TradingEnv-v0")
-    
-    start_time = datetime.now()
-    try:
-        model = PPO(env=dummy_env, network_type="mlp", device='cpu')
-        model.load(model_path)
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        return
+    if not random_mode:
+        if not model_path.endswith(".ckpt"): model_path += ".ckpt"
+        print(f"Loading Model: {model_path}")
+        
+        # We need a dummy env to load the model architecture
+        dummy_df = analyzer_1h.prepare_rl_features().head(100)
+        dummy_df['Ticker'] = ticker
+        dummy_env = TradingEnv(dummy_df)
+        dummy_env.spec = SimpleNamespace(id="TradingEnv-v0")
+        
+        try:
+            model = PPO(env=dummy_env, network_type="mlp", device='cpu')
+            model.load(model_path)
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            return
+    else:
+        print("Running in RANDOM MODE")
+        model = None
 
-    # 4. Generate All Decision Signals (Vectorized)
-    print("Generating Signals on 1h Data...")
-    df_signals = analyzer_1h.prepare_rl_features()
-    
+    # 4. Generate All Decision Signals
     signal_cache = {} # Timestamp -> Action Code
     
-    feature_cols = [c for c in df_signals.columns if c not in ['Date', 'Ticker', 'Timestamp', 'Close']]
-    
-    relevant_signals = df_signals[df_signals.index >= (sim_start - timedelta(days=1))]
-    
-    print(f"Processing {len(relevant_signals)} hourly candles for signals...")
-    
-    for idx, row in relevant_signals.iterrows():
-        obs = row[feature_cols].values.astype(np.float32)
-        account_obs = np.array([0.0, 0.0, 0.0], dtype=np.float32) # Neutral state
-        final_obs = np.concatenate([obs, account_obs])
+    if not live_mode:
+        # STABLE MODE: Generate signals only at hourly boundaries (closed candles)
+        print("Generating Signals on 1h Data (Stable Mode)...")
+        df_signals = analyzer_1h.prepare_rl_features()
+        feature_cols = [c for c in df_signals.columns if c not in ['Date', 'Ticker', 'Timestamp', 'Close']]
+        relevant_signals = df_signals[df_signals.index >= (sim_start - timedelta(days=1))]
         
-        obs_tensor = model.state_to_torch(final_obs)
-        action_tensor = model.agent.select_greedy_action(obs_tensor, eval=True)
-        action = action_tensor.item()
+        print(f"Processing {len(relevant_signals)} hourly candles for signals...")
         
-        # Determine Execution Time: Signal applies 1h 15m after candle OPEN (idx)
-        # Assuming yfinance labels by open time:
-        # Candle 10:00 -> Closes 11:00 -> Latency 15m -> Avail 11:15
-        signal_valid_from = idx + timedelta(hours=1, minutes=15)
-        signal_cache[signal_valid_from] = action
+        for idx, row in relevant_signals.iterrows():
+            if random_mode:
+                action = np.random.randint(0, 3)
+            else:
+                obs = row[feature_cols].values.astype(np.float32)
+                account_obs = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+                final_obs = np.concatenate([obs, account_obs])
+                obs_tensor = model.state_to_torch(final_obs)
+                action_tensor = model.agent.select_greedy_action(obs_tensor, eval=True)
+                action = action_tensor.item()
+            
+            # Signal valid 1h + 15m after candle OPEN
+            signal_valid_from = idx + timedelta(hours=1, minutes=15)
+            signal_cache[signal_valid_from] = action
+    else:
+        # LIVE MODE: Generate signals every 15 minutes using developing candle
+        print("Generating Signals with Developing Candle (Live Mode)...")
+        print("This simulates real-time decision making with partial hourly data...")
+        
+        # Get closed hourly candles (all except the absolute last one)
+        df_1h_base = analyzer_1h.data.iloc[:-1].copy()
+        
+        # Generate signal time points (every 15 minutes during market hours)
+        signal_times = pd.date_range(
+            start=sim_start.replace(minute=0, second=0),
+            end=sim_end,
+            freq='15min'
+        )
+        
+        # Filter to market hours only (09:00 - 18:00 Turkish time)
+        signal_times = [t for t in signal_times if 9 <= t.hour < 18]
+        
+        print(f"Processing {len(signal_times)} signal points (every 15 min)...")
+        
+        for sig_time in signal_times:
+            # Get the hour boundary for this signal time
+            hour_start = sig_time.replace(minute=0, second=0, microsecond=0)
+            
+            # Get 1m data for the developing candle (from hour_start to sig_time)
+            developing_1m = df_exec[(df_exec.index >= hour_start) & (df_exec.index <= sig_time)]
+            
+            if developing_1m.empty:
+                continue
+            
+            # Aggregate 1m data into a single "developing" candle
+            developing_candle = pd.DataFrame([{
+                'Open': developing_1m['Open'].iloc[0],
+                'High': developing_1m['High'].max(),
+                'Low': developing_1m['Low'].min(),
+                'Close': developing_1m['Close'].iloc[-1],
+                'Volume': developing_1m['Volume'].sum()
+            }], index=[hour_start])
+            
+            # Get closed hourly candles up to hour_start (exclusive)
+            closed_hourly = df_1h_base[df_1h_base.index < hour_start].copy()
+            
+            if len(closed_hourly) < 200:
+                continue  # Not enough data for indicators
+            
+            # Append developing candle
+            combined_data = pd.concat([closed_hourly, developing_candle])
+            
+            # Create a temporary analyzer to calculate features
+            temp_analyzer = StockAnalyzer.__new__(StockAnalyzer)
+            temp_analyzer.ticker = ticker
+            temp_analyzer.horizon = 'short'
+            temp_analyzer.data = combined_data
+            
+            try:
+                df_features = temp_analyzer.prepare_rl_features()
+                if df_features.empty:
+                    continue
+                    
+                feature_cols = [c for c in df_features.columns if c not in ['Date', 'Ticker', 'Timestamp', 'Close']]
+                last_row = df_features.iloc[-1]
+                
+                if random_mode:
+                    action = np.random.randint(0, 3)
+                else:
+                    obs = last_row[feature_cols].values.astype(np.float32)
+                    account_obs = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+                    final_obs = np.concatenate([obs, account_obs])
+                    obs_tensor = model.state_to_torch(final_obs)
+                    action_tensor = model.agent.select_greedy_action(obs_tensor, eval=True)
+                    action = action_tensor.item()
+                
+                # Apply 15m latency
+                signal_valid_from = sig_time + timedelta(minutes=15)
+                signal_cache[signal_valid_from] = action
+                
+            except Exception as e:
+                # Skip problematic time points
+                continue
+        
+        print(f"Generated {len(signal_cache)} signals in live mode.")
 
     # 5. Simulate Loop Over 1m Data
     print("Simulating Execution...")
@@ -472,7 +654,8 @@ def backtest_production_simulation(ticker, model_path, initial_balance=10000):
     plt.figure(figsize=(12, 6))
     plt.plot(df_exec.index, equity_curve, label='Simulated Equity')
     plt.plot(df_exec.index, df_exec['Close'] * (initial_balance / df_exec['Close'].iloc[0]), alpha=0.5, label='Buy & Hold')
-    plt.title(f'Production Simulation: {ticker} (15m Latency)')
+    title_suffix = " (RANDOM)" if random_mode else ""
+    plt.title(f'Production Simulation: {ticker} (15m Latency){title_suffix}')
     plt.xlabel('Date')
     plt.ylabel('Value')
     plt.legend()
@@ -490,6 +673,9 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="models/ppo_short_mid_agent", help="Path to model file")
     parser.add_argument("--balance", type=float, default=10000, help="Initial balance for the simulation")
     parser.add_argument("--simulation", action="store_true", help="Run Production Simulation (15m latency, 1m execution)")
+    parser.add_argument("--random", action="store_true", help="Run with Random Agent (Benchmark)")
+    parser.add_argument("--oracle", action="store_true", help="Show Oracle (Max Profit) Benchmark")
+    parser.add_argument("--live", action="store_true", help="Use live/developing candle instead of closed candles")
     
     args = parser.parse_args()
     
@@ -497,8 +683,8 @@ if __name__ == "__main__":
         if not args.ticker:
             print("Error: --simulation requires --ticker")
         else:
-            backtest_production_simulation(args.ticker, args.model, args.balance)
+            backtest_production_simulation(args.ticker, args.model, args.balance, args.random, args.live)
     elif args.ticker:
-        evaluate_specific_ticker(args.ticker, args.days, args.model, args.balance)
+        evaluate_specific_ticker(args.ticker, args.days, args.model, args.balance, args.random, args.oracle, args.live)
     else:
-        evaluate_agent("data/dataset_short_mid.parquet", args.model, args.balance)
+        evaluate_agent("data/dataset_short_mid.parquet", args.model, args.balance, args.random)

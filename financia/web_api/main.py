@@ -58,6 +58,9 @@ class RecommendationItem(BaseModel):
 inference_engine = None
 MODEL_PATH = "models/ppo_short_agent"
 
+# Live Mode Setting (Global)
+use_live_mode = False  # Default: Use closed candles (stable)
+
 @app.on_event("startup")
 async def startup_event():
     global inference_engine
@@ -101,19 +104,35 @@ async def startup_event():
                 if market_open and is_weekday:
                     print(f"--- Scheduler: Market Open ({now_tr.strftime('%H:%M')}) - Starting Automatic Analysis ---")
                     run_analysis_job_db()
-                    print("--- Scheduler: Finished. Sleeping for 5m ---")
-                    time.sleep(300)
+                    print("--- Scheduler: Finished. Sleeping for 1m ---")
+                    time.sleep(60)
                 else:
-                    # Market Closed - Sleep longer (e.g. 5 minutes)
+                    # Market Closed - Sleep longer (e.g. 1 minutes)
                     # print(f"--- Scheduler: Market Closed ({now_tr.strftime('%H:%M')}). Sleeping... ---")
                     time.sleep(300)
                     
             except Exception as e:
                 print(f"Scheduler Error: {e}")
-                time.sleep(60)
+                time.sleep(300)
             
     thread = threading.Thread(target=scheduler_loop, daemon=True)
     thread.start()
+
+# -- Settings Endpoints --
+class LiveModeSetting(BaseModel):
+    enabled: bool
+
+@app.get("/settings/live-mode")
+def get_live_mode():
+    return {"enabled": use_live_mode}
+
+@app.post("/settings/live-mode")
+def set_live_mode(setting: LiveModeSetting):
+    global use_live_mode
+    use_live_mode = setting.enabled
+    mode_str = "LIVE (Real-time)" if use_live_mode else "STABLE (Closed Candles)"
+    print(f"Live Mode changed to: {mode_str}")
+    return {"enabled": use_live_mode, "message": f"Mode set to {mode_str}"}
 
 # -- WebSocket Endpoint --
 @app.websocket("/ws")
@@ -203,7 +222,7 @@ def analyze_single_ticker_core(ticker: str):
     try:
         # Check cache or throttle? 
         # For now, just run.
-        result = inference_engine.analyze_ticker(ticker, horizon='short')
+        result = inference_engine.analyze_ticker(ticker, horizon='short', use_live=use_live_mode)
         return result
     except Exception as e:
         print(f"Core Analysis Error {ticker}: {e}")

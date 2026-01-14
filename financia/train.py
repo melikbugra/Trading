@@ -66,4 +66,4 @@ def train_agent(dataset_path, model_name, timesteps=50000):
 if __name__ == "__main__":
     # Train Short Term Agent
     print("--- Training SHORT Term Agent (Hourly) ---")
-    train_agent("data/dataset_short.parquet", "ppo_short_agent", timesteps=1_000_000)
+    train_agent("data/dataset_short.parquet", "ppo_short_agent", timesteps=5_000_000)
