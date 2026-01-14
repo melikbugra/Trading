@@ -121,7 +121,7 @@ export default function Dashboard() {
         try {
             setLoading(true);
             await axios.post(`${API_URL}/portfolio`, { ticker: tickerToSend });
-            addToast(`${tickerToSend} portföye eklendi.`, "success");
+            addToast(`${tickerToSend.replace('.IS', '')} portföye eklendi.`, "success");
             setNewTicker('');
             fetchPortfolio();
         } catch (err) {
@@ -140,7 +140,7 @@ export default function Dashboard() {
             // Optimistic UI update could be here, but for now just await
             await axios.delete(`${API_URL}/portfolio/${ticker}`);
             if (selectedItem?.ticker === ticker) setSelectedItem(null);
-            addToast(`${ticker} listeden silindi.`, "success");
+            addToast(`${ticker.replace('.IS', '')} listeden silindi.`, "success");
             fetchPortfolio();
         } catch (err) {
             console.error("Error removing ticker:", err);

@@ -101,8 +101,8 @@ async def startup_event():
                 if market_open and is_weekday:
                     print(f"--- Scheduler: Market Open ({now_tr.strftime('%H:%M')}) - Starting Automatic Analysis ---")
                     run_analysis_job_db()
-                    print("--- Scheduler: Finished. Sleeping for 1m ---")
-                    time.sleep(60)
+                    print("--- Scheduler: Finished. Sleeping for 5m ---")
+                    time.sleep(300)
                 else:
                     # Market Closed - Sleep longer (e.g. 5 minutes)
                     # print(f"--- Scheduler: Market Closed ({now_tr.strftime('%H:%M')}). Sleeping... ---")
