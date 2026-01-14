@@ -63,7 +63,16 @@ class InferenceEngine:
             print(f"Error loading model: {e}")
             return False
 
-    def analyze_ticker(self, ticker, horizon='short'):
+    def analyze_ticker(self, ticker, horizon='short', use_live=False):
+        """
+        Analyze a ticker and return decision.
+        
+        Args:
+            ticker: Stock ticker symbol
+            horizon: Trading horizon ('short', 'medium', 'long')
+            use_live: If True, use current developing candle (real-time).
+                      If False (default), use only closed candles (stable).
+        """
         if self.model is None:
             if not self.load_model():
                return {"error": "Model failed to load"}
@@ -78,11 +87,13 @@ class InferenceEngine:
             live_volume = float(analyzer.data['Volume'].iloc[-1])
             live_timestamp = str(analyzer.data.index[-1])
             
-            # --- STABLE SIGNAL LOGIC ---
-            # User Strategy: Use ONLY closed 1H candles for decision to prevent repainting.
-            # We drop the last row (Current Open Candle) from the dataset.
-            if len(analyzer.data) > 1:
-                analyzer.data = analyzer.data.iloc[:-1]
+            # --- SIGNAL MODE ---
+            if not use_live:
+                # STABLE MODE: Use ONLY closed candles for decision to prevent repainting.
+                # We drop the last row (Current Open Candle) from the dataset.
+                if len(analyzer.data) > 1:
+                    analyzer.data = analyzer.data.iloc[:-1]
+            # LIVE MODE: Keep the current developing candle for real-time decisions.
             
             df = analyzer.prepare_rl_features()
             if df.empty:

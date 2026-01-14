@@ -25,70 +25,189 @@ BIST100 = [
     "ZOREN.IS"
 ]
 
+from datetime import datetime, timedelta
+
 def generate_dataset(horizon, output_file, period=None, interval=None):
     """
     Generates a massive dataset for the given horizon.
+    Optimized: Uses incremental updates if file exists.
     """
     print(f"\nGenerators started for Horizon: {horizon.upper()}")
     print(f"Target File: {output_file}")
     
-    all_data = []
+    existing_df = None
+    last_date_map = {} # Ticker -> Last Timestamp
+    
+    # 1. Load Existing Data if Available
+    if os.path.exists(output_file):
+        print(f"File exists. Loading for incremental update...")
+        try:
+            existing_df = pd.read_parquet(output_file)
+            print(f"Loaded {len(existing_df)} rows.")
+            
+            # Determine Date Column
+            date_col = 'Date' if 'Date' in existing_df.columns else 'Datetime'
+            
+            if date_col in existing_df.columns:
+                # Ensure datetime
+                existing_df[date_col] = pd.to_datetime(existing_df[date_col], utc=True)
+                
+                # Group by Ticker to find max date per ticker
+                max_dates = existing_df.groupby('Ticker')[date_col].max()
+                last_date_map = max_dates.to_dict()
+                print(f"Found existing data for {len(last_date_map)} tickers.")
+        except Exception as e:
+            print(f"Error loading existing file: {e}. Starting fresh.")
+            existing_df = None
+
+    all_data = [] # Will hold NEW data chunks
+    
+    total_new_rows = 0
     
     for ticker in tqdm(BIST100):
         try:
-            # Instantiate Analyzer with extended period
-            analyzer = StockAnalyzer(ticker, horizon=horizon, period=period, interval=interval)
+            start_date = None
+            end_date = None
+            
+            # Determine Fetch Strategy
+            if ticker in last_date_map:
+                # Incremental Logic
+                last_ts = last_date_map[ticker]
+                
+                # Safety Margin / Warmup for Indicators
+                # We need context (e.g. 200 bars) before the last valid data to calculate fresh indicators for new data.
+                # Heuristic: 
+                # Hourly -> 60 days
+                # Daily -> 365 days
+                # Weekly -> 730 days
+                
+                warmup_days = 60
+                if interval == '1d': warmup_days = 400
+                elif interval == '1wk': warmup_days = 800
+                
+                # Fetch Start
+                start_dt = last_ts - timedelta(days=warmup_days)
+                
+                # yfinance expects str 'YYYY-MM-DD' or datetime
+                # Using datetime directly is fine
+                start_date = start_dt
+                end_date = datetime.now()
+                
+                # If gap is too small (e.g. run twice same hour), skip?
+                # yfinance handles minimal fetches well.
+                
+                # print(f" {ticker}: Updating from {last_ts} (Fetch start: {start_date})")
+                
+                # Instantiate with Start/End
+                analyzer = StockAnalyzer(ticker, horizon=horizon, interval=interval, start=start_date, end=end_date)
+            else:
+                # Fresh Fetch
+                # print(f" {ticker}: Fresh Fetch")
+                analyzer = StockAnalyzer(ticker, horizon=horizon, period=period, interval=interval)
             
             # Check if data is empty
-            if analyzer.data is None or len(analyzer.data) < 200:
-                print(f"Skipping {ticker}: Not enough data.")
-                continue
-                
+            if analyzer.data is None or len(analyzer.data) < 5: # Minimal checks
+                 # print(f"Skipping {ticker}: Not enough data.")
+                 continue
+                 
             # Generate Features
+            # This calculates indicators on the WHOLE fetched chunk (Warmup + New)
             df_features = analyzer.prepare_rl_features()
             
-            # Add Ticker column (for reference, though agent won't use it)
+            # Add Metrics
             df_features['Ticker'] = ticker
-            
-            # Add Timestamp (index)
             df_features.reset_index(inplace=True)
             
-            all_data.append(df_features)
+            # Rename index to generic 'Date'/'Datetime' if needed, usually reset_index gives 'Date' or 'Datetime' or 'index' depending on yfinance
+            # prepare_rl_features usually keeps index as DatetimeIndex, reset makes it a column.
+            
+            # Identify Date Column in New Data
+            new_date_col = 'Date' if 'Date' in df_features.columns else 'Datetime'
+            if new_date_col not in df_features.columns and 'index' in df_features.columns:
+                 # Sometimes reset_index makes 'index'
+                 df_features.rename(columns={'index': 'Datetime'}, inplace=True)
+                 new_date_col = 'Datetime'
+
+            # Ensure UTC for comparison
+            if new_date_col in df_features.columns:
+                df_features[new_date_col] = pd.to_datetime(df_features[new_date_col], utc=True)
+            
+                # FILTER: Keep only NEW rows
+                if ticker in last_date_map:
+                    last_ts = last_date_map[ticker]
+                    # Filter > last_ts
+                    new_rows = df_features[df_features[new_date_col] > last_ts]
+                    
+                    if not new_rows.empty:
+                        all_data.append(new_rows)
+                        total_new_rows += len(new_rows)
+                else:
+                    # All are new
+                    all_data.append(df_features)
+                    total_new_rows += len(df_features)
             
             # Be nice to API
-            time.sleep(0.5)
+            time.sleep(0.1)
             
         except Exception as e:
             print(f"Error processing {ticker}: {e}")
             
-    if not all_data:
-        print("No data collected.")
+    # Merge Logic
+    if total_new_rows == 0:
+        print("No new data found for any ticker.")
+        # If we have existing data, we should probably just return or ensure it's saved?
+        # If output file exists, we are good.
         return
         
-    # Concatenate
-    final_df = pd.concat(all_data, ignore_index=True)
+    print(f"Collected {total_new_rows} new rows.")
     
+    # Concatenate New Data
+    new_data_df = pd.concat(all_data, ignore_index=True)
+    
+    # SAVE INCREMENTAL UPDATE (BACKUP)
+    update_dir = "data/updates"
+    os.makedirs(update_dir, exist_ok=True)
+    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file = f"{update_dir}/update_{horizon.lower()}_{timestamp_str}.parquet"
+    try:
+        new_data_df.to_parquet(backup_file, index=False)
+        print(f"Archived incremental update to: {backup_file}")
+    except Exception as e:
+        print(f"Warning: Could not save update backup: {e}")
+    
+    # Merge with Existing
+    if existing_df is not None:
+        # Align columns?
+        # Improve robustness: use concat
+        final_df = pd.concat([existing_df, new_data_df], ignore_index=True)
+        
+        # Deduplicate just in case (e.g. overlaps)
+        # Sort by Date
+        date_col = 'Date' if 'Date' in final_df.columns else 'Datetime'
+        if date_col in final_df.columns:
+             final_df[date_col] = pd.to_datetime(final_df[date_col], utc=True)
+             final_df.drop_duplicates(subset=['Ticker', date_col], keep='last', inplace=True)
+             final_df.sort_values(by=['Ticker', date_col], inplace=True)
+    else:
+        final_df = new_data_df
+        
     # Determine Date Range for Archival Filename
-    # 'Date' or 'Datetime' column is created by reset_index() depending on index name
     date_col = 'Date' if 'Date' in final_df.columns else 'Datetime'
     
     if date_col in final_df.columns:
         final_df[date_col] = pd.to_datetime(final_df[date_col])
-        min_date = final_df[date_col].min().strftime("%Y%m%d")
-        max_date = final_df[date_col].max().strftime("%Y%m%d")
+        # min_date = final_df[date_col].min().strftime("%Y%m%d")
+        # max_date = final_df[date_col].max().strftime("%Y%m%d")
         
-        # Split extension
-        base_name, ext = os.path.splitext(output_file)
-        versioned_file = f"{base_name}_{min_date}_{max_date}{ext}"
-        
-        # Save Versioned Copy (Archival)
-        final_df.to_parquet(versioned_file, index=False)
-        print(f"Saved Versioned Copy: {versioned_file}")
+        # Archival versioning is good but can fill disk. Let's stick to overwriting target for now as per user flow.
+        # Maybe save backup?
+        # base_name, ext = os.path.splitext(output_file)
+        # versioned_file = f"{base_name}_{max_date}{ext}"
+        # final_df.to_parquet(versioned_file, index=False)
         
     # Save Standard Copy (For Pipeline/Training)
     final_df.to_parquet(output_file, index=False)
     print(f"Saved {len(final_df)} rows to Standard Path: {output_file}")
-    print("Columns:", list(final_df.columns))
 
 if __name__ == "__main__":
     # Ensure data directory exists
