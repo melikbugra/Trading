@@ -35,7 +35,7 @@ DATA_PERIODS = {
         'long': 'max',
     },
     'binance': {
-        'short': 7,         # 7 days of 1m data (~10k candles)
+        'short': 60,        # 60 days of 1m data (~86k candles per coin)
         'mid': 60,          # 60 days of 15m data (~5.7k candles)
         'long': 365,        # 365 days of 4h data (~2.2k candles)
     }
