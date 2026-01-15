@@ -9,7 +9,8 @@ import { useToast } from '../contexts/ToastContext';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-export default function Dashboard() {
+export default function Dashboard({ market = 'bist100' }) {
+    const apiPrefix = `${API_URL}/${market}`;
     const [portfolio, setPortfolio] = useState([]);
     const [newTicker, setNewTicker] = useState('');
     const [loading, setLoading] = useState(false);
@@ -44,6 +45,8 @@ export default function Dashboard() {
     }, [lastMessage]);
 
     const handleRealtimeUpdate = (updatedItem) => {
+        // Filter updates by market
+        if (updatedItem.market && updatedItem.market !== market) return;
         setPortfolio(prev => {
             const exists = prev.find(p => p.ticker === updatedItem.ticker);
 
@@ -69,7 +72,7 @@ export default function Dashboard() {
 
     const fetchPortfolio = async () => {
         try {
-            const res = await axios.get(`${API_URL}/portfolio`);
+            const res = await axios.get(`${apiPrefix}/portfolio`);
             const newData = res.data;
 
             // Update selected item if it's open (to show live updates in modal)
@@ -109,7 +112,7 @@ export default function Dashboard() {
 
     const fetchLiveModeSetting = async () => {
         try {
-            const res = await axios.get(`${API_URL}/settings/live-mode`);
+            const res = await axios.get(`${apiPrefix}/settings/live-mode`);
             setIsLiveMode(res.data.enabled);
         } catch (err) {
             console.error("Error fetching live mode setting:", err);
@@ -119,7 +122,7 @@ export default function Dashboard() {
     const toggleLiveMode = async () => {
         try {
             const newValue = !isLiveMode;
-            await axios.post(`${API_URL}/settings/live-mode`, { enabled: newValue });
+            await axios.post(`${apiPrefix}/settings/live-mode`, { enabled: newValue });
             setIsLiveMode(newValue);
             addToast(newValue ? "Canlı Mod Aktif (Dakikalık)" : "Saatlik Mod Aktif (Stabil)", "success");
         } catch (err) {
@@ -132,18 +135,24 @@ export default function Dashboard() {
         e.preventDefault();
         if (!newTicker) return;
 
-        // Auto-append .IS logic for BIST
+        // Market-specific ticker formatting
         let tickerToSend = newTicker.trim().toUpperCase();
 
-        // If it doesn't have a dot suffix, assume it's BIST and append .IS
-        // Except for common crypto pairs (checking generic length maybe? No, unsafe. Stick to user request "ben THYAO ekleyeyim ... .IS i kendi eklesin")
-        if (!tickerToSend.includes('.')) {
-            tickerToSend += '.IS';
+        if (market === 'bist100') {
+            // Auto-append .IS for BIST stocks
+            if (!tickerToSend.includes('.')) {
+                tickerToSend += '.IS';
+            }
+        } else if (market === 'binance') {
+            // Auto-append USDT for crypto
+            if (!tickerToSend.endsWith('USDT')) {
+                tickerToSend += 'USDT';
+            }
         }
 
         try {
             setLoading(true);
-            await axios.post(`${API_URL}/portfolio`, { ticker: tickerToSend });
+            await axios.post(`${apiPrefix}/portfolio`, { ticker: tickerToSend });
             addToast(`${tickerToSend.replace('.IS', '')} portföye eklendi.`, "success");
             setNewTicker('');
             fetchPortfolio();
@@ -161,7 +170,7 @@ export default function Dashboard() {
 
         try {
             // Optimistic UI update could be here, but for now just await
-            await axios.delete(`${API_URL}/portfolio/${ticker}`);
+            await axios.delete(`${apiPrefix}/portfolio/${ticker}`);
             if (selectedItem?.ticker === ticker) setSelectedItem(null);
             addToast(`${ticker.replace('.IS', '')} listeden silindi.`, "success");
             fetchPortfolio();
@@ -174,7 +183,7 @@ export default function Dashboard() {
     const refreshAll = async () => {
         try {
             addToast("Arka plan analizi başlatıldı.", "info");
-            await axios.post(`${API_URL}/refresh`);
+            await axios.post(`${apiPrefix}/refresh`);
         } catch (err) {
             console.error("Error refreshing:", err);
             addToast("Analiz başlatılamadı.", "error");

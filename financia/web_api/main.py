@@ -1,19 +1,23 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
-from pydantic import BaseModel
-from typing import List, Optional
+"""
+RL Trading Dashboard API
+
+Multi-market support for BIST100 and Binance.
+"""
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import threading
 import time
-from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
 # Database Imports
-from financia.web_api.database import init_db, get_db, PortfolioItemDB, RecommendationDB, SessionLocal
+from financia.web_api.database import init_db, SessionLocal
 from financia.get_model_decision import InferenceEngine
-from financia.data_generator import BIST100
 from financia.web_api.websocket_manager import manager
-from fastapi import WebSocket, WebSocketDisconnect
 
-app = FastAPI(title="RL Trading Dashboard API")
+# Routers
+from financia.web_api.routers import bist100, binance
+
+app = FastAPI(title="RL Trading Dashboard API", version="2.0.0")
 
 # CORS Setup
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,46 +29,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -- Models (Pydantic) --
-class StockItem(BaseModel):
-    ticker: str
+# Include Market-Specific Routers
+app.include_router(bist100.router)
+app.include_router(binance.router)
 
-class PortfolioItem(BaseModel):
-    ticker: str
-    last_decision: str
-    last_price: float
-    last_volume: Optional[float] = 0.0
-    last_volume_ratio: Optional[float] = 0.0
-    last_updated: str
-    final_score: Optional[float] = 0.0
-    category_scores: Optional[dict] = {}
-    indicator_details: Optional[List[dict]] = []
-    
-    class Config:
-        from_attributes = True
-
-class RecommendationItem(BaseModel):
-    ticker: str
-    score: float
-    decision: str
-    price: float
-    divergence_count: float
-    last_updated: str
-    
-    class Config:
-        from_attributes = True
-
-# Global Engine
+# Global Engines
 bist100_engine = None
 binance_engine = None
 
 # Model Paths
 BIST100_MODEL_PATH = "bist100_models/bist100_ppo_short_agent"
 BINANCE_MODEL_PATH = "binance_models/binance_ppo_short_agent"
-
-# Live Mode Setting (Global per market)
-bist100_live_mode = False  # Default: Use closed candles (stable)
-binance_live_mode = False
 
 @app.on_event("startup")
 async def startup_event():
@@ -81,66 +56,66 @@ async def startup_event():
     
     # Load BIST100 Model
     print(f"Loading BIST100 Model from {BIST100_MODEL_PATH}...")
-    bist100_engine = InferenceEngine(BIST100_MODEL_PATH)
-    print("BIST100 Model Loaded.")
+    try:
+        bist100_engine = InferenceEngine(BIST100_MODEL_PATH)
+        print("BIST100 Model Loaded.")
+    except Exception as e:
+        print(f"BIST100 Model not available: {e}")
     
-    # Binance Model will be loaded when binance_data is available
-    # TODO: Load binance_engine when binance models are trained
+    # Load Binance Model (if available)
+    print(f"Checking Binance Model at {BINANCE_MODEL_PATH}...")
+    import os
+    if os.path.exists(f"{BINANCE_MODEL_PATH}.ckpt"):
+        try:
+            binance_engine = InferenceEngine(BINANCE_MODEL_PATH)
+            print("Binance Model Loaded.")
+        except Exception as e:
+            print(f"Binance Model load error: {e}")
+    else:
+        print("Binance Model not trained yet. Skipping.")
     
-    # Start Scheduler
-    def scheduler_loop():
-        # BIST Market Hours: 09:55 - 18:10 (Broadly 09:00 - 18:30 for safety)
-        # Timezone: UTC+3 (Istanbul)
+    # Start Background Schedulers
+    def bist100_scheduler():
+        """BIST100 market hours scheduler (09:00-18:30 Turkish time, weekdays)"""
         time.sleep(10)
         while True:
             try:
-                # Calculate Istanbul Time (UTC+3) manually if server is UTC
                 now_utc = datetime.utcnow()
                 now_tr = now_utc + timedelta(hours=3)
                 
                 hour = now_tr.hour
-                weekday = now_tr.weekday() # 0=Mon, 6=Sun
+                weekday = now_tr.weekday()
                 
-                # Market Range: 09:00 to 18:30
-                market_open = (hour >= 9) and (
-                    (hour < 18) or (hour == 18 and now_tr.minute <= 30)
-                )
-                
-                # Check Weekend
+                market_open = (hour >= 9) and ((hour < 18) or (hour == 18 and now_tr.minute <= 30))
                 is_weekday = weekday < 5
                 
                 if market_open and is_weekday:
-                    print(f"--- Scheduler: Market Open ({now_tr.strftime('%H:%M')}) - Starting Automatic Analysis ---")
-                    run_analysis_job_db()
-                    print("--- Scheduler: Finished. Sleeping for 1m ---")
-                    time.sleep(60)
+                    print(f"[BIST100 Scheduler] Market Open ({now_tr.strftime('%H:%M')}) - Running Analysis...")
+                    bist100.run_analysis_job()
+                    time.sleep(60)  # Run every minute during market hours
                 else:
-                    # Market Closed - Sleep longer (e.g. 1 minutes)
-                    # print(f"--- Scheduler: Market Closed ({now_tr.strftime('%H:%M')}). Sleeping... ---")
-                    time.sleep(300)
+                    time.sleep(300)  # 5 min sleep when market closed
                     
             except Exception as e:
-                print(f"Scheduler Error: {e}")
+                print(f"[BIST100 Scheduler] Error: {e}")
                 time.sleep(300)
-            
-    thread = threading.Thread(target=scheduler_loop, daemon=True)
-    thread.start()
-
-# -- Settings Endpoints --
-class LiveModeSetting(BaseModel):
-    enabled: bool
-
-@app.get("/settings/live-mode")
-def get_live_mode():
-    return {"enabled": use_live_mode}
-
-@app.post("/settings/live-mode")
-def set_live_mode(setting: LiveModeSetting):
-    global use_live_mode
-    use_live_mode = setting.enabled
-    mode_str = "LIVE (Real-time)" if use_live_mode else "STABLE (Closed Candles)"
-    print(f"Live Mode changed to: {mode_str}")
-    return {"enabled": use_live_mode, "message": f"Mode set to {mode_str}"}
+    
+    def binance_scheduler():
+        """Binance 24/7 scheduler (crypto never sleeps)"""
+        time.sleep(15)
+        while True:
+            try:
+                if binance_engine is not None:
+                    print("[Binance Scheduler] Running Analysis...")
+                    binance.run_analysis_job()
+                time.sleep(60)  # Every minute for crypto
+            except Exception as e:
+                print(f"[Binance Scheduler] Error: {e}")
+                time.sleep(60)
+    
+    # Start threads
+    threading.Thread(target=bist100_scheduler, daemon=True).start()
+    threading.Thread(target=binance_scheduler, daemon=True).start()
 
 # -- WebSocket Endpoint --
 @app.websocket("/ws")
@@ -148,284 +123,48 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive, maybe listen for client "pings" or subscription requests
-            # For now, simplistic: just listen (discard input)
-            await websocket.receive_text()
+            data = await websocket.receive_text()
+            # Echo or handle commands if needed
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
-@app.get("/ws")
+@app.get("/ws-status")
 def ws_status_check():
-    """
-    Debug Endpoint to check if /ws is reachable via HTTP.
-    If this returns 200 but WS fails, it means Upgrade headers are stripped (Nginx).
-    """
-    return {"status": "WebSocket endpoint is active. If you are seeing this, your connection was NOT upgraded to WebSocket (check Nginx settings)."}
+    """Debug endpoint to check if /ws is reachable via HTTP."""
+    return {"status": "ok", "message": "Use WebSocket protocol to connect to /ws"}
 
-# -- API Endpoints --
+# -- Health Check --
+@app.get("/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "bist100_engine": bist100_engine is not None,
+        "binance_engine": binance_engine is not None,
+    }
 
-@app.get("/portfolio", response_model=List[PortfolioItem])
-def get_portfolio(db: Session = Depends(get_db)):
-    items = db.query(PortfolioItemDB).all()
-    return items
-
-@app.post("/portfolio")
-def add_ticker(item: StockItem, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    ticker = item.ticker.upper()
-    existing = db.query(PortfolioItemDB).filter(PortfolioItemDB.ticker == ticker).first()
-    if existing:
-        return {"message": f"{ticker} already exists."}
-    
-    new_item = PortfolioItemDB(
-        ticker=ticker,
-        last_decision="PENDING",
-        last_updated="-"
-    )
-    db.add(new_item)
-    db.commit()
-    
-    # Trigger analysis
-    background_tasks.add_task(analyze_single_ticker_db, ticker)
-    return {"message": f"{ticker} added."}
-
-@app.delete("/portfolio/{ticker}")
-def remove_ticker(ticker: str, db: Session = Depends(get_db)):
-    ticker = ticker.upper()
-    item = db.query(PortfolioItemDB).filter(PortfolioItemDB.ticker == ticker).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="Ticker not found")
-        
-    db.delete(item)
-    db.commit()
-    return {"message": f"{ticker} removed."}
-
-@app.post("/refresh")
-def refresh_analysis(background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_analysis_job_db)
-    return {"message": "Analysis started in background."}
-
-# -- Recommendations Endpoint --
-@app.get("/recommendations", response_model=List[RecommendationItem])
-def get_recommendations(limit: int = 15, db: Session = Depends(get_db)):
-    # Order by Score DESC, then Divergence Count DESC
-    items = db.query(RecommendationDB)\
-              .order_by(RecommendationDB.score.desc(), RecommendationDB.divergence_count.desc())\
-              .limit(limit).all()
-    return items
-
-@app.post("/recommendations/scan")
-def scan_market(background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_market_scanner)
-    return {"message": "Market scan started. Check back in a few minutes."}
-
-# -- Analysis Logic (Core) --
-def analyze_single_ticker_core(ticker: str, market: str = 'bist100'):
-    """
-    Common logic used by both Portfolio and Scanner.
-    Returns the result dict or None.
-    """
-    if market == 'bist100':
-        engine = bist100_engine
-        live_mode = bist100_live_mode
-    else:
-        engine = binance_engine
-        live_mode = binance_live_mode
-        
-    if engine is None: 
-        print(f"Engine for {market} not loaded")
-        return None
-    
-    try:
-        result = engine.analyze_ticker(ticker, horizon='short', use_live=live_mode)
-        return result
-    except Exception as e:
-        print(f"Core Analysis Error {ticker}: {e}")
-        return None
-
-from financia.notification_service import EmailService
-
-def analyze_single_ticker_db(ticker: str):
-    print(f"Analyzing Portfolio Item: {ticker}...")
-    result = analyze_single_ticker_core(ticker)
-    if not result: return
-
-    try:
-        db = SessionLocal()
-        item = db.query(PortfolioItemDB).filter(PortfolioItemDB.ticker == ticker).first()
-        
-        if item:
-            if "error" in result:
-                item.last_decision = "ERROR"
-            else:
-                new_decision = result["decision"]
-                old_decision = item.last_decision
-                
-                # Check for Alert Condition (Status Change, excluding initial PENDING)
-                if old_decision != new_decision and old_decision != "PENDING":
-                    print(f"!!! TRIGGERING ALERT FOR {ticker}: {old_decision} -> {new_decision} !!!")
-                    EmailService.send_decision_alert(
-                        ticker=ticker, 
-                        old_decision=old_decision,
-                        new_decision=new_decision, 
-                        price=result["price"], 
-                        score=result.get("final_score", 0.0)
-                    )
-                
-                item.last_decision = new_decision
-                item.last_price = result["price"]
-                item.last_volume = result.get("volume", 0.0)
-                item.last_volume_ratio = result.get("volume_ratio", 0.0)
-                # UTC+3
-                item.last_updated = (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
-                item.final_score = result.get("final_score", 0.0)
-                item.category_scores = result.get("category_scores", {})
-                item.indicator_details = result.get("indicator_details", [])
-            
-            db.commit()
-            
-            # Broadcast Update via WebSocket
-            import asyncio
-            # Since this runs in a thread (background task), we can't await directly on the loop of main thread easily.
-            # However, manager.broadcast is 'async def'. 
-            # Solution: Use asyncio.run() if in separate thread, OR better: use manager.broadcast_sync wrapper if we made one.
-            # Actually, standard pattern for FastAPI background tasks pushing to WS is tricky.
-            # Best approach for simple app: 
-            # Just Run broadcast logic. 
-            # Note: BackgroundTasks run in threadpool.
-            
-            # Creating a fire-and-forget sync wrapper for broadcast
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(manager.broadcast({
-                "type": "PORTFOLIO_UPDATE",
-                "data": {
-                    "ticker": item.ticker,
-                    "last_decision": item.last_decision,
-                    "last_price": item.last_price,
-                    "last_updated": item.last_updated,
-                    "last_volume": item.last_volume,
-                    "last_volume_ratio": item.last_volume_ratio,
-                    "final_score": item.final_score,
-                    "category_scores": item.category_scores,
-                    "indicator_details": item.indicator_details
-                }
-            }))
-            loop.close()
-
-        db.close()
-    except Exception as e:
-        print(f"DB Update Error {ticker}: {e}")
-
-def run_analysis_job_db():
-    db = SessionLocal()
-    tickers = [item.ticker for item in db.query(PortfolioItemDB).all()]
-    db.close()
-    
-    for ticker in tickers:
-        analyze_single_ticker_db(ticker)
-
-# -- Market Scanner Logic --
-def run_market_scanner():
-    """
-    Scans entire BIST100 list and updates RecommendationDB.
-    Filters for BUY/STRONG BUY and positive Score.
-    """
-    print("--- Market Scanner Started ---")
-    
-    # Broadcast SCAN_STARTED
-    import asyncio
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(manager.broadcast({
-            "type": "SCAN_STARTED",
-            "data": {}
-        }))
-        loop.close()
-    except Exception as e:
-        print(f"WS Broadcast Error: {e}")
-    
-    # Clean old recommendations? 
-    # Or strict update? Let's clear table to keep it fresh top picks.
-    db = SessionLocal()
-    db.query(RecommendationDB).delete()
-    db.commit()
-    db.close()
-    
-    for ticker in BIST100:
-        # Be nice to CPU/API
-        # time.sleep(0.5) 
-        
-        result = analyze_single_ticker_core(ticker)
-        
-        if result and "error" not in result:
-            decision = result["decision"]
-            score = result.get("final_score", 0.0)
-            
-            # Filtering Criteria
-            # 1. Must be BUY or STRONG BUY
-            # 2. Score must be positive (> 50 implied by buy usually, but let's check score)
-            if decision in ["BUY", "STRONG BUY"] and score >= 50:
-                
-                # Calculate Divergence Count
-                details = result.get("indicator_details", [])
-                # Divergence: 1 (Bullish), -1 (Bearish)
-                div_count = sum(1 for d in details if d.get('Divergence', 0) == 1)
-                
-                # We prioritize those with divergences
-                
-                # Save to DB
-                db = SessionLocal()
-                rec = RecommendationDB(
-                    ticker=ticker,
-                    score=score,
-                    decision=decision,
-                    price=result["price"],
-                    divergence_count=div_count,
-                    last_updated=(datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
-                )
-                db.add(rec)
-                db.commit()
-                db.commit()
-                db.close()
-                print(f"Scanner: Recommended {ticker} (Score: {score}, Div: {div_count})")
-                
-                # Broadcast Recommendation Update (or just signal "RECS_UPDATED")
-                import asyncio
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                # Send full list? Too heavy potentially. Just signal refresh needed.
-                # Or send the single new item.
-                # Let's signal a refresh for now to keep frontend simple (re-fetch whole list) 
-                # OR send the item to append.
-                # Efficient: Send item.
-                loop.run_until_complete(manager.broadcast({
-                    "type": "RECOMMENDATION_UPDATE",
-                    "data": {
-                        "ticker": ticker,
-                        "score": score,
-                        "decision": decision,
-                        "price": result["price"],
-                        "divergence_count": div_count,
-                        "last_updated": (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                }))
-                loop.close()
-        
-    print("--- Market Scanner Finished ---")
-
-    # Broadcast SCAN_FINISHED
-    import asyncio
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(manager.broadcast({
-            "type": "SCAN_FINISHED",
-            "data": {}
-        }))
-        loop.close()
-    except Exception as e:
-        print(f"WS Broadcast Error: {e}")
+# -- Available Markets Info --
+@app.get("/markets")
+def list_markets():
+    return {
+        "markets": [
+            {
+                "id": "bist100",
+                "name": "BIST100 (Turkish Stocks)",
+                "currency": "TRY",
+                "timezone": "UTC+3",
+                "hours": "09:00-18:30 (Weekdays)",
+                "model_ready": bist100_engine is not None
+            },
+            {
+                "id": "binance",
+                "name": "Binance (Crypto)",
+                "currency": "USDT",
+                "timezone": "UTC",
+                "hours": "24/7",
+                "model_ready": binance_engine is not None
+            }
+        ]
+    }
 
 if __name__ == "__main__":
     import uvicorn
