@@ -4,10 +4,10 @@ Binance Data Generator
 Generates training data for crypto trading from Binance.
 Uses ccxt library for data fetching.
 
-Timeframes (Crypto trades faster):
-- short: 5m (vs BIST100 1h)
-- mid: 1h (vs BIST100 4h)  
-- long: 4h (vs BIST100 1d)
+Timeframes (Crypto trades faster than stocks):
+- short: 1m (scalping/ultra-fast) - vs BIST100 1h
+- mid: 15m (day trading) - vs BIST100 4h
+- long: 4h (swing trading) - vs BIST100 1d
 """
 
 import pandas as pd
@@ -17,6 +17,8 @@ import time
 from tqdm import tqdm
 import os
 
+from financia.indicator_config import get_interval, get_data_period, get_config
+
 # Top 20 Coins by Market Cap (excluding stablecoins)
 BINANCE_COINS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
@@ -25,7 +27,7 @@ BINANCE_COINS = [
     "NEARUSDT", "APTUSDT", "FILUSDT", "ARBUSDT", "OPUSDT"
 ]
 
-def fetch_binance_data(symbol: str, interval: str = '5m', days: int = 30):
+def fetch_binance_data(symbol: str, interval: str = '1m', days: int = 7):
     """
     Fetch OHLCV data from Binance using ccxt.
     
@@ -48,6 +50,8 @@ def fetch_binance_data(symbol: str, interval: str = '5m', days: int = 30):
     since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
     
     all_ohlcv = []
+    
+    print(f"  Fetching {symbol} ({interval}, {days} days)...")
     
     while True:
         try:
@@ -75,13 +79,15 @@ def fetch_binance_data(symbol: str, interval: str = '5m', days: int = 30):
     df.set_index('Datetime', inplace=True)
     df.drop('Timestamp', axis=1, inplace=True)
     
+    print(f"  Fetched {len(df)} candles for {symbol}")
+    
     return df
 
 
 class BinanceAnalyzer:
     """
     Analyzer for Binance crypto data.
-    Similar to StockAnalyzer but with crypto-specific timeframes.
+    Uses market-specific indicator configurations.
     """
     
     def __init__(self, symbol: str, horizon: str = 'short', days: int = None):
@@ -90,32 +96,27 @@ class BinanceAnalyzer:
         
         Args:
             symbol: Trading pair (e.g., 'BTCUSDT')
-            horizon: 'short' (5m), 'mid' (1h), 'long' (4h)
+            horizon: 'short' (1m), 'mid' (15m), 'long' (4h)
             days: Override default days to fetch
         """
         self.symbol = symbol
         self.ticker = symbol  # Compatibility with RL code
         self.horizon = horizon.lower()
+        self.market = 'binance'
         
-        # Configure based on horizon (Crypto-optimized)
-        if self.horizon == 'short':
-            interval = '5m'
-            default_days = 60  # ~17k candles
-        elif self.horizon == 'mid' or self.horizon == 'short-mid':
-            interval = '1h'
-            default_days = 365  # ~8.7k candles
-        else:  # long
-            interval = '4h'
-            default_days = 730  # ~4.4k candles
-            
+        # Get config from indicator_config module
+        interval = get_interval('binance', self.horizon)
+        default_days = get_data_period('binance', self.horizon)
+        
         fetch_days = days if days else default_days
         
         self.data = fetch_binance_data(symbol, interval, fetch_days)
+        self.config = get_config('binance', self.horizon)
         
     def prepare_rl_features(self):
         """
         Generate features for RL training.
-        Uses the same indicator logic as StockAnalyzer.
+        Uses the same indicator logic as StockAnalyzer but with Binance-specific config.
         """
         if self.data is None or self.data.empty:
             return pd.DataFrame()
@@ -128,6 +129,7 @@ class BinanceAnalyzer:
         temp.ticker = self.symbol
         temp.horizon = self.horizon
         temp.data = self.data.copy()
+        temp.market = 'binance'  # Mark as binance for config selection
         
         # Use the same feature preparation
         return temp.prepare_rl_features()
@@ -137,30 +139,45 @@ def generate_binance_dataset(horizon: str, output_file: str, days: int = None):
     """
     Generate dataset for Binance coins.
     """
-    print(f"\nGenerating Binance Dataset: {horizon.upper()}")
+    interval = get_interval('binance', horizon)
+    default_days = get_data_period('binance', horizon)
+    fetch_days = days if days else default_days
+    
+    print(f"\n{'='*60}")
+    print(f"Generating Binance Dataset: {horizon.upper()}")
+    print(f"Interval: {interval}")
+    print(f"Days: {fetch_days}")
     print(f"Target File: {output_file}")
     print(f"Coins: {len(BINANCE_COINS)}")
+    print(f"{'='*60}")
     
     all_data = []
     
-    for symbol in tqdm(BINANCE_COINS):
+    for symbol in tqdm(BINANCE_COINS, desc=f"Processing {horizon}"):
         try:
-            analyzer = BinanceAnalyzer(symbol, horizon=horizon, days=days)
+            analyzer = BinanceAnalyzer(symbol, horizon=horizon, days=fetch_days)
             
             if analyzer.data is None or len(analyzer.data) < 200:
-                print(f"Skipping {symbol}: Not enough data.")
+                print(f"Skipping {symbol}: Not enough data ({len(analyzer.data) if analyzer.data is not None else 0} candles).")
                 continue
             
             df_features = analyzer.prepare_rl_features()
+            
+            if df_features.empty:
+                print(f"Skipping {symbol}: Feature generation failed.")
+                continue
+                
             df_features['Ticker'] = symbol
             df_features.reset_index(inplace=True)
             
             all_data.append(df_features)
             
-            time.sleep(0.5)  # Rate limiting
+            time.sleep(0.3)  # Rate limiting
             
         except Exception as e:
             print(f"Error processing {symbol}: {e}")
+            import traceback
+            traceback.print_exc()
     
     if not all_data:
         print("No data collected.")
@@ -168,29 +185,40 @@ def generate_binance_dataset(horizon: str, output_file: str, days: int = None):
     
     final_df = pd.concat(all_data, ignore_index=True)
     
-    # Ensure updates directory exists
+    # Ensure directories exist
     update_dir = os.path.dirname(output_file)
-    os.makedirs(update_dir, exist_ok=True)
-    os.makedirs(f"{update_dir}/updates", exist_ok=True)
+    if update_dir:
+        os.makedirs(update_dir, exist_ok=True)
+        os.makedirs(f"{update_dir}/updates", exist_ok=True)
     
     final_df.to_parquet(output_file, index=False)
-    print(f"Saved {len(final_df)} rows to {output_file}")
+    print(f"\n✅ Saved {len(final_df)} rows to {output_file}")
+    print(f"   Coins processed: {final_df['Ticker'].nunique()}")
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Generate Binance Training Dataset")
+    parser.add_argument("--horizon", type=str, default="all", choices=["short", "mid", "long", "all"],
+                        help="Which horizon to generate (default: all)")
     args = parser.parse_args()
     
     data_dir = "binance_data"
     os.makedirs(data_dir, exist_ok=True)
     os.makedirs(f"{data_dir}/updates", exist_ok=True)
     
-    # 1. Short Term (5-minute - 60 days)
-    generate_binance_dataset('short', f'{data_dir}/binance_dataset_short.parquet', days=60)
+    horizons_to_generate = []
     
-    # 2. Mid Term (1-hour - 1 year)
-    generate_binance_dataset('mid', f'{data_dir}/binance_dataset_mid.parquet', days=365)
+    if args.horizon == "all":
+        horizons_to_generate = ["short", "mid", "long"]
+    else:
+        horizons_to_generate = [args.horizon]
     
-    # 3. Long Term (4-hour - 2 years)
-    generate_binance_dataset('long', f'{data_dir}/binance_dataset_long.parquet', days=730)
+    for horizon in horizons_to_generate:
+        output_file = f'{data_dir}/binance_dataset_{horizon}.parquet'
+        generate_binance_dataset(horizon, output_file)
+    
+    print("\n" + "="*60)
+    print("✅ Binance Data Generation Complete!")
+    print("="*60)
+

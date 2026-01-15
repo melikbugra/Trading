@@ -2,6 +2,12 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
+# Import indicator config for market/timeframe-aware parameters
+try:
+    from financia.indicator_config import get_config
+except ImportError:
+    get_config = None
+
 class StockAnalyzer:
     def __init__(self, ticker, horizon='medium', period=None, interval=None, start=None, end=None):
         """
@@ -1869,11 +1875,15 @@ class StockAnalyzer:
         df['Body'] = (df['Close'] - df['Open']) / df['Close']
         
         # --- 2. Trend Indicators ---
+        # Get config for this market/horizon
+        market = getattr(self, 'market', 'bist100')  # Default to bist100
+        config = get_config(market, self.horizon) if get_config else None
+        
         # MA Distance (Short/Long depend on horizon)
         if self.horizon == 'short':
-             s_win, l_win = 9, 21
+            s_win, l_win = 9, 21
         else:
-             s_win, l_win = 50, 200
+            s_win, l_win = 50, 200
              
         ma_s = self._calculate_sma(s_win)
         ma_l = self._calculate_sma(l_win)
@@ -1894,11 +1904,20 @@ class StockAnalyzer:
         df['Dist_SuperTrend'] = (df['Close'] - st) / df['Close']
         df['SuperTrend_Dir'] = st_trend # 1 or -1
         
-        # Ichimoku
-        tenkan = (df['High'].rolling(window=9).max() + df['Low'].rolling(window=9).min()) / 2
-        kijun = (df['High'].rolling(window=26).max() + df['Low'].rolling(window=26).min()) / 2
-        span_a = ((tenkan + kijun) / 2).shift(26)
-        span_b = ((df['High'].rolling(window=52).max() + df['Low'].rolling(window=52).min()) / 2).shift(26)
+        # Ichimoku - use config if available
+        if config:
+            ich_cfg = config.get('ichimoku', {})
+            tenkan_period = ich_cfg.get('tenkan', 9)
+            kijun_period = ich_cfg.get('kijun', 26)
+            senkou_b_period = ich_cfg.get('senkou_b', 52)
+            shift = ich_cfg.get('shift', 26)
+        else:
+            tenkan_period, kijun_period, senkou_b_period, shift = 9, 26, 52, 26
+            
+        tenkan = (df['High'].rolling(window=tenkan_period).max() + df['Low'].rolling(window=tenkan_period).min()) / 2
+        kijun = (df['High'].rolling(window=kijun_period).max() + df['Low'].rolling(window=kijun_period).min()) / 2
+        span_a = ((tenkan + kijun) / 2).shift(shift)
+        span_b = ((df['High'].rolling(window=senkou_b_period).max() + df['Low'].rolling(window=senkou_b_period).min()) / 2).shift(shift)
         
         df['Ichimoku_TK'] = (tenkan - kijun) / df['Close']
         df['Ichimoku_Cloud'] = (span_a - span_b) / df['Close']
@@ -1922,8 +1941,9 @@ class StockAnalyzer:
         df['Dist_Median'] = (df['Close'] - median) / df['Close']
         
         # --- 3. Momentum Oscillators ---
-        # RSI
-        rsi = self._calculate_rsi()
+        # RSI - use config if available
+        rsi_period = config['rsi']['period'] if config else 14
+        rsi = self._calculate_rsi(window=rsi_period)
         df['RSI_Norm'] = (rsi - 50) / 50.0
         
         # Stochastic
@@ -1938,8 +1958,15 @@ class StockAnalyzer:
         fisher, _ = self._calculate_fisher()
         df['Fisher_Norm'] = fisher.clip(-2, 2) / 2.0
         
-        # MACD
-        macd, signal = self._calculate_macd()
+        # MACD - use config if available
+        if config:
+            macd_cfg = config.get('macd', {})
+            macd_fast = macd_cfg.get('fast', 12)
+            macd_slow = macd_cfg.get('slow', 26)
+            macd_signal = macd_cfg.get('signal', 9)
+        else:
+            macd_fast, macd_slow, macd_signal = 12, 26, 9
+        macd, signal = self._calculate_macd(fast=macd_fast, slow=macd_slow, signal=macd_signal)
         df['MACD_Norm'] = (macd - signal) / df['Close']
         
         # DMI / ADX
@@ -1968,8 +1995,14 @@ class StockAnalyzer:
         atr = self._calculate_atr()
         df['ATR_Pct'] = atr / df['Close']
         
-        # BB Width
-        bb_mid, bb_lower, bb_upper = self._calculate_bollinger_bands()
+        # BB Width - use config if available
+        if config:
+            bb_cfg = config.get('bollinger', {})
+            bb_period = bb_cfg.get('period', 20)
+            bb_std = bb_cfg.get('std', 2.0)
+        else:
+            bb_period, bb_std = 20, 2.0
+        bb_upper, bb_mid, bb_lower = self._calculate_bollinger_bands(window=bb_period, num_std=bb_std)
         df['BB_Width'] = (bb_upper - bb_lower) / bb_mid
         
         # Demand Index
