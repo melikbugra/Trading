@@ -5,9 +5,10 @@ from financia.envs.trading_env import TradingEnv
 import financia.envs 
 from rl_baselines.policy_based.ppo import PPO
 import os
+import argparse
 from types import SimpleNamespace
 
-def train_agent(dataset_path, model_name, timesteps=50000):
+def train_agent(dataset_path, model_name, market='bist100', timesteps=50000):
     print(f"Loading data from {dataset_path}...")
     if not os.path.exists(dataset_path):
         print("Dataset not found. Skipping.")
@@ -47,14 +48,15 @@ def train_agent(dataset_path, model_name, timesteps=50000):
     model.train()
     
     # Save
-    os.makedirs("models", exist_ok=True)
+    models_dir = f"{market}_models"
+    os.makedirs(models_dir, exist_ok=True)
     
     # Save logic with library naming
-    model.save(folder="models", checkpoint=model_name)
+    model.save(folder=models_dir, checkpoint=model_name)
     
     # Rename to desired path
-    generated_path = f"models/TradingEnv-v0_PPO_cpu_{model_name}.ckpt"
-    target_path = f"models/{model_name}.ckpt"
+    generated_path = f"{models_dir}/TradingEnv-v0_PPO_cpu_{model_name}.ckpt"
+    target_path = f"{models_dir}/{market}_{model_name}.ckpt"
     if os.path.exists(generated_path):
         os.rename(generated_path, target_path)
         print(f"Model renamed and saved to {target_path}")
@@ -64,6 +66,16 @@ def train_agent(dataset_path, model_name, timesteps=50000):
     return model
 
 if __name__ == "__main__":
-    # Train Short Term Agent
-    print("--- Training SHORT Term Agent (Hourly) ---")
-    train_agent("data/dataset_short.parquet", "ppo_short_agent", timesteps=5_000_000)
+    parser = argparse.ArgumentParser(description="Train RL Agent")
+    parser.add_argument("--market", type=str, default="bist100", choices=["bist100", "binance"], help="Market to train on")
+    parser.add_argument("--timesteps", type=int, default=5_000_000, help="Number of training timesteps")
+    args = parser.parse_args()
+    
+    # Determine paths based on market
+    data_dir = f"{args.market}_data"
+    dataset_path = f"{data_dir}/{args.market}_dataset_short.parquet"
+    model_name = "ppo_short_agent"
+    
+    print(f"--- Training {args.market.upper()} Agent (Hourly) ---")
+    train_agent(dataset_path, model_name, market=args.market, timesteps=args.timesteps)
+

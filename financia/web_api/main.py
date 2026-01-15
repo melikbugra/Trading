@@ -55,15 +55,20 @@ class RecommendationItem(BaseModel):
         from_attributes = True
 
 # Global Engine
-inference_engine = None
-MODEL_PATH = "models/ppo_short_agent"
+bist100_engine = None
+binance_engine = None
 
-# Live Mode Setting (Global)
-use_live_mode = False  # Default: Use closed candles (stable)
+# Model Paths
+BIST100_MODEL_PATH = "bist100_models/bist100_ppo_short_agent"
+BINANCE_MODEL_PATH = "binance_models/binance_ppo_short_agent"
+
+# Live Mode Setting (Global per market)
+bist100_live_mode = False  # Default: Use closed candles (stable)
+binance_live_mode = False
 
 @app.on_event("startup")
 async def startup_event():
-    global inference_engine
+    global bist100_engine, binance_engine
     
     # Print all routes for debugging
     print("Registered Routes:")
@@ -74,10 +79,13 @@ async def startup_event():
     print("Initializing Database...")
     init_db()
     
-    # Load Model
-    print(f"Loading Model from {MODEL_PATH}...")
-    inference_engine = InferenceEngine(MODEL_PATH)
-    print("Model Loaded.")
+    # Load BIST100 Model
+    print(f"Loading BIST100 Model from {BIST100_MODEL_PATH}...")
+    bist100_engine = InferenceEngine(BIST100_MODEL_PATH)
+    print("BIST100 Model Loaded.")
+    
+    # Binance Model will be loaded when binance_data is available
+    # TODO: Load binance_engine when binance models are trained
     
     # Start Scheduler
     def scheduler_loop():
@@ -211,18 +219,24 @@ def scan_market(background_tasks: BackgroundTasks):
     return {"message": "Market scan started. Check back in a few minutes."}
 
 # -- Analysis Logic (Core) --
-def analyze_single_ticker_core(ticker: str):
+def analyze_single_ticker_core(ticker: str, market: str = 'bist100'):
     """
     Common logic used by both Portfolio and Scanner.
     Returns the result dict or None.
     """
-    global inference_engine
-    if inference_engine is None: return None
+    if market == 'bist100':
+        engine = bist100_engine
+        live_mode = bist100_live_mode
+    else:
+        engine = binance_engine
+        live_mode = binance_live_mode
+        
+    if engine is None: 
+        print(f"Engine for {market} not loaded")
+        return None
     
     try:
-        # Check cache or throttle? 
-        # For now, just run.
-        result = inference_engine.analyze_ticker(ticker, horizon='short', use_live=use_live_mode)
+        result = engine.analyze_ticker(ticker, horizon='short', use_live=live_mode)
         return result
     except Exception as e:
         print(f"Core Analysis Error {ticker}: {e}")

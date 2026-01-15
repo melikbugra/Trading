@@ -210,17 +210,25 @@ def generate_dataset(horizon, output_file, period=None, interval=None):
     print(f"Saved {len(final_df)} rows to Standard Path: {output_file}")
 
 if __name__ == "__main__":
-    # Ensure data directory exists
-    os.makedirs("data", exist_ok=True)
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate Training Dataset")
+    parser.add_argument("--market", type=str, default="bist100", choices=["bist100"], help="Market to generate data for")
+    args = parser.parse_args()
+    
+    data_dir = f"{args.market}_data"
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(f"{data_dir}/updates", exist_ok=True)
+    
+    prefix = args.market
     
     # 1. Short Term (Hourly - 2 Years)
-    generate_dataset('short', 'data/dataset_short.parquet', period='730d', interval='1h')
+    generate_dataset('short', f'{data_dir}/{prefix}_dataset_short.parquet', period='730d', interval='1h')
     
     # 1.5 Short-Mid Term (4 Hours - Resampled from 2 Years Hourly)
-    generate_dataset('short-mid', 'data/dataset_short_mid.parquet', period='730d', interval='1h')
+    generate_dataset('short-mid', f'{data_dir}/{prefix}_dataset_short_mid.parquet', period='730d', interval='1h')
     
     # 2. Medium Term (Daily - 10 Years)
-    generate_dataset('medium', 'data/dataset_medium.parquet', period='10y', interval='1d')
+    generate_dataset('medium', f'{data_dir}/{prefix}_dataset_medium.parquet', period='10y', interval='1d')
     
     # 3. Long Term (Weekly - Max)
-    generate_dataset('long', 'data/dataset_long.parquet', period='max', interval='1wk')
+    generate_dataset('long', f'{data_dir}/{prefix}_dataset_long.parquet', period='max', interval='1wk')

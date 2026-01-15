@@ -668,9 +668,10 @@ def backtest_production_simulation(ticker, model_path, initial_balance=10000, ra
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RL Agent Evaluation")
-    parser.add_argument("--ticker", type=str, help="Specific ticker to evaluate (e.g., THYAO.IS)")
+    parser.add_argument("--market", type=str, default="bist100", choices=["bist100", "binance"], help="Market to evaluate")
+    parser.add_argument("--ticker", type=str, help="Specific ticker to evaluate (e.g., THYAO.IS or BTCUSDT)")
     parser.add_argument("--days", type=int, default=30, help="Number of days to evaluate (used with --ticker)")
-    parser.add_argument("--model", type=str, default="models/ppo_short_mid_agent", help="Path to model file")
+    parser.add_argument("--model", type=str, default=None, help="Path to model file (auto-detected from market if not specified)")
     parser.add_argument("--balance", type=float, default=10000, help="Initial balance for the simulation")
     parser.add_argument("--simulation", action="store_true", help="Run Production Simulation (15m latency, 1m execution)")
     parser.add_argument("--random", action="store_true", help="Run with Random Agent (Benchmark)")
@@ -678,6 +679,10 @@ if __name__ == "__main__":
     parser.add_argument("--live", action="store_true", help="Use live/developing candle instead of closed candles")
     
     args = parser.parse_args()
+    
+    # Auto-detect model path if not specified
+    if args.model is None:
+        args.model = f"{args.market}_models/{args.market}_ppo_short_agent"
     
     if args.simulation:
         if not args.ticker:
@@ -687,4 +692,6 @@ if __name__ == "__main__":
     elif args.ticker:
         evaluate_specific_ticker(args.ticker, args.days, args.model, args.balance, args.random, args.oracle, args.live)
     else:
-        evaluate_agent("data/dataset_short_mid.parquet", args.model, args.balance, args.random)
+        # Default dataset evaluation
+        data_path = f"{args.market}_data/{args.market}_dataset_short_mid.parquet"
+        evaluate_agent(data_path, args.model, args.balance, args.random)
