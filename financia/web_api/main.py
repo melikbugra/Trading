@@ -15,7 +15,7 @@ from financia.get_model_decision import InferenceEngine
 from financia.web_api.websocket_manager import manager
 
 # Routers
-from financia.web_api.routers import bist100, binance
+from financia.web_api.routers import bist100, binance, recommendations
 
 app = FastAPI(title="RL Trading Dashboard API", version="2.0.0")
 
@@ -30,8 +30,10 @@ app.add_middleware(
 )
 
 # Include Market-Specific Routers
+# Include Market-Specific Routers
 app.include_router(bist100.router)
 app.include_router(binance.router)
+app.include_router(recommendations.router)
 
 # Global Engines
 bist100_engine = None
