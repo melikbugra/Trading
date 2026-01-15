@@ -1,6 +1,16 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import time
+from datetime import datetime, timedelta
+
+# Try importing ccxt for crypto
+try:
+    import ccxt
+except ImportError:
+    ccxt = None
+
+
 
 # Import indicator config for market/timeframe-aware parameters
 try:
@@ -9,76 +19,138 @@ except ImportError:
     get_config = None
 
 class StockAnalyzer:
-    def __init__(self, ticker, horizon='medium', period=None, interval=None, start=None, end=None):
+    def __init__(self, ticker, horizon='medium', period=None, interval=None, start=None, end=None, market=None):
         """
         Initializes the StockAnalyzer with a specific stock ticker and trading horizon.
         
         Args:
-            ticker (str): The stock ticker symbol (e.g., 'THYAO.IS').
+            ticker (str): The stock ticker symbol (e.g., 'THYAO.IS' or 'BTCUSDT').
             horizon (str): Trading horizon ('short', 'medium', 'long').
             period (str, optional): Override default period.
             interval (str, optional): Override default interval.
             start (str/datetime, optional): Start date for fetching data.
             end (str/datetime, optional): End date for fetching data.
+            market (str, optional): 'bist100' or 'binance'. If None, inferred from ticker.
         """
         self.ticker = ticker
         self.horizon = horizon.lower()
         
-        # Configure fetching parameters based on horizon if not provided
+        # Infer market if not provided
+        if market:
+            self.market = market.lower()
+        else:
+            if ticker.endswith('USDT') or ticker.endswith('BUSD'):
+                self.market = 'binance'
+            else:
+                self.market = 'bist100'  # Default to BIST100/Yahoo
+        
+        # Fetch Data based on Market
+        if self.market == 'binance':
+            self._fetch_binance_data(period, interval, start, end)
+        else:
+            self._fetch_yahoo_data(period, interval, start, end)
+
+        if self.data.empty:
+            print(f"Warning: No data found for ticker {ticker} ({self.market})")
+            self.data = pd.DataFrame() # Empty DF
+
+    def _fetch_yahoo_data(self, period, interval, start, end):
+        """Fetch data from Yahoo Finance (Stocks)"""
+        # Default defaults
         if period is None or interval is None:
             if self.horizon == 'short':
-                _period = "730d" # Max available hourly data (approx 2 years)
+                _period = "730d" 
                 _interval = "60m"
             elif self.horizon == 'short-mid':
-                _period = "2y" # Fetch ~2 years of 1h data to resample
+                _period = "2y" 
                 _interval = "1h"
             elif self.horizon == 'long':
                 _period = "5y"
                 _interval = "1wk"
-            else: # Default to medium
+            else: # medium
                 _period = "1y"
                 _interval = "1d"
         
-        # Use provided or default
         use_period = period if period else _period
         use_interval = interval if interval else _interval
             
-        self.stock = yf.Ticker(ticker)
+        self.stock = yf.Ticker(self.ticker)
         
-        # Fetch Data
         if start:
-            # If start is provided, use start/end (ignore period)
             self.data = self.stock.history(start=start, end=end, interval=use_interval)
         else:
             self.data = self.stock.history(period=use_period, interval=use_interval)
         
-        # Fix for yfinance returning MultiIndex columns
         if isinstance(self.data.columns, pd.MultiIndex):
             self.data.columns = self.data.columns.get_level_values(0)
 
-        # Resample for Short-Mid (4H)
+        # Resample for Short-Mid (4H) support
         if self.horizon == 'short-mid' and not self.data.empty:
-            # Drop NaN rows first
             self.data = self.data.dropna()
-            
-            # Resample logic: 4H
-            agg_dict = {
-                'Open': 'first',
-                'High': 'max',
-                'Low': 'min',
-                'Close': 'last',
-                'Volume': 'sum'
-            }
-            # Only resample columns that exist
+            agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
             agg_dict = {k:v for k,v in agg_dict.items() if k in self.data.columns}
-            
-            # Align resampling to the first timestamp (Market Open) to match TradingView's session breaks
-            # Default pandas aligns to 00:00 UTC, which splits BIST sessions (10:00-14:00) incorrectly.
             self.data = self.data.resample('4h', origin='start').agg(agg_dict).dropna()
+
+    def _fetch_binance_data(self, period, interval, start, end):
+        """Fetch data from Binance via CCXT (Crypto)"""
+        if ccxt is None:
+            print("Error: ccxt library not found. Cannot fetch Binance data.")
+            self.data = pd.DataFrame()
+            return
+
+        # Determine interval based on horizon (aligned with indicator_config/data_generator)
+        # Or use provided override
+        if interval:
+            use_interval = interval
+        else:
+            if self.horizon == 'short':
+                use_interval = '1m'
+            elif self.horizon == 'mid' or self.horizon == 'short-mid':
+                use_interval = '15m'
+            elif self.horizon == 'long':
+                use_interval = '4h'
+            else:
+                use_interval = '1h' # Fallback
+                
+        # Determine duration (days)
+        # If period string provided (e.g. "730d"), parse it. 
+        # For simplicity, if not provided, use reasonable defaults.
+        days = 30 # Default
+        if period:
+             # Try simple parsing
+             if period.endswith('d'):
+                 try:
+                     days = int(period[:-1])
+                 except: pass
+        else:
+            if self.horizon == 'short': days = 5 # small fetch for live analysis
+            elif self.horizon == 'mid': days = 60
+            elif self.horizon == 'long': days = 365
+            else: days = 30
             
-        if self.data.empty:
-            print(f"Warning: No data found for ticker {ticker}")
-            self.data = pd.DataFrame() # Empty DF
+        exchange = ccxt.binance({'enableRateLimit': True})
+        since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
+        
+        # Simple fetch loop (don't need massive history for live analysis usually, but enough for indicators ~200-500)
+        # If we need massive history for backtesting, use data generator.
+        # Here we just need enough for indicators (e.g. 500 candles).
+        limit = 1000
+        
+        try:
+             ohlcv = exchange.fetch_ohlcv(self.ticker, use_interval, limit=limit) # Fetch latest
+             if not ohlcv:
+                 self.data = pd.DataFrame()
+                 return
+                 
+             df = pd.DataFrame(ohlcv, columns=['Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
+             df['Datetime'] = pd.to_datetime(df['Timestamp'], unit='ms')
+             df.set_index('Datetime', inplace=True)
+             df.drop('Timestamp', axis=1, inplace=True)
+             self.data = df
+             
+        except Exception as e:
+            print(f"Error fetching Binance data for {self.ticker}: {e}")
+            self.data = pd.DataFrame()
 
     def _calculate_divergence_series(self, indicator, window=60):
         """
