@@ -9,12 +9,13 @@ class TradingEnv(gym.Env):
     """
     metadata = {'render_modes': ['human']}
 
-    def __init__(self, df, initial_balance=10000, max_steps=1000):
+    def __init__(self, df, initial_balance=10000, max_steps=1000, commission=0.0):
         super(TradingEnv, self).__init__()
         
         self.df = df.reset_index(drop=True)
         self.initial_balance = initial_balance
         self.max_steps = max_steps
+        self.commission = commission
         
         # Action Space: 0: HOLD, 1: BUY, 2: SELL
         self.action_space = spaces.Discrete(3)
@@ -153,7 +154,8 @@ class TradingEnv(gym.Env):
     def _take_action(self, action, current_price):
         # 0: HOLD, 1: BUY, 2: SELL
         
-        commission = 0.0 # User has 0% commission
+        # commission is now self.commission
+        commission = self.commission
         
         # Slippage Simulation
         # User requested to remove slippage.

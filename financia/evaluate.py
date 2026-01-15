@@ -435,37 +435,55 @@ def evaluate_specific_ticker(ticker, days, model_path, initial_balance=10000, ra
     print(f"Plot saved to {plot_path}")
 
 
-def backtest_production_simulation(ticker, model_path, initial_balance=10000, random_mode=False, live_mode=False):
+def backtest_production_simulation(ticker, model_path, initial_balance=10000, random_mode=False, live_mode=False, market='bist100', days=None):
     mode_label = "LIVE (Developing Candle)" if live_mode else "STABLE (Closed Candles)"
-    print(f"\n--- Production Simulation: {ticker} (Last 5 Days / 1m Resolution / 15m Latency) [{mode_label}] ---")
+    print(f"\n--- Production Simulation: {ticker} ({market.upper()}) ---")
+    print(f"    Mode: {mode_label}")
     
-    # 1. Fetch 1M Data (Execution Data)
-    print("Fetching 1m Execution Data (Max 7 days)...")
-    analyzer_1m = StockAnalyzer(ticker, horizon='short', period='7d', interval='1m')
-    if analyzer_1m.data is None or analyzer_1m.data.empty:
-        print("Error: Could not fetch 1m data.")
+    # Configuration based on market
+    if market == 'binance':
+        signal_interval = '1h'  # Updated to 1h for profitability
+        execution_interval = '1m' # We still execute/check frequently in live mode
+        lookback_days = days if days else 20 # Use user input or default
+        warmup_period = '30d' 
+        latency_minutes = 0 # Crypto is instant
+        print(f"    Config: 1H Signals / 1m Execution / 0m Latency (Duration: {lookback_days} days)")
+    else:
+        # BIST100 Default (Short Horizon Strategy)
+        signal_interval = '1h'
+        execution_interval = '1m'
+        lookback_days = days if days else 5 # Use user input or default
+        warmup_period = '730d'
+        latency_minutes = 15
+        print(f"    Config: 1H Signals / 1m Execution / 15m Latency (Duration: {lookback_days} days)")
+
+    # 1. Fetch Execution Data
+    print(f"Fetching {execution_interval} Execution Data (Last {lookback_days} days)...")
+    analyzer_exec = StockAnalyzer(ticker, horizon='short', period=f'{lookback_days}d', interval=execution_interval, market=market)
+    if analyzer_exec.data is None or analyzer_exec.data.empty:
+        print(f"Error: Could not fetch {execution_interval} data.")
         return
     
-    df_exec = analyzer_1m.data
-    # Determine simulation start/end from 1m data
+    df_exec = analyzer_exec.data
     sim_start = df_exec.index.min()
     sim_end = df_exec.index.max()
     print(f"Execution Data: {len(df_exec)} bars from {sim_start} to {sim_end}")
     
-    # 2. Fetch 1H Data (Signal Data)
-    # We need enough history for indicators, but covering the simulation period
-    print("Fetching 1h Signal Data (2 Years for Indicator Warmup)...")
-    analyzer_1h = StockAnalyzer(ticker, horizon='short', period='730d', interval='1h')
+    # 2. Fetch Signal Data
+    print(f"Fetching {signal_interval} Signal Data (Warmup: {warmup_period})...")
+    analyzer_signal = StockAnalyzer(ticker, horizon='short', period=warmup_period, interval=signal_interval, market=market)
     
     # 3. Prepare Model
     if not random_mode:
         if not model_path.endswith(".ckpt"): model_path += ".ckpt"
         print(f"Loading Model: {model_path}")
         
-        # We need a dummy env to load the model architecture
-        dummy_df = analyzer_1h.prepare_rl_features().head(100)
+        # Dummy env for model init
+        # Pass commission (Binance 0.15%, BIST 0.0)
+        commission = 0.0015 if market == 'binance' else 0.0
+        dummy_df = analyzer_signal.prepare_rl_features().head(100)
         dummy_df['Ticker'] = ticker
-        dummy_env = TradingEnv(dummy_df)
+        dummy_env = TradingEnv(dummy_df, commission=commission)
         dummy_env.spec = SimpleNamespace(id="TradingEnv-v0")
         
         try:
@@ -478,17 +496,17 @@ def backtest_production_simulation(ticker, model_path, initial_balance=10000, ra
         print("Running in RANDOM MODE")
         model = None
 
-    # 4. Generate All Decision Signals
+    # 4. Generate Decision Signals
     signal_cache = {} # Timestamp -> Action Code
     
     if not live_mode:
-        # STABLE MODE: Generate signals only at hourly boundaries (closed candles)
-        print("Generating Signals on 1h Data (Stable Mode)...")
-        df_signals = analyzer_1h.prepare_rl_features()
+        # STABLE MODE: Generate signals on closed candles
+        print(f"Generating Signals on {signal_interval} Data (Stable Mode)...")
+        df_signals = analyzer_signal.prepare_rl_features()
         feature_cols = [c for c in df_signals.columns if c not in ['Date', 'Ticker', 'Timestamp', 'Close']]
         relevant_signals = df_signals[df_signals.index >= (sim_start - timedelta(days=1))]
         
-        print(f"Processing {len(relevant_signals)} hourly candles for signals...")
+        print(f"Processing {len(relevant_signals)} candles for signals...")
         
         for idx, row in relevant_signals.iterrows():
             if random_mode:
@@ -501,68 +519,59 @@ def backtest_production_simulation(ticker, model_path, initial_balance=10000, ra
                 action_tensor = model.agent.select_greedy_action(obs_tensor, eval=True)
                 action = action_tensor.item()
             
-            # Signal valid 1h + 15m after candle OPEN
-            signal_valid_from = idx + timedelta(hours=1, minutes=15)
+            # Apply Latency
+            # For BIST: Signal at 10:00 is actionable at 10:15
+            # For Binance: Signal at 10:00 is actionable at 10:01 (next candle open)
+            if market == 'binance':
+                 signal_valid_from = idx + timedelta(minutes=1)
+            else:
+                 signal_valid_from = idx + timedelta(minutes=latency_minutes)
+                 
             signal_cache[signal_valid_from] = action
     else:
-        # LIVE MODE: Generate signals every 15 minutes using developing candle
+        # LIVE MODE: Developing Candle Simulation
         print("Generating Signals with Developing Candle (Live Mode)...")
-        print("This simulates real-time decision making with partial hourly data...")
         
-        # Get closed hourly candles (all except the absolute last one)
-        df_1h_base = analyzer_1h.data.iloc[:-1].copy()
+        df_base = analyzer_signal.data.iloc[:-1].copy()
         
-        # Generate signal time points (every 15 minutes during market hours)
-        signal_times = pd.date_range(
-            start=sim_start.replace(minute=0, second=0),
-            end=sim_end,
-            freq='15min'
-        )
+        # Generate signal check points
+        # For Binance: Every 1 min
+        # For BIST: Every 15 min
+        freq = '1min' if market == 'binance' else '15min'
         
-        # Filter to market hours only (09:00 - 18:00 Turkish time)
-        signal_times = [t for t in signal_times if 9 <= t.hour < 18]
+        signal_times = pd.date_range(start=sim_start, end=sim_end, freq=freq)
         
-        print(f"Processing {len(signal_times)} signal points (every 15 min)...")
+        # Filter BIST market hours
+        if market == 'bist100':
+             signal_times = [t for t in signal_times if 9 <= t.hour < 18]
         
-        for sig_time in signal_times:
-            # Get the hour boundary for this signal time
-            hour_start = sig_time.replace(minute=0, second=0, microsecond=0)
+        print(f"Processing {len(signal_times)} signal points...")
+        
+        for sig_time in tqdm(signal_times, desc="Simulating signals"):
+            # Prepare data snapshot up to sig_time
+            # For Binance (1m signal): We use closed data up to sig_time + developing current candle?
+            # Actually if signal interval is 1m, and check freq is 1m, we essentially check every candle close.
+            # "Developing" only makes sense if we check faster than the signal candle.
             
-            # Get 1m data for the developing candle (from hour_start to sig_time)
-            developing_1m = df_exec[(df_exec.index >= hour_start) & (df_exec.index <= sig_time)]
+            # Simplified Live Simulation for Binance:
+            # Just take the snapshot of data available at sig_time.
             
-            if developing_1m.empty:
-                continue
+            # Get available history from signal analyzer
+            snapshot = analyzer_signal.data[analyzer_signal.data.index <= sig_time].copy()
             
-            # Aggregate 1m data into a single "developing" candle
-            developing_candle = pd.DataFrame([{
-                'Open': developing_1m['Open'].iloc[0],
-                'High': developing_1m['High'].max(),
-                'Low': developing_1m['Low'].min(),
-                'Close': developing_1m['Close'].iloc[-1],
-                'Volume': developing_1m['Volume'].sum()
-            }], index=[hour_start])
+            if len(snapshot) < 200: continue
             
-            # Get closed hourly candles up to hour_start (exclusive)
-            closed_hourly = df_1h_base[df_1h_base.index < hour_start].copy()
-            
-            if len(closed_hourly) < 200:
-                continue  # Not enough data for indicators
-            
-            # Append developing candle
-            combined_data = pd.concat([closed_hourly, developing_candle])
-            
-            # Create a temporary analyzer to calculate features
+            # Temporary Analyzer
             temp_analyzer = StockAnalyzer.__new__(StockAnalyzer)
             temp_analyzer.ticker = ticker
             temp_analyzer.horizon = 'short'
-            temp_analyzer.data = combined_data
+            temp_analyzer.market = market
+            temp_analyzer.data = snapshot # This includes the "current" candle as last row
             
             try:
                 df_features = temp_analyzer.prepare_rl_features()
-                if df_features.empty:
-                    continue
-                    
+                if df_features.empty: continue
+                
                 feature_cols = [c for c in df_features.columns if c not in ['Date', 'Ticker', 'Timestamp', 'Close']]
                 last_row = df_features.iloc[-1]
                 
@@ -576,18 +585,18 @@ def backtest_production_simulation(ticker, model_path, initial_balance=10000, ra
                     action_tensor = model.agent.select_greedy_action(obs_tensor, eval=True)
                     action = action_tensor.item()
                 
-                # Apply 15m latency
-                signal_valid_from = sig_time + timedelta(minutes=15)
+                # Validity
+                # BIST: +15 min
+                # Binance: Immediate (next tick/sec)
+                delay = 0 if market == 'binance' else latency_minutes
+                signal_valid_from = sig_time + timedelta(minutes=delay)
                 signal_cache[signal_valid_from] = action
                 
-            except Exception as e:
-                # Skip problematic time points
+            except Exception:
                 continue
-        
-        print(f"Generated {len(signal_cache)} signals in live mode.")
 
-    # 5. Simulate Loop Over 1m Data
-    print("Simulating Execution...")
+    # 5. Simulate Execution
+    print(f"Simulating Execution ({len(signal_cache)} signals)...")
     
     balance = initial_balance
     shares = 0
@@ -595,38 +604,34 @@ def backtest_production_simulation(ticker, model_path, initial_balance=10000, ra
     trades = []
     
     current_signal = 0 # HOLD
-    last_signal_time = None
-    
     sorted_signal_times = sorted(signal_cache.keys())
     next_signal_idx = 0
     
-    # We can iterate through 1m bars
+    # Iterate through execution data
     for ts, row in df_exec.iterrows():
         price = row['Close']
         
-        # Check if we have a new signal update
+        # Check for new signal
         while next_signal_idx < len(sorted_signal_times) and ts >= sorted_signal_times[next_signal_idx]:
              last_signal_time = sorted_signal_times[next_signal_idx]
              current_signal = signal_cache[last_signal_time]
              next_signal_idx += 1
              
-        # Execute Strategy based on Current Signal
+        # Execute
         if current_signal == 1: # BUY
              if shares == 0:
                  shares = balance / price
                  balance = 0
                  trades.append({'step': ts, 'type': 'buy', 'price': price, 'value': shares * price})
-                 
         elif current_signal == 2: # SELL
              if shares > 0:
                  balance = shares * price
                  trades.append({'step': ts, 'type': 'sell', 'price': price, 'value': balance})
                  shares = 0
         
-        # Calculate Net Worth
         net_worth = balance + (shares * price)
         equity_curve.append(net_worth)
-        
+
     # 6. Report
     final_net_worth = equity_curve[-1] if equity_curve else initial_balance
     profit = final_net_worth - initial_balance
@@ -634,9 +639,8 @@ def backtest_production_simulation(ticker, model_path, initial_balance=10000, ra
     
     print("\n" + "="*50)
     print(f" PRODUCTION SIMULATION RESULTS: {ticker}")
-    print(f" (Logic: 1H Signal (Closed) -> Executed at Hour:15)")
+    print(f" Mode: {mode_label} | Market: {market}")
     print("="*50)
-    print(f"Period:      {sim_start} - {sim_end}")
     print(f"Initial:     ₺{initial_balance:,.2f}")
     print(f"Final:       ₺{final_net_worth:,.2f}")
     print(f"Profit:      ₺{profit:,.2f}")
@@ -688,7 +692,7 @@ if __name__ == "__main__":
         if not args.ticker:
             print("Error: --simulation requires --ticker")
         else:
-            backtest_production_simulation(args.ticker, args.model, args.balance, args.random, args.live)
+            backtest_production_simulation(args.ticker, args.model, args.balance, args.random, args.live, args.market, days=args.days)
     elif args.ticker:
         evaluate_specific_ticker(args.ticker, args.days, args.model, args.balance, args.random, args.oracle, args.live)
     else:

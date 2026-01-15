@@ -198,3 +198,6 @@ sketch
 # End of https://www.toptal.com/developers/gitignore/api/reactdata/
 
 data/
+binance_data
+bist100_data
+results

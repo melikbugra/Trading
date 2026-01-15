@@ -23,7 +23,13 @@ def train_agent(dataset_path, model_name, market='bist100', timesteps=50000):
     val_df = df.iloc[split_idx:]
     
     # Create Environment
-    env = TradingEnv(train_df)
+    # Configure commission
+    if market == 'binance':
+        commission = 0.0015 # 0.15% as requested by user
+    else:
+        commission = 0.0 # 0% for BIST as requested
+        
+    env = TradingEnv(train_df, commission=commission)
     # Patch env.spec for library compatibility - using Registered ID
     env.spec = SimpleNamespace(id="TradingEnv-v0")
     

@@ -20,9 +20,9 @@ TIMEFRAME_INTERVALS = {
         'long': '1wk',      # Weekly
     },
     'binance': {
-        'short': '1m',      # 1-minute (scalping)
-        'mid': '15m',       # 15-minute (day trading)
-        'long': '4h',       # 4-hour (swing)
+        'short': '1h',      # 1-hour (hourly trend) - Changed from 1m for profitability
+        'mid': '4h',        # 4-hour (swing)
+        'long': '1d',       # Daily (investment)
     }
 }
 
@@ -35,9 +35,9 @@ DATA_PERIODS = {
         'long': 'max',
     },
     'binance': {
-        'short': 60,        # 60 days of 1m data (~86k candles per coin)
-        'mid': 60,          # 60 days of 15m data (~5.7k candles)
-        'long': 365,        # 365 days of 4h data (~2.2k candles)
+        'short': 730,       # 2 years of 1h data (~17k candles)
+        'mid': 1000,        # ~3 years of 4h data
+        'long': 2000,       # ~5 years of 1d data
     }
 }
 
