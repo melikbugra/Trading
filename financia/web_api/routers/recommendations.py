@@ -1,23 +1,22 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
-from typing import List, Optional
+from fastapi import APIRouter, BackgroundTasks, Depends
+from sqlalchemy.orm import Session
+from typing import List
 from pydantic import BaseModel
 import asyncio
-import random
-import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# Import internal modules (Adjust paths as needed)
+# Internal modules
 from financia.analyzer import StockAnalyzer
-from financia.indicator_config import TIMEFRAME_INTERVALS
 from financia.web_api.websocket_manager import manager
+from financia.web_api.database import (
+    get_db, SessionLocal,
+    BIST100Recommendation, BinanceRecommendation
+)
 
 router = APIRouter(
     prefix="/recommendations",
     tags=["recommendations"]
 )
-
-# In-memory cache for recommendations
-recommendation_cache = []
 
 class RecommendationItem(BaseModel):
     ticker: str
@@ -26,23 +25,67 @@ class RecommendationItem(BaseModel):
     divergence_count: int
     price: float
     last_updated: str
+    
+    class Config:
+        from_attributes = True
 
 @router.get("/", response_model=List[RecommendationItem])
-async def get_recommendations():
-    return recommendation_cache
+def get_recommendations(market: str = 'bist100', limit: int = 20, db: Session = Depends(get_db)):
+    """
+    Get top recommendations from Database.
+    """
+    if market == 'binance':
+        model_class = BinanceRecommendation
+    else:
+        model_class = BIST100Recommendation
+        
+    items = db.query(model_class)\
+              .order_by(model_class.score.desc(), model_class.divergence_count.desc())\
+              .limit(limit).all()
+    return items
+
+def get_engine(market: str):
+    from financia.web_api.main import bist100_engine, binance_engine
+    if market == 'binance':
+        return binance_engine
+    return bist100_engine
 
 async def run_market_scan(market: str = 'bist100'):
     """
-    Background task to scan BIST100 or Binance market.
+    Background task to scan market using REAL AI Model and save to DB.
     """
-    global recommendation_cache
+    print(f"[{market.upper()}] Starting Market Scanner...")
     
-    # We might want to keep caches separate or just filter in frontend?
-    # For now, let's clear only if we assume single-user/single-view focus, 
-    # but strictly speaking we should probably append or manage by market.
-    # To keep it simple for the UI (which expects a full list), let's clear.
-    recommendation_cache = [r for r in recommendation_cache if r.get('market') != market]
+    # 1. Broadcast Start
+    await manager.broadcast({
+        "type": "SCAN_STARTED",
+        "data": {"market": market}
+    })
     
+    # 2. Clear Old Recommendations for this market
+    db = SessionLocal()
+    try:
+        if market == 'binance':
+            db.query(BinanceRecommendation).delete()
+        else:
+            db.query(BIST100Recommendation).delete()
+        db.commit()
+    except Exception as e:
+        print(f"DB Clear Error: {e}")
+    finally:
+        db.close()
+        
+    # 3. Get Engine
+    engine = get_engine(market)
+    if engine is None:
+        print(f"Error: {market.upper()} Model Engine not loaded.")
+        await manager.broadcast({
+            "type": "SCAN_ERROR",
+            "data": {"message": f"{market.upper()} model not ready.", "market": market}
+        })
+        return
+
+    # 4. Define Tickers
     tickers = []
     if market == 'bist100':
         tickers = [
@@ -70,60 +113,78 @@ async def run_market_scan(market: str = 'bist100'):
             "MATIC/USDT", "LINK/USDT", "SHIB/USDT", "LTC/USDT", "UNI/USDT"
         ]
     
-    print(f"Starting {market.upper()} market scan for {len(tickers)} tickers...")
+    # 5. Scan Loop
+    count_found = 0
     
     for ticker in tickers:
         try:
-            # Configure Analyzer for correct market
-            # Binance uses 1h timeframe for 'short' horizon as per updated config
-            analyzer = StockAnalyzer(ticker, horizon='short', period='10d', interval='1h', market=market)
+            # Analyze
+            result = engine.analyze_ticker(ticker, horizon='short', use_live=True, market=market)
             
-            if analyzer.data is None or analyzer.data.empty:
+            if not result or "error" in result:
                 continue
                 
-            last_close = analyzer.data['Close'].iloc[-1]
+            decision = result.get("decision", "HOLD")
+            score = result.get("final_score", 0.0)
+            price = result.get("price", 0.0)
             
-            # Todo: AI Inference here
-            score = random.uniform(50, 95)
-            decision = "BUY" if score > 70 else "HOLD"
-            if score > 85: decision = "STRONG BUY"
-            
-            div_count = random.randint(0, 2)
-            
-            if decision == "HOLD":
-                continue # Only send interesting things
+            # --- Filtering Logic (Legacy Style) ---
+            # Must be BUY/STRONG BUY and Score >= 50
+            if decision in ["BUY", "STRONG BUY"] and score >= 50:
                 
-            rec = {
-                "ticker": ticker,
-                "market": market,
-                "decision": decision,
-                "score": score,
-                "divergence_count": div_count,
-                "price": float(last_close),
-                "last_updated": datetime.now().strftime("%H:%M")
-            }
+                # Calculate Divergence manually if needed
+                details = result.get("indicator_details", [])
+                # Divergence: 1 (Bullish)
+                div_count = sum(1 for d in details if d.get('Divergence', 0) == 1)
+                
+                # Save to DB
+                db = SessionLocal()
+                rec = None
+                if market == 'binance':
+                    rec = BinanceRecommendation(
+                        ticker=ticker, score=score, decision=decision, price=price,
+                        divergence_count=div_count,
+                        last_updated=(datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+                    )
+                else:
+                    rec = BIST100Recommendation(
+                        ticker=ticker, score=score, decision=decision, price=price,
+                        divergence_count=div_count,
+                        last_updated=(datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+                    )
+                
+                db.add(rec)
+                db.commit()
+                db.close()
+                count_found += 1
+                
+                # Real-time Broadcast
+                await manager.broadcast({
+                    "type": "RECOMMENDATION_UPDATE",
+                    "data": {
+                        "ticker": ticker,
+                        "market": market,
+                        "decision": decision,
+                        "score": score,
+                        "divergence_count": div_count,
+                        "price": price,
+                        "last_updated": datetime.now().strftime("%H:%M")
+                    }
+                })
             
-            recommendation_cache.append(rec)
-            
-            # Broadcast via WebSocket
-            await manager.broadcast({
-                "type": "RECOMMENDATION_UPDATE",
-                "data": rec
-            })
-            
-            # Small delay
-            await asyncio.sleep(0.5)
+            # Yield for other tasks
+            await asyncio.sleep(0.05)
             
         except Exception as e:
             print(f"Error scanning {ticker}: {e}")
             continue
 
-    # Notify Finish
+    # 6. Notify Finish
     await manager.broadcast({
         "type": "SCAN_FINISHED",
-        "data": {"count": len(recommendation_cache), "market": market}
+        "data": {"count": count_found, "market": market}
     })
-    print(f"{market.upper()} scan finished.")
+    print(f"[{market.upper()}] Scan Finished. Found {count_found} opportunities.")
 
 @router.post("/scan")
 async def start_scan(background_tasks: BackgroundTasks, market: str = 'bist100'):

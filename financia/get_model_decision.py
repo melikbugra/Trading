@@ -63,7 +63,7 @@ class InferenceEngine:
             print(f"Error loading model: {e}")
             return False
 
-    def analyze_ticker(self, ticker, horizon='short', use_live=False):
+    def analyze_ticker(self, ticker, horizon='short', use_live=False, market=None):
         """
         Analyze a ticker and return decision.
         
@@ -72,13 +72,14 @@ class InferenceEngine:
             horizon: Trading horizon ('short', 'medium', 'long')
             use_live: If True, use current developing candle (real-time).
                       If False (default), use only closed candles (stable).
+            market: 'bist100' or 'binance' (optional, inferred if None)
         """
         if self.model is None:
             if not self.load_model():
                return {"error": "Model failed to load"}
             
         try:
-            analyzer = StockAnalyzer(ticker, horizon=horizon)
+            analyzer = StockAnalyzer(ticker, horizon=horizon, market=market)
             if analyzer.data is None or analyzer.data.empty:
                 return {"error": "No data found"}
                 
