@@ -55,17 +55,25 @@ async def startup_event():
     print(f"Loading BIST100 Model from {BIST100_MODEL_PATH}...")
     try:
         state.bist100_engine = InferenceEngine(BIST100_MODEL_PATH)
-        print("BIST100 Model Loaded.")
+        if state.bist100_engine.load_model():
+            print("BIST100 Model Loaded and Ready.")
+        else:
+            print("BIST100 Model failed to load.")
+            state.bist100_engine = None
     except Exception as e:
         print(f"BIST100 Model not available: {e}")
-    
+
     # Load Binance Model (if available)
     print(f"Checking Binance Model at {BINANCE_MODEL_PATH}...")
     import os
     if os.path.exists(f"{BINANCE_MODEL_PATH}.ckpt"):
         try:
             state.binance_engine = InferenceEngine(BINANCE_MODEL_PATH)
-            print("Binance Model Loaded.")
+            if state.binance_engine.load_model():
+                print("Binance Model Loaded and Ready.")
+            else:
+                print("Binance Model failed to load.")
+                state.binance_engine = None
         except Exception as e:
             print(f"Binance Model load error: {e}")
     else:
