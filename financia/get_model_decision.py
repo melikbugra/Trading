@@ -63,31 +63,34 @@ class InferenceEngine:
             print(f"Error loading model: {e}")
             return False
 
-    def analyze_ticker(self, ticker, horizon='short', use_live=False, market=None):
+    def analyze_ticker(self, ticker, horizon='short', use_live=False, market=None,
+                        in_position=False, entry_price=None):
         """
         Analyze a ticker and return decision.
-        
+
         Args:
             ticker: Stock ticker symbol
             horizon: Trading horizon ('short', 'medium', 'long')
             use_live: If True, use current developing candle (real-time).
                       If False (default), use only closed candles (stable).
             market: 'bist100' or 'binance' (optional, inferred if None)
+            in_position: Whether currently holding a position in this ticker
+            entry_price: Entry price if in_position is True (for unrealized PnL calculation)
         """
         if self.model is None:
             if not self.load_model():
                return {"error": "Model failed to load"}
-            
+
         try:
             analyzer = StockAnalyzer(ticker, horizon=horizon, market=market)
             if analyzer.data is None or analyzer.data.empty:
                 return {"error": "No data found"}
-                
+
             # Capture Live Data (for UI display) before dropping it for analysis
             live_price = float(analyzer.data['Close'].iloc[-1])
             live_volume = float(analyzer.data['Volume'].iloc[-1])
             live_timestamp = str(analyzer.data.index[-1])
-            
+
             # --- SIGNAL MODE ---
             if not use_live:
                 # STABLE MODE: Use ONLY closed candles for decision to prevent repainting.
@@ -95,19 +98,28 @@ class InferenceEngine:
                 if len(analyzer.data) > 1:
                     analyzer.data = analyzer.data.iloc[:-1]
             # LIVE MODE: Keep the current developing candle for real-time decisions.
-            
+
             df = analyzer.prepare_rl_features()
             if df.empty:
                  return {"error": "Not enough data"}
-            
+
             # Feature Columns Logic
             exclude_cols = ['Date', 'Ticker', 'Timestamp', 'index', 'Close', 'Datetime']
             feature_cols = [c for c in df.columns if c not in exclude_cols]
-            
+
             last_obs = df.iloc[-1][feature_cols].values.astype(np.float32)
-            
-            # Account State (Neutral)
-            account_obs = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+
+            # Account State - now uses real position info if provided
+            in_pos_flag = 1.0 if in_position else 0.0
+
+            unrealized_pnl = 0.0
+            if in_position and entry_price and entry_price > 0:
+                unrealized_pnl = (live_price - entry_price) / entry_price
+
+            # time_progress: 0.5 as neutral mid-point (we don't track episode progress in live)
+            time_progress = 0.5
+
+            account_obs = np.array([in_pos_flag, unrealized_pnl, time_progress], dtype=np.float32)
             final_obs = np.concatenate([last_obs, account_obs])
             
             # Predict using rl_baselines API

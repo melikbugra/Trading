@@ -43,7 +43,7 @@ def train_agent(dataset_path, model_name, market='bist100', timesteps=50000):
         time_steps=timesteps,
         learning_rate=0.0001, # Lower LR for noisy market data stability
         batch_size=256,       # Larger batch size for stable gradients (CPU optimized)
-        gamma=0.99,
+        gamma=0.97,           # Lowered from 0.99 - better for intraday trading (shorter horizon)
         entropy_coef=0.01,
         device='cpu',
         plot_train_sores=True,

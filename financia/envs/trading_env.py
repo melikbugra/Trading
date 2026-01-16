@@ -49,16 +49,18 @@ class TradingEnv(gym.Env):
         # Rewards
         self.total_reward = 0
         self.trades = []
+        self.peak_net_worth = initial_balance  # For drawdown calculation
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        
+
         self.balance = self.initial_balance
         self.net_worth = self.initial_balance
         self.shares_held = 0
         self.avg_cost = 0
         self.total_reward = 0
         self.trades = []
+        self.peak_net_worth = self.initial_balance
         
         # Random Start or Fixed Start via options
         if options and 'start_step' in options:
@@ -153,13 +155,14 @@ class TradingEnv(gym.Env):
 
     def _take_action(self, action, current_price):
         # 0: HOLD, 1: BUY, 2: SELL
-        
+
         # commission is now self.commission
         commission = self.commission
-        
+
         # Slippage Simulation
-        # User requested to remove slippage.
-        slippage = 0.0
+        # 0.2% slippage to simulate 15-minute data delay (BIST100 yfinance)
+        # This accounts for price movement between signal generation and execution
+        slippage = 0.002
         
         if action == 1: # BUY
             # Buy with all available balance
@@ -199,21 +202,29 @@ class TradingEnv(gym.Env):
                 self.trades.append({'step': self.current_step, 'type': 'sell', 'price': executed_price})
                 
     def _calculate_reward(self, prev_net_worth):
-        # Reward = Change in Net Worth - Time Penalty
-        
-        # 1. Shaping (Net Worth Change)
-        # Includes Realized and Unrealized PnL and Costs automatically
-        reward = (self.net_worth - prev_net_worth) / self.initial_balance # Normalized by initial balance
-        
-        # Scale it up to make it meaningful for gradient
-        reward *= 100 
-        
-        # 2. Time Penalty
-        # If in position, penalize slightly to encourage efficiency?
-        # Net worth change already penalizes stagnation if inflation/opportunity cost existed, but here we explicitly add it.
+        # Reward = Change in Net Worth - Risk Penalties
+
+        # 1. Base Reward: Portfolio Return (using log return for stability)
+        if prev_net_worth > 0 and self.net_worth > 0:
+            log_return = np.log(self.net_worth / prev_net_worth)
+        else:
+            log_return = 0
+
+        reward = log_return * 100  # Scale up
+
+        # 2. Drawdown Penalty (Risk-adjusted)
+        # Update peak and calculate drawdown
+        if self.net_worth > self.peak_net_worth:
+            self.peak_net_worth = self.net_worth
+
+        drawdown = (self.peak_net_worth - self.net_worth) / self.peak_net_worth
+        reward -= drawdown * 5  # Penalize being in drawdown
+
+        # 3. Time Penalty (small rent for holding position)
+        # Encourages taking profits rather than holding indefinitely
         if self.shares_held > 0:
-             reward -= 0.001 # Small rent
-             
+            reward -= 0.001
+
         return reward
 
     def render(self, mode='human', close=False):
