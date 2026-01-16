@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import axios from 'axios';
 import { X, RefreshCw, TrendingUp, AlertTriangle, Zap } from 'lucide-react';
 import { useWebSocket } from '../contexts/WebSocketContext';
@@ -6,52 +6,32 @@ import { useToast } from '../contexts/ToastContext';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-export default function RecommendationsModal({ onClose, currency, market = 'bist100' }) {
-    const [recs, setRecs] = useState([]);
-    const [loading, setLoading] = useState(false);
+export default function RecommendationsModal({
+    onClose,
+    currency,
+    market = 'bist100',
+    recommendations,
+    setRecommendations,
+    isScanning,
+    scanProgress
+}) {
+    // Use props from Dashboard - state persists when modal closes
+    const recs = recommendations;
 
-    // Scanning state is now global
-
-    const { lastMessage, activeScans } = useWebSocket();
-    const isScanning = activeScans.includes(market);
+    const { lastMessage } = useWebSocket();
     const { addToast } = useToast();
 
+    // Only handle SCAN_FINISHED toast here - other updates handled by Dashboard
     useEffect(() => {
-        fetchRecs();
-    }, []);
-
-    useEffect(() => {
-        if (lastMessage) {
-            if (lastMessage.type === 'RECOMMENDATION_UPDATE') {
-                const newItem = lastMessage.data;
-                if (newItem.market && newItem.market !== market) return;
-                setRecs(prev => {
-                    const filtered = prev.filter(r => r.ticker !== newItem.ticker);
-                    const updated = [...filtered, newItem];
-                    return updated.sort((a, b) => b.score - a.score);
-                });
-
-            } else if (lastMessage.type === 'SCAN_FINISHED') {
-                // Global context update handles isScanning state.
-                addToast("Piyasa taraması tamamlandı!", "success");
-            }
+        if (lastMessage && lastMessage.type === 'SCAN_FINISHED' && lastMessage.data.market === market) {
+            addToast("Piyasa taraması tamamlandı!", "success");
         }
-    }, [lastMessage]);
-
-    const fetchRecs = async () => {
-        try {
-            const res = await axios.get(`${API_URL}/recommendations`, { params: { market } });
-            setRecs(res.data);
-        } catch (err) {
-            console.error("Error fetching recs:", err);
-        }
-    };
+    }, [lastMessage, market, addToast]);
 
     const runScanner = async () => {
         try {
             // isScanning will update automatically via WS event
-            // Clear old results immediately
-            setRecs([]);
+            // Clear is now handled by Dashboard on SCAN_STARTED
             await axios.post(`${API_URL}/recommendations/scan`, null, { params: { market } });
         } catch (err) {
             console.error("Error starting scan:", err);
@@ -82,7 +62,24 @@ export default function RecommendationsModal({ onClose, currency, market = 'bist
                 {/* Toolbar */}
                 <div className="p-4 bg-gray-800/30 flex justify-between items-center border-b border-gray-800">
                     <div className="text-xs text-gray-500">
-                        {recs.length} Fırsat Bulundu
+                        {isScanning && scanProgress ? (
+                            <div className="flex items-center gap-3">
+                                <span className="text-yellow-400 font-mono">
+                                    [{scanProgress.current}/{scanProgress.total}]
+                                </span>
+                                <span className="text-gray-400">
+                                    Taranan: <span className="text-white font-bold">{scanProgress.ticker}</span>
+                                </span>
+                                <div className="w-32 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                                    <div
+                                        className="h-full bg-yellow-500 transition-all duration-300"
+                                        style={{ width: `${(scanProgress.current / scanProgress.total) * 100}%` }}
+                                    />
+                                </div>
+                            </div>
+                        ) : (
+                            <span>{recs.length} Fırsat Bulundu</span>
+                        )}
                     </div>
                     <button
                         onClick={runScanner}

@@ -113,28 +113,59 @@ async def run_market_scan(market: str = 'bist100'):
     
     # 5. Scan Loop
     count_found = 0
-    
-    for ticker in tickers:
+    total_tickers = len(tickers)
+
+    for idx, ticker in enumerate(tickers, 1):
+        ticker_display = ticker.replace('.IS', '').replace('/USDT', '')
+
         try:
+            # Log: Starting analysis
+            print(f"[{market.upper()}] [{idx}/{total_tickers}] Analyzing {ticker_display}...")
+
+            # Broadcast progress to frontend
+            await manager.broadcast({
+                "type": "SCAN_PROGRESS",
+                "data": {
+                    "market": market,
+                    "current": idx,
+                    "total": total_tickers,
+                    "ticker": ticker_display
+                }
+            })
+
             # Analyze
             result = engine.analyze_ticker(ticker, horizon='short', use_live=True, market=market)
-            
+
             if not result or "error" in result:
+                error_msg = result.get("error", "Unknown error") if result else "No result"
+                print(f"[{market.upper()}] [{idx}/{total_tickers}] {ticker_display}: ERROR - {error_msg}")
                 continue
-                
+
             decision = result.get("decision", "HOLD")
             score = result.get("final_score", 0.0)
             price = result.get("price", 0.0)
-            
+
             # --- Filtering Logic (Legacy Style) ---
             # Must be BUY/STRONG BUY and Score >= 50
-            if decision in ["BUY", "STRONG BUY"] and score >= 50:
-                
+            is_recommended = decision in ["BUY", "STRONG BUY"] and score >= 50
+
+            # Log: Decision result
+            status = "RECOMMENDED" if is_recommended else "NOT RECOMMENDED"
+            reason = ""
+            if not is_recommended:
+                if decision not in ["BUY", "STRONG BUY"]:
+                    reason = f"(Decision: {decision})"
+                elif score < 50:
+                    reason = f"(Score: {score:.1f} < 50)"
+
+            print(f"[{market.upper()}] [{idx}/{total_tickers}] {ticker_display}: {decision} | Score: {score:.1f} | {status} {reason}")
+
+            if is_recommended:
                 # Calculate Divergence manually if needed
                 details = result.get("indicator_details", [])
                 # Divergence: 1 (Bullish)
                 div_count = sum(1 for d in details if d.get('Divergence', 0) == 1)
-                
+
                 # Save to DB
                 with SessionLocal() as db:
                     rec = None
@@ -150,11 +181,13 @@ async def run_market_scan(market: str = 'bist100'):
                             divergence_count=div_count,
                             last_updated=(datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
                         )
-                    
+
                     db.add(rec)
                     db.commit()
                 count_found += 1
-                
+
+                print(f"[{market.upper()}] [{idx}/{total_tickers}] {ticker_display}: SAVED TO DB (Divergence: {div_count})")
+
                 # Real-time Broadcast
                 await manager.broadcast({
                     "type": "RECOMMENDATION_UPDATE",
@@ -168,12 +201,12 @@ async def run_market_scan(market: str = 'bist100'):
                         "last_updated": datetime.now().strftime("%H:%M")
                     }
                 })
-            
+
             # Yield for other tasks
             await asyncio.sleep(0.05)
-            
+
         except Exception as e:
-            print(f"Error scanning {ticker}: {e}")
+            print(f"[{market.upper()}] [{idx}/{total_tickers}] {ticker_display}: EXCEPTION - {e}")
             continue
 
     # 6. Notify Finish

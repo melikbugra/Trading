@@ -19,12 +19,17 @@ export default function Dashboard({ market = 'bist100' }) {
     const [showRecs, setShowRecs] = useState(false);
     const [isLiveMode, setIsLiveMode] = useState(false);
 
-    const { lastMessage, isConnected } = useWebSocket();
+    // Recommendations state - persists when modal closes
+    const [recommendations, setRecommendations] = useState([]);
+    const [scanProgress, setScanProgress] = useState(null); // { current, total, ticker }
+
+    const { lastMessage, isConnected, activeScans } = useWebSocket();
     const { addToast } = useToast();
 
     useEffect(() => {
         fetchPortfolio(); // Initial load
         fetchLiveModeSetting(); // Get current mode setting
+        fetchRecommendations(); // Load saved recommendations
 
         // Request Notification Permission (Safely)
         if ('Notification' in window && Notification.permission !== "granted") {
@@ -38,11 +43,42 @@ export default function Dashboard({ market = 'bist100' }) {
 
     // Handle WebSocket Updates
     useEffect(() => {
-        if (lastMessage && lastMessage.type === 'PORTFOLIO_UPDATE') {
-            const updatedItem = lastMessage.data;
-            handleRealtimeUpdate(updatedItem);
+        if (lastMessage) {
+            if (lastMessage.type === 'PORTFOLIO_UPDATE') {
+                const updatedItem = lastMessage.data;
+                handleRealtimeUpdate(updatedItem);
+            } else if (lastMessage.type === 'RECOMMENDATION_UPDATE') {
+                // Handle recommendation updates even when modal is closed
+                const newItem = lastMessage.data;
+                if (newItem.market && newItem.market !== market) return;
+                setRecommendations(prev => {
+                    const filtered = prev.filter(r => r.ticker !== newItem.ticker);
+                    const updated = [...filtered, newItem];
+                    return updated.sort((a, b) => b.score - a.score);
+                });
+            } else if (lastMessage.type === 'SCAN_STARTED') {
+                // Clear recommendations when new scan starts for this market
+                if (lastMessage.data.market === market) {
+                    setRecommendations([]);
+                    setScanProgress(null);
+                }
+            } else if (lastMessage.type === 'SCAN_PROGRESS') {
+                // Update scan progress for this market
+                if (lastMessage.data.market === market) {
+                    setScanProgress({
+                        current: lastMessage.data.current,
+                        total: lastMessage.data.total,
+                        ticker: lastMessage.data.ticker
+                    });
+                }
+            } else if (lastMessage.type === 'SCAN_FINISHED') {
+                // Clear progress when scan finishes
+                if (lastMessage.data.market === market) {
+                    setScanProgress(null);
+                }
+            }
         }
-    }, [lastMessage]);
+    }, [lastMessage, market]);
 
     const handleRealtimeUpdate = (updatedItem) => {
         // Filter updates by market
@@ -116,6 +152,15 @@ export default function Dashboard({ market = 'bist100' }) {
             setIsLiveMode(res.data.enabled);
         } catch (err) {
             console.error("Error fetching live mode setting:", err);
+        }
+    };
+
+    const fetchRecommendations = async () => {
+        try {
+            const res = await axios.get(`${API_URL}/recommendations`, { params: { market } });
+            setRecommendations(res.data);
+        } catch (err) {
+            console.error("Error fetching recommendations:", err);
         }
     };
 
@@ -274,7 +319,15 @@ export default function Dashboard({ market = 'bist100' }) {
 
                 {/* Recommendations Modal */}
                 {showRecs && (
-                    <RecommendationsModal onClose={() => setShowRecs(false)} market={market} currency={currency} />
+                    <RecommendationsModal
+                        onClose={() => setShowRecs(false)}
+                        market={market}
+                        currency={currency}
+                        recommendations={recommendations}
+                        setRecommendations={setRecommendations}
+                        isScanning={activeScans.includes(market)}
+                        scanProgress={scanProgress}
+                    />
                 )}
             </div>
         </div>
