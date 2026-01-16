@@ -136,9 +136,9 @@ def scan_market(background_tasks: BackgroundTasks):
 
 # -- Analysis Logic --
 def get_engine():
-    """Get the Binance inference engine from main app"""
-    from financia.web_api.main import binance_engine
-    return binance_engine
+    """Get the Binance inference engine from shared state"""
+    from financia.web_api.state import state
+    return state.binance_engine
 
 def analyze_single_ticker_core(ticker: str):
     engine = get_engine()

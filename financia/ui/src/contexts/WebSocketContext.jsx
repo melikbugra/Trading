@@ -7,7 +7,7 @@ export const useWebSocket = () => useContext(WebSocketContext);
 export const WebSocketProvider = ({ children }) => {
     const [lastMessage, setLastMessage] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
-    const [isScanning, setIsScanning] = useState(false);
+    const [activeScans, setActiveScans] = useState([]);
     const wsRef = useRef(null);
 
     // Get API Endpoint (Convert http/https to ws/wss)
@@ -37,11 +37,12 @@ export const WebSocketProvider = ({ children }) => {
                 const updatedData = JSON.parse(event.data);
                 setLastMessage(updatedData);
 
-                // Global Scanner State Management
                 if (updatedData.type === 'SCAN_STARTED') {
-                    setIsScanning(true);
+                    const m = updatedData.data.market;
+                    if (m) setActiveScans(prev => [...new Set([...prev, m])]);
                 } else if (updatedData.type === 'SCAN_FINISHED') {
-                    setIsScanning(false);
+                    const m = updatedData.data.market;
+                    if (m) setActiveScans(prev => prev.filter(x => x !== m));
                 }
             } catch (err) {
                 console.error("WS Parse Error:", err);
@@ -68,7 +69,7 @@ export const WebSocketProvider = ({ children }) => {
     }, []);
 
     return (
-        <WebSocketContext.Provider value={{ lastMessage, isConnected, isScanning }}>
+        <WebSocketContext.Provider value={{ lastMessage, isConnected, activeScans }}>
             {children}
         </WebSocketContext.Provider>
     );

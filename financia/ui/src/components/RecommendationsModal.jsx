@@ -6,13 +6,14 @@ import { useToast } from '../contexts/ToastContext';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-export default function RecommendationsModal({ onClose }) {
+export default function RecommendationsModal({ onClose, currency, market = 'bist100' }) {
     const [recs, setRecs] = useState([]);
     const [loading, setLoading] = useState(false);
 
     // Scanning state is now global
 
-    const { lastMessage, isScanning } = useWebSocket();
+    const { lastMessage, activeScans } = useWebSocket();
+    const isScanning = activeScans.includes(market);
     const { addToast } = useToast();
 
     useEffect(() => {
@@ -23,6 +24,7 @@ export default function RecommendationsModal({ onClose }) {
         if (lastMessage) {
             if (lastMessage.type === 'RECOMMENDATION_UPDATE') {
                 const newItem = lastMessage.data;
+                if (newItem.market && newItem.market !== market) return;
                 setRecs(prev => {
                     const filtered = prev.filter(r => r.ticker !== newItem.ticker);
                     const updated = [...filtered, newItem];
@@ -38,7 +40,7 @@ export default function RecommendationsModal({ onClose }) {
 
     const fetchRecs = async () => {
         try {
-            const res = await axios.get(`${API_URL}/recommendations`);
+            const res = await axios.get(`${API_URL}/recommendations`, { params: { market } });
             setRecs(res.data);
         } catch (err) {
             console.error("Error fetching recs:", err);
@@ -50,7 +52,7 @@ export default function RecommendationsModal({ onClose }) {
             // isScanning will update automatically via WS event
             // Clear old results immediately
             setRecs([]);
-            await axios.post(`${API_URL}/recommendations/scan`);
+            await axios.post(`${API_URL}/recommendations/scan`, null, { params: { market } });
         } catch (err) {
             console.error("Error starting scan:", err);
             addToast("Tarama başlatılamadı.", "error");
@@ -66,9 +68,11 @@ export default function RecommendationsModal({ onClose }) {
                     <div>
                         <h2 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 flex items-center gap-3">
                             <Zap className="text-yellow-400" />
-                            AI MARKET TARAYICI
+                            {market === 'binance' ? 'KRİPTO AI TARAMA' : 'AI MARKET TARAYICI'}
                         </h2>
-                        <p className="text-sm text-gray-400 mt-1">BIST100 Yapay Zeka Destekli Fırsat Analizi</p>
+                        <p className="text-sm text-gray-400 mt-1">
+                            {market === 'binance' ? 'Binance Kripto Fırsat Analizi' : 'BIST100 Yapay Zeka Destekli Fırsat Analizi'}
+                        </p>
                     </div>
                     <button onClick={onClose} className="p-2 hover:bg-red-500/10 hover:text-red-400 rounded-full transition">
                         <X size={24} />
@@ -140,7 +144,7 @@ export default function RecommendationsModal({ onClose }) {
                                             )}
                                         </td>
                                         <td className="p-4 text-right font-mono text-lg text-gray-300">
-                                            {rec.price.toFixed(2)} TL
+                                            {rec.price.toFixed(2)} {currency || 'TL'}
                                         </td>
                                     </tr>
                                 ))}

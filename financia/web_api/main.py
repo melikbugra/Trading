@@ -9,10 +9,11 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-# Database Imports
+# Database & State Imports
 from financia.web_api.database import init_db, SessionLocal
 from financia.get_model_decision import InferenceEngine
 from financia.web_api.websocket_manager import manager
+from financia.web_api.state import state
 
 # Routers
 from financia.web_api.routers import bist100, binance, recommendations
@@ -30,14 +31,9 @@ app.add_middleware(
 )
 
 # Include Market-Specific Routers
-# Include Market-Specific Routers
 app.include_router(bist100.router)
 app.include_router(binance.router)
 app.include_router(recommendations.router)
-
-# Global Engines
-bist100_engine = None
-binance_engine = None
 
 # Model Paths
 BIST100_MODEL_PATH = "bist100_models/bist100_ppo_short_agent"
@@ -45,7 +41,6 @@ BINANCE_MODEL_PATH = "binance_models/binance_ppo_short_agent"
 
 @app.on_event("startup")
 async def startup_event():
-    global bist100_engine, binance_engine
     
     # Print all routes for debugging
     print("Registered Routes:")
@@ -59,7 +54,7 @@ async def startup_event():
     # Load BIST100 Model
     print(f"Loading BIST100 Model from {BIST100_MODEL_PATH}...")
     try:
-        bist100_engine = InferenceEngine(BIST100_MODEL_PATH)
+        state.bist100_engine = InferenceEngine(BIST100_MODEL_PATH)
         print("BIST100 Model Loaded.")
     except Exception as e:
         print(f"BIST100 Model not available: {e}")
@@ -69,7 +64,7 @@ async def startup_event():
     import os
     if os.path.exists(f"{BINANCE_MODEL_PATH}.ckpt"):
         try:
-            binance_engine = InferenceEngine(BINANCE_MODEL_PATH)
+            state.binance_engine = InferenceEngine(BINANCE_MODEL_PATH)
             print("Binance Model Loaded.")
         except Exception as e:
             print(f"Binance Model load error: {e}")
@@ -107,7 +102,7 @@ async def startup_event():
         time.sleep(15)
         while True:
             try:
-                if binance_engine is not None:
+                if state.binance_engine is not None:
                     print("[Binance Scheduler] Running Analysis...")
                     binance.run_analysis_job()
                 time.sleep(60)  # Every minute for crypto
@@ -140,8 +135,8 @@ def ws_status_check():
 def health_check():
     return {
         "status": "healthy",
-        "bist100_engine": bist100_engine is not None,
-        "binance_engine": binance_engine is not None,
+        "bist100_engine": state.bist100_engine is not None,
+        "binance_engine": state.binance_engine is not None,
     }
 
 # -- Available Markets Info --
@@ -155,7 +150,7 @@ def list_markets():
                 "currency": "TRY",
                 "timezone": "UTC+3",
                 "hours": "09:00-18:30 (Weekdays)",
-                "model_ready": bist100_engine is not None
+                "model_ready": state.bist100_engine is not None
             },
             {
                 "id": "binance",
@@ -163,7 +158,7 @@ def list_markets():
                 "currency": "USDT",
                 "timezone": "UTC",
                 "hours": "24/7",
-                "model_ready": binance_engine is not None
+                "model_ready": state.binance_engine is not None
             }
         ]
     }

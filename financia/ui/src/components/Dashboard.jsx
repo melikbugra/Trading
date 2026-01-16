@@ -34,7 +34,7 @@ export default function Dashboard({ market = 'bist100' }) {
                 console.warn("Notification permission request failed:", e);
             }
         }
-    }, []);
+    }, [market]);
 
     // Handle WebSocket Updates
     useEffect(() => {
@@ -190,6 +190,9 @@ export default function Dashboard({ market = 'bist100' }) {
         }
     };
 
+    const inputPlaceholder = market === 'binance' ? "Coin Ekle (Örn: BTCUSDT)" : "Hisse Ekle (Örn: THYAO)";
+    const currency = market === 'binance' ? "$" : "₺";
+
     return (
         <div className="min-h-screen bg-terminal-dark text-gray-200 p-8">
             <div className="max-w-6xl mx-auto">
@@ -197,7 +200,7 @@ export default function Dashboard({ market = 'bist100' }) {
                 {/* Header */}
                 <div className="flex justify-between items-center mb-8">
                     <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-green-400 to-blue-500">
-                        RL Trading Asistanı
+                        {market === 'binance' ? 'Kripto Market' : 'BIST100'}: RL Trading Asistanı
                     </h1>
                     <div className="flex gap-2">
                         {/* Connection Status Indicator */}
@@ -230,10 +233,10 @@ export default function Dashboard({ market = 'bist100' }) {
                 <form onSubmit={addTicker} className="flex gap-4 mb-12">
                     <input
                         type="text"
-                        placeholder="Hisse Ekle (Örn: THYAO)"
+                        placeholder={inputPlaceholder}
                         value={newTicker}
-                        onChange={(e) => setNewTicker(e.target.value)}
-                        className="flex-1 p-4 rounded-lg bg-gray-800 border border-gray-700 focus:outline-none focus:border-green-500 text-lg uppercase"
+                        onChange={(e) => setNewTicker(e.target.value.toLocaleUpperCase('tr-TR'))}
+                        className="flex-1 p-4 rounded-lg bg-gray-800 border border-gray-700 focus:outline-none focus:border-green-500 text-lg"
                     />
                     <button type="submit" disabled={loading} className="px-8 py-4 bg-green-600 rounded-lg font-bold hover:bg-green-700 transition disabled:opacity-50">
                         {loading ? 'Ekleniyor...' : <Plus size={24} />}
@@ -248,19 +251,20 @@ export default function Dashboard({ market = 'bist100' }) {
                             item={item}
                             onRemove={removeTicker}
                             onClick={() => setSelectedItem(item)}
+                            currency={currency}
                         />
                     ))}
                 </div>
 
                 {portfolio.length === 0 && (
                     <div className="text-center text-gray-500 mt-20">
-                        Takip edilen hisse yok. Başlamak için yukarıdan ekleyin.
+                        Takip edilen {market === 'binance' ? 'coin' : 'hisse'} yok. Başlamak için yukarıdan ekleyin.
                     </div>
                 )}
 
                 {/* Details Modal */}
                 {selectedItem && (
-                    <DetailsModal item={selectedItem} onClose={() => setSelectedItem(null)} />
+                    <DetailsModal item={selectedItem} onClose={() => setSelectedItem(null)} currency={currency} />
                 )}
 
                 {/* Help Modal */}
@@ -270,14 +274,14 @@ export default function Dashboard({ market = 'bist100' }) {
 
                 {/* Recommendations Modal */}
                 {showRecs && (
-                    <RecommendationsModal onClose={() => setShowRecs(false)} />
+                    <RecommendationsModal onClose={() => setShowRecs(false)} market={market} currency={currency} />
                 )}
             </div>
         </div>
     );
 }
 
-function StockCard({ item, onRemove, onClick }) {
+function StockCard({ item, onRemove, onClick, currency }) {
     const getStatusColor = (status) => {
         switch (status) {
             case 'BUY': return 'bg-green-900/30 border-green-500/50 text-green-400';
@@ -341,7 +345,7 @@ function StockCard({ item, onRemove, onClick }) {
                 <div>
                     <span className="text-xs uppercase tracking-widest opacity-60">FİYAT</span>
                     <div className="text-3xl font-mono font-medium">
-                        {item.last_price > 0 ? item.last_price.toFixed(2) : '-.--'} <span className="text-lg">TL</span>
+                        {item.last_price > 0 ? item.last_price.toFixed(2) : '-.--'} <span className="text-lg">{currency}</span>
                     </div>
                 </div>
 

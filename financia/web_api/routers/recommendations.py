@@ -45,10 +45,10 @@ def get_recommendations(market: str = 'bist100', limit: int = 20, db: Session = 
     return items
 
 def get_engine(market: str):
-    from financia.web_api.main import bist100_engine, binance_engine
+    from financia.web_api.state import state
     if market == 'binance':
-        return binance_engine
-    return bist100_engine
+        return state.binance_engine
+    return state.bist100_engine
 
 async def run_market_scan(market: str = 'bist100'):
     """
