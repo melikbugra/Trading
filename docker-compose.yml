@@ -8,7 +8,7 @@ services:
     # ports:
     #   - "8000:8000"
     volumes:
-      - ./portfolio.db:/app/portfolio.db
+      - ./data:/app/data
       - ./models:/app/models
       - ./bist100_models:/app/bist100_models
       - ./binance_models:/app/binance_models

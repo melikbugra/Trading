@@ -2,7 +2,10 @@ from sqlalchemy import create_engine, Column, String, Float, JSON
 from sqlalchemy.orm import sessionmaker, declarative_base
 import os
 
-DATABASE_URL = "sqlite:///./portfolio.db"
+DATABASE_URL = "sqlite:///./data/portfolio.db"
+# Ensure data directory exists
+if not os.path.exists("./data"):
+    os.makedirs("./data")
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
