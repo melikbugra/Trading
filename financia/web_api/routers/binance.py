@@ -164,53 +164,51 @@ def analyze_single_ticker_db(ticker: str):
         return
 
     try:
-        db = SessionLocal()
-        item = db.query(BinancePortfolioItem).filter(BinancePortfolioItem.ticker == ticker).first()
-        
-        if item:
-            if "error" in result:
-                item.last_decision = "ERROR"
-            else:
-                new_decision = result["decision"]
-                old_decision = item.last_decision
-                
-                # For now, no email alerts for crypto (can enable later)
-                if old_decision != new_decision and old_decision != "PENDING":
-                    print(f"[Binance] Signal Change: {ticker}: {old_decision} -> {new_decision}")
-                
-                item.last_decision = new_decision
-                item.last_price = result["price"]
-                item.last_volume = result.get("volume", 0.0)
-                item.last_volume_ratio = result.get("volume_ratio", 0.0)
-                item.last_updated = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-                item.final_score = result.get("final_score", 0.0)
-                item.category_scores = result.get("category_scores", {})
-                item.indicator_details = result.get("indicator_details", [])
+        with SessionLocal() as db:
+            item = db.query(BinancePortfolioItem).filter(BinancePortfolioItem.ticker == ticker).first()
             
-            db.commit()
-            
-            # Broadcast via WebSocket
-            try:
-                import asyncio
-                payload = {
-                    "market": "binance",
-                    "ticker": item.ticker,
-                    "last_decision": item.last_decision,
-                    "last_price": item.last_price,
-                    "last_volume": item.last_volume,
-                    "last_volume_ratio": item.last_volume_ratio,
-                    "last_updated": item.last_updated,
-                    "final_score": item.final_score,
-                    "category_scores": item.category_scores,
-                    "indicator_details": item.indicator_details
-                }
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(manager.broadcast({"type": "PORTFOLIO_UPDATE", "data": payload}))
-                loop.close()
-            except Exception as e:
-                print(f"WS Broadcast error: {e}")
+            if item:
+                if "error" in result:
+                    item.last_decision = "ERROR"
+                else:
+                    new_decision = result["decision"]
+                    old_decision = item.last_decision
+                    
+                    # For now, no email alerts for crypto (can enable later)
+                    if old_decision != new_decision and old_decision != "PENDING":
+                        print(f"[Binance] Signal Change: {ticker}: {old_decision} -> {new_decision}")
+                    
+                    item.last_decision = new_decision
+                    item.last_price = result["price"]
+                    item.last_volume = result.get("volume", 0.0)
+                    item.last_volume_ratio = result.get("volume_ratio", 0.0)
+                    item.last_updated = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+                    item.final_score = result.get("final_score", 0.0)
+                    item.category_scores = result.get("category_scores", {})
+                    item.indicator_details = result.get("indicator_details", [])
                 
-        db.close()
+                db.commit()
+                
+                # Broadcast via WebSocket
+                try:
+                    import asyncio
+                    payload = {
+                        "market": "binance",
+                        "ticker": item.ticker,
+                        "last_decision": item.last_decision,
+                        "last_price": item.last_price,
+                        "last_volume": item.last_volume,
+                        "last_volume_ratio": item.last_volume_ratio,
+                        "last_updated": item.last_updated,
+                        "final_score": item.final_score,
+                        "category_scores": item.category_scores,
+                        "indicator_details": item.indicator_details
+                    }
+                    loop = asyncio.new_event_loop()
+                    loop.run_until_complete(manager.broadcast({"type": "PORTFOLIO_UPDATE", "data": payload}))
+                    loop.close()
+                except Exception as e:
+                    print(f"WS Broadcast error: {e}")
     except Exception as e:
         print(f"[Binance] DB Error for {ticker}: {e}")
 
@@ -230,36 +228,33 @@ def run_market_scanner():
     except:
         pass
     
-    db = SessionLocal()
-    
-    for ticker in BINANCE_COINS:
-        try:
-            result = analyze_single_ticker_core(ticker)
-            if result and "error" not in result:
-                existing = db.query(BinanceRecommendation).filter(BinanceRecommendation.ticker == ticker).first()
-                
-                if existing:
-                    existing.score = result.get("final_score", 0.0)
-                    existing.decision = result.get("decision", "HOLD")
-                    existing.price = result.get("price", 0.0)
-                    existing.divergence_count = result.get("divergence_count", 0)
-                    existing.last_updated = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-                else:
-                    new_rec = BinanceRecommendation(
-                        ticker=ticker,
-                        score=result.get("final_score", 0.0),
-                        decision=result.get("decision", "HOLD"),
-                        price=result.get("price", 0.0),
-                        divergence_count=result.get("divergence_count", 0),
-                        last_updated=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-                    )
-                    db.add(new_rec)
-                
-                db.commit()
-        except Exception as e:
-            print(f"[Binance] Scanner error for {ticker}: {e}")
-    
-    db.close()
+    with SessionLocal() as db:
+        for ticker in BINANCE_COINS:
+            try:
+                result = analyze_single_ticker_core(ticker)
+                if result and "error" not in result:
+                    existing = db.query(BinanceRecommendation).filter(BinanceRecommendation.ticker == ticker).first()
+                    
+                    if existing:
+                        existing.score = result.get("final_score", 0.0)
+                        existing.decision = result.get("decision", "HOLD")
+                        existing.price = result.get("price", 0.0)
+                        existing.divergence_count = result.get("divergence_count", 0)
+                        existing.last_updated = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+                    else:
+                        new_rec = BinanceRecommendation(
+                            ticker=ticker,
+                            score=result.get("final_score", 0.0),
+                            decision=result.get("decision", "HOLD"),
+                            price=result.get("price", 0.0),
+                            divergence_count=result.get("divergence_count", 0),
+                            last_updated=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+                        )
+                        db.add(new_rec)
+                    
+                    db.commit()
+            except Exception as e:
+                print(f"[Binance] Scanner error for {ticker}: {e}")
     
     try:
         import asyncio
@@ -273,9 +268,8 @@ def run_market_scanner():
 
 def run_analysis_job():
     """Background job to analyze all portfolio items"""
-    db = SessionLocal()
-    items = db.query(BinancePortfolioItem).all()
-    db.close()
+    with SessionLocal() as db:
+        items = db.query(BinancePortfolioItem).all()
     
     for item in items:
         analyze_single_ticker_db(item.ticker)

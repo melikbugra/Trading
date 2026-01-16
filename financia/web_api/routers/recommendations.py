@@ -63,17 +63,15 @@ async def run_market_scan(market: str = 'bist100'):
     })
     
     # 2. Clear Old Recommendations for this market
-    db = SessionLocal()
     try:
-        if market == 'binance':
-            db.query(BinanceRecommendation).delete()
-        else:
-            db.query(BIST100Recommendation).delete()
-        db.commit()
+        with SessionLocal() as db:
+            if market == 'binance':
+                db.query(BinanceRecommendation).delete()
+            else:
+                db.query(BIST100Recommendation).delete()
+            db.commit()
     except Exception as e:
         print(f"DB Clear Error: {e}")
-    finally:
-        db.close()
         
     # 3. Get Engine
     engine = get_engine(market)
@@ -138,24 +136,23 @@ async def run_market_scan(market: str = 'bist100'):
                 div_count = sum(1 for d in details if d.get('Divergence', 0) == 1)
                 
                 # Save to DB
-                db = SessionLocal()
-                rec = None
-                if market == 'binance':
-                    rec = BinanceRecommendation(
-                        ticker=ticker, score=score, decision=decision, price=price,
-                        divergence_count=div_count,
-                        last_updated=(datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
-                    )
-                else:
-                    rec = BIST100Recommendation(
-                        ticker=ticker, score=score, decision=decision, price=price,
-                        divergence_count=div_count,
-                        last_updated=(datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
-                    )
-                
-                db.add(rec)
-                db.commit()
-                db.close()
+                with SessionLocal() as db:
+                    rec = None
+                    if market == 'binance':
+                        rec = BinanceRecommendation(
+                            ticker=ticker, score=score, decision=decision, price=price,
+                            divergence_count=div_count,
+                            last_updated=(datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+                        )
+                    else:
+                        rec = BIST100Recommendation(
+                            ticker=ticker, score=score, decision=decision, price=price,
+                            divergence_count=div_count,
+                            last_updated=(datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+                        )
+                    
+                    db.add(rec)
+                    db.commit()
                 count_found += 1
                 
                 # Real-time Broadcast
