@@ -159,7 +159,6 @@ def analyze_single_ticker_db(ticker: str):
         return
 
     try:
-    try:
         with SessionLocal() as db:
             item = db.query(BIST100PortfolioItem).filter(BIST100PortfolioItem.ticker == ticker).first()
             
