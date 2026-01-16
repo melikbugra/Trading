@@ -133,8 +133,14 @@ async def run_market_scan(market: str = 'bist100'):
                 }
             })
 
-            # Analyze
-            result = engine.analyze_ticker(ticker, horizon='short', use_live=True, market=market)
+            # Analyze - run in thread pool to avoid blocking event loop
+            result = await asyncio.to_thread(
+                engine.analyze_ticker,
+                ticker,
+                horizon='short',
+                use_live=True,
+                market=market
+            )
 
             if not result or "error" in result:
                 error_msg = result.get("error", "Unknown error") if result else "No result"
