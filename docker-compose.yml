@@ -10,6 +10,8 @@ services:
     volumes:
       - ./portfolio.db:/app/portfolio.db
       - ./models:/app/models
+      - ./bist100_models:/app/bist100_models
+      - ./binance_models:/app/binance_models
     environment:
       - PYTHONUNBUFFERED=1
     networks:
