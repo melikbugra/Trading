@@ -238,7 +238,9 @@ class BacktestEngine:
             'max_drawdown': max_drawdown,
             'total_return': total_return,
             'buy_hold_return': buy_hold_return,
-            'alpha': total_return - buy_hold_return  # Excess return vs B&H
+            'alpha': total_return - buy_hold_return,  # Excess return vs B&H
+            'initial_balance': initial,
+            'final_balance': final
         }
 
     def run_full_backtest(self, tickers=None, days=180):
@@ -269,7 +271,8 @@ class BacktestEngine:
                     print(f"  {ticker:<12} | Trades: {metrics['total_trades']:>3} | "
                           f"Win: {metrics['win_rate']:>5.1f}% | "
                           f"Return: {metrics['total_return']:>7.2f}% | "
-                          f"B&H: {metrics['buy_hold_return']:>7.2f}% | [{status}]")
+                          f"B&H: {metrics['buy_hold_return']:>7.2f}% | "
+                          f"Balance: {metrics['final_balance']:>10,.2f} | [{status}]")
             else:
                 print(f"  {ticker:<12} | SKIPPED (insufficient data)")
 
@@ -307,6 +310,14 @@ class BacktestEngine:
         print(f"\n  Avg Model Return:  {avg_return:.2f}%")
         print(f"  Avg Buy&Hold:      {avg_buy_hold:.2f}%")
         print(f"  Avg Alpha:         {avg_return - avg_buy_hold:.2f}%")
+
+        # Balance summary
+        total_initial = df_results['initial_balance'].sum()
+        total_final = df_results['final_balance'].sum()
+        total_profit = total_final - total_initial
+        print(f"\n  Initial Balance:   {total_initial:>,.2f} (per ticker: {self.initial_balance:,.2f})")
+        print(f"  Final Balance:     {total_final:>,.2f}")
+        print(f"  Total P&L:         {total_profit:>+,.2f} ({total_profit/total_initial*100:+.2f}%)")
 
         # Verdict
         print(f"\n{'='*60}")

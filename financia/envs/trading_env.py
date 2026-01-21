@@ -223,10 +223,10 @@ class TradingEnv(gym.Env):
         drawdown = (self.peak_net_worth - self.net_worth) / self.peak_net_worth
         reward -= drawdown * 5  # Penalize being in drawdown
 
-        # 3. Inactivity Penalty - balanced: ~1.5 days before soft penalty
+        # 3. Inactivity Penalty - penalize sitting idle for too long
         self.steps_since_trade += 1
-        if self.steps_since_trade > 20:  # More than ~2.5 days without trade
-            reward -= 0.01 * (self.steps_since_trade - 20)  # Moderate penalty
+        if self.steps_since_trade > 6:  # More than 6 bars without trade
+            reward -= 0.03 * (self.steps_since_trade - 6)  # Softer linear penalty
 
         # 4. Trading Activity Bonus - only reward PROFITABLE trades
         if action == 1 and self.shares_held > 0:  # Successful BUY
