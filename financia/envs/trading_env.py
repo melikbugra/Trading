@@ -50,6 +50,7 @@ class TradingEnv(gym.Env):
         self.total_reward = 0
         self.trades = []
         self.peak_net_worth = initial_balance  # For drawdown calculation
+        self.steps_since_trade = 0  # Track inactivity
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -61,6 +62,7 @@ class TradingEnv(gym.Env):
         self.total_reward = 0
         self.trades = []
         self.peak_net_worth = self.initial_balance
+        self.steps_since_trade = 0
         
         # Random Start or Fixed Start via options
         if options and 'start_step' in options:
@@ -141,7 +143,7 @@ class TradingEnv(gym.Env):
         if self.net_worth <= 0: # Bankruptcy
             terminated = True
         
-        reward = self._calculate_reward(prev_net_worth)
+        reward = self._calculate_reward(prev_net_worth, action)
         self.total_reward += reward
         
         obs = self._next_observation()
@@ -160,9 +162,8 @@ class TradingEnv(gym.Env):
         commission = self.commission
 
         # Slippage Simulation
-        # 0.2% slippage to simulate 15-minute data delay (BIST100 yfinance)
-        # This accounts for price movement between signal generation and execution
-        slippage = 0.002
+        # 0.1% slippage - accounts for price movement between signal and execution
+        slippage = 0.001
         
         if action == 1: # BUY
             # Buy with all available balance
@@ -188,21 +189,23 @@ class TradingEnv(gym.Env):
                     
                     self.shares_held += shares_to_buy
                     self.trades.append({'step': self.current_step, 'type': 'buy', 'price': executed_price})
-                    
+                    self.steps_since_trade = 0  # Reset inactivity counter
+
         elif action == 2: # SELL
             # Sell all shares
             if self.shares_held > 0:
                 # Price moves DOWN against us when selling
                 executed_price = current_price * (1 - slippage)
-                
+
                 revenue = self.shares_held * executed_price * (1 - commission)
                 self.balance += revenue
                 self.shares_held = 0
                 self.avg_cost = 0
                 self.trades.append({'step': self.current_step, 'type': 'sell', 'price': executed_price})
+                self.steps_since_trade = 0  # Reset inactivity counter
                 
-    def _calculate_reward(self, prev_net_worth):
-        # Reward = Change in Net Worth - Risk Penalties
+    def _calculate_reward(self, prev_net_worth, action=0):
+        # Reward = Change in Net Worth - Risk Penalties + Activity Bonus
 
         # 1. Base Reward: Portfolio Return (using log return for stability)
         if prev_net_worth > 0 and self.net_worth > 0:
@@ -220,7 +223,22 @@ class TradingEnv(gym.Env):
         drawdown = (self.peak_net_worth - self.net_worth) / self.peak_net_worth
         reward -= drawdown * 5  # Penalize being in drawdown
 
-        # 3. Time Penalty (small rent for holding position)
+        # 3. Inactivity Penalty - balanced: ~1.5 days before soft penalty
+        self.steps_since_trade += 1
+        if self.steps_since_trade > 20:  # More than ~2.5 days without trade
+            reward -= 0.01 * (self.steps_since_trade - 20)  # Moderate penalty
+
+        # 4. Trading Activity Bonus - only reward PROFITABLE trades
+        if action == 1 and self.shares_held > 0:  # Successful BUY
+            reward += 0.1  # Small bonus for entering position
+        elif action == 2 and self.shares_held == 0:  # Successful SELL (just exited)
+            # Only bonus if trade was profitable
+            if self.net_worth > prev_net_worth:
+                reward += 0.3  # Bonus for profitable exit
+            else:
+                reward -= 0.1  # Small penalty for losing trade
+
+        # 5. Time Penalty (small rent for holding position)
         # Encourages taking profits rather than holding indefinitely
         if self.shares_held > 0:
             reward -= 0.001

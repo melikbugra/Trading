@@ -29,7 +29,7 @@ def train_agent(dataset_path, model_name, market='bist100', timesteps=50000):
     else:
         commission = 0.0 # 0% for BIST as requested
         
-    env = TradingEnv(train_df, commission=commission)
+    env = TradingEnv(train_df, commission=commission, max_steps=80)  # 2 weeks = ~80 hourly bars (BIST100)
     # Patch env.spec for library compatibility - using Registered ID
     env.spec = SimpleNamespace(id="TradingEnv-v0")
     
@@ -37,14 +37,14 @@ def train_agent(dataset_path, model_name, market='bist100', timesteps=50000):
     print("Initializing PPO Agent...")
     model = PPO(
         env=env,
-        eval_env_kwargs={'df': val_df}, # kwargs for gym.make('TradingEnv-v0')
+        eval_env_kwargs={'df': val_df, 'max_steps': 80, 'commission': commission}, # Same config as train env
         network_type="mlp",
         network_arch=[256, 256],
         time_steps=timesteps,
         learning_rate=0.0001, # Lower LR for noisy market data stability
         batch_size=256,       # Larger batch size for stable gradients (CPU optimized)
         gamma=0.97,           # Lowered from 0.99 - better for intraday trading (shorter horizon)
-        entropy_coef=0.01,
+        entropy_coef=0.07,    # Moderate entropy for exploration while maintaining stability
         device='cpu',
         plot_train_sores=True,
     )

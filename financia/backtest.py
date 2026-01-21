@@ -33,7 +33,7 @@ class BacktestEngine:
         self.engine = InferenceEngine(model_path)
         self.market = market
         self.initial_balance = initial_balance
-        self.slippage = 0.002  # 0.2% slippage (matches training)
+        self.slippage = 0.001  # 0.1% slippage (matches training)
         self.commission = 0.0 if market == 'bist100' else 0.0015
 
     def run_single_ticker_backtest(self, ticker, days=180, verbose=False):
