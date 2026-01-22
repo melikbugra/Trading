@@ -262,7 +262,7 @@ export default function Dashboard({ market = 'bist100' }) {
                             {isLiveMode ? <Activity size={14} /> : <Clock size={14} />}
                             {isLiveMode ? 'CANLI' : 'SAATLİK'}
                         </button>
-                        <button onClick={() => setShowRecs(true)} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white rounded transition font-bold text-sm shadow-lg shadow-purple-900/20 animate-pulse">
+                        <button onClick={() => { fetchRecommendations(); setShowRecs(true); }} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white rounded transition font-bold text-sm shadow-lg shadow-purple-900/20 animate-pulse">
                             <Zap size={18} fill="currentColor" className="text-yellow-300" /> AI TAVSİYE
                         </button>
                         <button onClick={() => setShowHelp(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 rounded transition font-bold text-sm">
