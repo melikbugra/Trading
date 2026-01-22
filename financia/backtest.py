@@ -7,6 +7,10 @@ Evaluates model performance with realistic metrics:
 - Comparison with Buy & Hold
 """
 
+import matplotlib
+
+matplotlib.use("Agg")  # Use non-interactive backend for headless execution
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -18,23 +22,37 @@ import argparse
 
 # Top liquid BIST100 stocks for testing
 TEST_TICKERS_BIST = [
-    "THYAO.IS", "GARAN.IS", "AKBNK.IS", "EREGL.IS", "SISE.IS",
-    "KCHOL.IS", "TUPRS.IS", "SAHOL.IS", "YKBNK.IS", "FROTO.IS",
-    "ASELS.IS", "BIMAS.IS", "TCELL.IS", "PGSUS.IS", "TAVHL.IS"
+    "THYAO.IS",
+    "GARAN.IS",
+    "AKBNK.IS",
+    "EREGL.IS",
+    "SISE.IS",
+    "KCHOL.IS",
+    "TUPRS.IS",
+    "SAHOL.IS",
+    "YKBNK.IS",
+    "FROTO.IS",
+    "ASELS.IS",
+    "BIMAS.IS",
+    "TCELL.IS",
+    "PGSUS.IS",
+    "TAVHL.IS",
 ]
 
-TEST_TICKERS_BINANCE = [
-    "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"
-]
+TEST_TICKERS_BINANCE = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"]
 
 
 class BacktestEngine:
-    def __init__(self, model_path, market='bist100', initial_balance=10000):
+    def __init__(self, model_path, market="bist100", initial_balance=10000):
         self.engine = InferenceEngine(model_path)
         self.market = market
         self.initial_balance = initial_balance
-        self.slippage = 0.001  # 0.1% slippage (matches training)
-        self.commission = 0.0 if market == 'bist100' else 0.0015
+        self.max_slippage = 0.0005  # Max 0.05% slippage
+        self.commission = 0.0 if market == "bist100" else 0.0015
+
+    def _random_slippage(self):
+        """Random slippage between -max and +max (can be favorable or unfavorable)"""
+        return np.random.uniform(-self.max_slippage, self.max_slippage)
 
     def run_single_ticker_backtest(self, ticker, days=180, verbose=False):
         """
@@ -42,13 +60,15 @@ class BacktestEngine:
         Returns trade log and metrics.
         """
         if verbose:
-            print(f"\n{'='*50}")
+            print(f"\n{'=' * 50}")
             print(f"Backtesting: {ticker} (Last {days} days)")
-            print('='*50)
+            print("=" * 50)
 
         # Fetch data
         try:
-            analyzer = StockAnalyzer(ticker, horizon='short', period=f'{days + 60}d', market=self.market)
+            analyzer = StockAnalyzer(
+                ticker, horizon="short", period=f"{days + 60}d", market=self.market
+            )
             if analyzer.data is None or len(analyzer.data) < 200:
                 return None, None
         except Exception as e:
@@ -79,8 +99,14 @@ class BacktestEngine:
         equity_curve = []
 
         # Feature columns
-        exclude_cols = ['Date', 'Ticker', 'Timestamp', 'index', 'Close', 'Datetime']
+        exclude_cols = ["Date", "Ticker", "Timestamp", "index", "Close", "Datetime"]
         feature_cols = [c for c in df_test.columns if c not in exclude_cols]
+
+        # Compute normalization stats from full dataset (same as training)
+        feature_data = df[feature_cols].values
+        feature_mean = feature_data.mean(axis=0).astype(np.float32)
+        feature_std = feature_data.std(axis=0).astype(np.float32)
+        feature_std[feature_std < 1e-8] = 1.0  # Avoid division by zero
 
         # Make sure model is loaded
         if self.engine.model is None:
@@ -88,55 +114,71 @@ class BacktestEngine:
 
         # Iterate through test period
         prev_action = 0
+        total_steps = len(df_test)
 
         for i, (timestamp, row) in enumerate(df_test.iterrows()):
-            current_price = row['Close']
+            current_price = row["Close"]
 
-            # Get model prediction
-            obs = row[feature_cols].values.astype(np.float32)
+            # Get model prediction with NORMALIZATION
+            raw_obs = row[feature_cols].values.astype(np.float32)
+            obs = (raw_obs - feature_mean) / feature_std
+            obs = np.clip(obs, -3.0, 3.0)  # Same clipping as training
 
             # Account state
             in_pos = 1.0 if shares > 0 else 0.0
             unrealized_pnl = 0.0
             if shares > 0 and entry_price > 0:
                 unrealized_pnl = (current_price - entry_price) / entry_price
+                unrealized_pnl = np.clip(unrealized_pnl, -1.0, 1.0)
 
-            account_obs = np.array([in_pos, unrealized_pnl, 0.5], dtype=np.float32)
+            time_progress = i / total_steps  # Dynamic time progress
+
+            account_obs = np.array(
+                [in_pos, unrealized_pnl, time_progress], dtype=np.float32
+            )
             final_obs = np.concatenate([obs, account_obs])
 
             # Predict
             state_tensor = self.engine.model.state_to_torch(final_obs)
-            action_tensor = self.engine.model.agent.select_greedy_action(state_tensor, eval=True)
+            action_tensor = self.engine.model.agent.select_greedy_action(
+                state_tensor, eval=True
+            )
             action = action_tensor.item()
 
             # Execute action
             if action == 1 and shares == 0:  # BUY
-                exec_price = current_price * (1 + self.slippage)
+                slip = self._random_slippage()
+                exec_price = current_price * (1 + slip)
                 cost = exec_price * (1 + self.commission)
                 shares = balance / cost
                 balance = 0
                 entry_price = exec_price
-                trades.append({
-                    'timestamp': timestamp,
-                    'type': 'BUY',
-                    'price': exec_price,
-                    'shares': shares
-                })
+                trades.append(
+                    {
+                        "timestamp": timestamp,
+                        "type": "BUY",
+                        "price": exec_price,
+                        "shares": shares,
+                    }
+                )
 
             elif action == 2 and shares > 0:  # SELL
-                exec_price = current_price * (1 - self.slippage)
+                slip = self._random_slippage()
+                exec_price = current_price * (1 - slip)  # Negative slip = better price
                 revenue = shares * exec_price * (1 - self.commission)
 
                 # Record trade result
                 pnl_pct = (exec_price - entry_price) / entry_price * 100
-                trades.append({
-                    'timestamp': timestamp,
-                    'type': 'SELL',
-                    'price': exec_price,
-                    'shares': shares,
-                    'pnl_pct': pnl_pct,
-                    'entry_price': entry_price
-                })
+                trades.append(
+                    {
+                        "timestamp": timestamp,
+                        "type": "SELL",
+                        "price": exec_price,
+                        "shares": shares,
+                        "pnl_pct": pnl_pct,
+                        "entry_price": entry_price,
+                    }
+                )
 
                 balance = revenue
                 shares = 0
@@ -144,26 +186,27 @@ class BacktestEngine:
 
             # Track equity
             net_worth = balance + (shares * current_price)
-            equity_curve.append({
-                'timestamp': timestamp,
-                'net_worth': net_worth,
-                'price': current_price
-            })
+            equity_curve.append(
+                {"timestamp": timestamp, "net_worth": net_worth, "price": current_price}
+            )
 
             prev_action = action
 
         # Force close if still in position
         if shares > 0:
-            final_price = df_test['Close'].iloc[-1] * (1 - self.slippage)
+            slip = self._random_slippage()
+            final_price = df_test["Close"].iloc[-1] * (1 - slip)
             pnl_pct = (final_price - entry_price) / entry_price * 100
-            trades.append({
-                'timestamp': df_test.index[-1],
-                'type': 'SELL (FORCED)',
-                'price': final_price,
-                'shares': shares,
-                'pnl_pct': pnl_pct,
-                'entry_price': entry_price
-            })
+            trades.append(
+                {
+                    "timestamp": df_test.index[-1],
+                    "type": "SELL (FORCED)",
+                    "price": final_price,
+                    "shares": shares,
+                    "pnl_pct": pnl_pct,
+                    "entry_price": entry_price,
+                }
+            )
             balance = shares * final_price * (1 - self.commission)
             shares = 0
 
@@ -175,104 +218,139 @@ class BacktestEngine:
             return None
 
         # Separate completed trades (SELL only)
-        completed_trades = [t for t in trades if 'pnl_pct' in t]
+        completed_trades = [t for t in trades if "pnl_pct" in t]
 
         if not completed_trades:
             return None
 
         # Basic metrics
         total_trades = len(completed_trades)
-        winning_trades = [t for t in completed_trades if t['pnl_pct'] > 0]
-        losing_trades = [t for t in completed_trades if t['pnl_pct'] <= 0]
+        winning_trades = [t for t in completed_trades if t["pnl_pct"] > 0]
+        losing_trades = [t for t in completed_trades if t["pnl_pct"] <= 0]
 
         win_rate = len(winning_trades) / total_trades * 100 if total_trades > 0 else 0
 
         # PnL metrics
-        pnls = [t['pnl_pct'] for t in completed_trades]
-        avg_win = np.mean([t['pnl_pct'] for t in winning_trades]) if winning_trades else 0
-        avg_loss = np.mean([t['pnl_pct'] for t in losing_trades]) if losing_trades else 0
+        pnls = [t["pnl_pct"] for t in completed_trades]
+        avg_win = (
+            np.mean([t["pnl_pct"] for t in winning_trades]) if winning_trades else 0
+        )
+        avg_loss = (
+            np.mean([t["pnl_pct"] for t in losing_trades]) if losing_trades else 0
+        )
 
-        # Profit factor
-        gross_profit = sum([t['pnl_pct'] for t in winning_trades]) if winning_trades else 0
-        gross_loss = abs(sum([t['pnl_pct'] for t in losing_trades])) if losing_trades else 0.001
-        profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
+        # Profit factor (capped at 10 if no losing trades)
+        gross_profit = (
+            sum([t["pnl_pct"] for t in winning_trades]) if winning_trades else 0
+        )
+        gross_loss = (
+            abs(sum([t["pnl_pct"] for t in losing_trades])) if losing_trades else 0
+        )
+        if gross_loss > 0:
+            profit_factor = min(gross_profit / gross_loss, 99.9)  # Cap at 99.9
+        elif gross_profit > 0:
+            profit_factor = 99.9  # All wins, no losses
+        else:
+            profit_factor = 0.0  # No trades or all zero
 
         # Equity curve analysis
         equity_df = pd.DataFrame(equity_curve)
-        equity_df.set_index('timestamp', inplace=True)
+        equity_df.set_index("timestamp", inplace=True)
 
         # Returns
-        equity_df['returns'] = equity_df['net_worth'].pct_change()
+        equity_df["returns"] = equity_df["net_worth"].pct_change()
 
         # Sharpe Ratio (annualized, assuming hourly data)
         # ~252 trading days * ~7 hours = ~1764 trading hours per year
-        if equity_df['returns'].std() > 0:
-            sharpe = equity_df['returns'].mean() / equity_df['returns'].std() * np.sqrt(1764)
+        if equity_df["returns"].std() > 0:
+            sharpe = (
+                equity_df["returns"].mean() / equity_df["returns"].std() * np.sqrt(1764)
+            )
         else:
             sharpe = 0
 
         # Max Drawdown
-        equity_df['peak'] = equity_df['net_worth'].cummax()
-        equity_df['drawdown'] = (equity_df['peak'] - equity_df['net_worth']) / equity_df['peak']
-        max_drawdown = equity_df['drawdown'].max() * 100
+        equity_df["peak"] = equity_df["net_worth"].cummax()
+        equity_df["drawdown"] = (
+            equity_df["peak"] - equity_df["net_worth"]
+        ) / equity_df["peak"]
+        max_drawdown = equity_df["drawdown"].max() * 100
 
         # Total Return
-        initial = equity_df['net_worth'].iloc[0]
-        final = equity_df['net_worth'].iloc[-1]
+        initial = equity_df["net_worth"].iloc[0]
+        final = equity_df["net_worth"].iloc[-1]
         total_return = (final - initial) / initial * 100
 
         # Buy & Hold comparison
-        price_initial = equity_df['price'].iloc[0]
-        price_final = equity_df['price'].iloc[-1]
+        price_initial = equity_df["price"].iloc[0]
+        price_final = equity_df["price"].iloc[-1]
         buy_hold_return = (price_final - price_initial) / price_initial * 100
 
+        # Oracle Return (perfect hindsight - capture all positive moves)
+        price_returns = equity_df["price"].pct_change().dropna()
+        # Oracle captures every positive move, avoids every negative move
+        oracle_return = ((1 + price_returns.clip(lower=0)).prod() - 1) * 100
+
         return {
-            'total_trades': total_trades,
-            'winning_trades': len(winning_trades),
-            'losing_trades': len(losing_trades),
-            'win_rate': win_rate,
-            'avg_win': avg_win,
-            'avg_loss': avg_loss,
-            'profit_factor': profit_factor,
-            'sharpe_ratio': sharpe,
-            'max_drawdown': max_drawdown,
-            'total_return': total_return,
-            'buy_hold_return': buy_hold_return,
-            'alpha': total_return - buy_hold_return,  # Excess return vs B&H
-            'initial_balance': initial,
-            'final_balance': final
+            "total_trades": total_trades,
+            "winning_trades": len(winning_trades),
+            "losing_trades": len(losing_trades),
+            "win_rate": win_rate,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "profit_factor": profit_factor,
+            "sharpe_ratio": sharpe,
+            "max_drawdown": max_drawdown,
+            "total_return": total_return,
+            "buy_hold_return": buy_hold_return,
+            "oracle_return": oracle_return,
+            "alpha": total_return - buy_hold_return,  # Excess return vs B&H
+            "efficiency": (total_return / oracle_return * 100)
+            if oracle_return > 0
+            else 0,  # How close to oracle
+            "initial_balance": initial,
+            "final_balance": final,
         }
 
     def run_full_backtest(self, tickers=None, days=180):
         """Run backtest across multiple tickers."""
         if tickers is None:
-            tickers = TEST_TICKERS_BIST if self.market == 'bist100' else TEST_TICKERS_BINANCE
+            tickers = (
+                TEST_TICKERS_BIST if self.market == "bist100" else TEST_TICKERS_BINANCE
+            )
 
         all_results = []
         all_trades = []
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"COMPREHENSIVE BACKTEST - {self.market.upper()}")
         print(f"Period: Last {days} days | Tickers: {len(tickers)}")
-        print(f"Slippage: {self.slippage*100:.2f}% | Commission: {self.commission*100:.2f}%")
-        print('='*60)
+        print(
+            f"Slippage: ±{self.max_slippage * 100:.2f}% (random) | Commission: {self.commission * 100:.2f}%"
+        )
+        print("=" * 60)
 
         for ticker in tickers:
-            trades, equity = self.run_single_ticker_backtest(ticker, days, verbose=False)
+            trades, equity = self.run_single_ticker_backtest(
+                ticker, days, verbose=False
+            )
 
             if trades and equity:
                 metrics = self.calculate_metrics(trades, equity)
                 if metrics:
-                    metrics['ticker'] = ticker
+                    metrics["ticker"] = ticker
                     all_results.append(metrics)
                     all_trades.extend(trades)
 
-                    status = "OK" if metrics['total_return'] > 0 else "LOSS"
-                    print(f"  {ticker:<12} | Trades: {metrics['total_trades']:>3} | "
-                          f"Win: {metrics['win_rate']:>5.1f}% | "
-                          f"Return: {metrics['total_return']:>7.2f}% | "
-                          f"B&H: {metrics['buy_hold_return']:>7.2f}% | "
-                          f"Balance: {metrics['final_balance']:>10,.2f} | [{status}]")
+                    status = "OK" if metrics["total_return"] > 0 else "LOSS"
+                    print(
+                        f"  {ticker:<12} | Trades: {metrics['total_trades']:>3} | "
+                        f"Win: {metrics['win_rate']:>5.1f}% | "
+                        f"Return: {metrics['total_return']:>7.2f}% | "
+                        f"B&H: {metrics['buy_hold_return']:>7.2f}% | "
+                        f"Oracle: {metrics['oracle_return']:>7.2f}% | "
+                        f"Eff: {metrics['efficiency']:>5.1f}% | [{status}]"
+                    )
             else:
                 print(f"  {ticker:<12} | SKIPPED (insufficient data)")
 
@@ -283,21 +361,23 @@ class BacktestEngine:
         # Aggregate metrics
         df_results = pd.DataFrame(all_results)
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("AGGREGATE RESULTS")
-        print('='*60)
+        print("=" * 60)
 
         # Summary statistics
-        total_trades = df_results['total_trades'].sum()
-        total_wins = df_results['winning_trades'].sum()
-        total_losses = df_results['losing_trades'].sum()
+        total_trades = df_results["total_trades"].sum()
+        total_wins = df_results["winning_trades"].sum()
+        total_losses = df_results["losing_trades"].sum()
         overall_win_rate = total_wins / total_trades * 100 if total_trades > 0 else 0
 
-        avg_return = df_results['total_return'].mean()
-        avg_buy_hold = df_results['buy_hold_return'].mean()
-        avg_sharpe = df_results['sharpe_ratio'].mean()
-        avg_max_dd = df_results['max_drawdown'].mean()
-        avg_profit_factor = df_results['profit_factor'].mean()
+        avg_return = df_results["total_return"].mean()
+        avg_buy_hold = df_results["buy_hold_return"].mean()
+        avg_oracle = df_results["oracle_return"].mean()
+        avg_efficiency = df_results["efficiency"].mean()
+        avg_sharpe = df_results["sharpe_ratio"].mean()
+        avg_max_dd = df_results["max_drawdown"].mean()
+        avg_profit_factor = df_results["profit_factor"].mean()
 
         # Print summary
         print(f"\n  Total Trades:      {total_trades}")
@@ -309,20 +389,26 @@ class BacktestEngine:
         print(f"  Avg Max Drawdown:  {avg_max_dd:.1f}%")
         print(f"\n  Avg Model Return:  {avg_return:.2f}%")
         print(f"  Avg Buy&Hold:      {avg_buy_hold:.2f}%")
+        print(f"  Avg Oracle:        {avg_oracle:.2f}%")
+        print(f"  Avg Efficiency:    {avg_efficiency:.1f}% (vs Oracle)")
         print(f"  Avg Alpha:         {avg_return - avg_buy_hold:.2f}%")
 
         # Balance summary
-        total_initial = df_results['initial_balance'].sum()
-        total_final = df_results['final_balance'].sum()
+        total_initial = df_results["initial_balance"].sum()
+        total_final = df_results["final_balance"].sum()
         total_profit = total_final - total_initial
-        print(f"\n  Initial Balance:   {total_initial:>,.2f} (per ticker: {self.initial_balance:,.2f})")
+        print(
+            f"\n  Initial Balance:   {total_initial:>,.2f} (per ticker: {self.initial_balance:,.2f})"
+        )
         print(f"  Final Balance:     {total_final:>,.2f}")
-        print(f"  Total P&L:         {total_profit:>+,.2f} ({total_profit/total_initial*100:+.2f}%)")
+        print(
+            f"  Total P&L:         {total_profit:>+,.2f} ({total_profit / total_initial * 100:+.2f}%)"
+        )
 
         # Verdict
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("VERDICT")
-        print('='*60)
+        print("=" * 60)
 
         score = 0
         verdicts = []
@@ -373,7 +459,9 @@ class BacktestEngine:
             verdicts.append(f"  [PASS] Profit Factor: {avg_profit_factor:.2f} >= 1.5")
             score += 1
         elif avg_profit_factor >= 1.2:
-            verdicts.append(f"  [WARN] Profit Factor: {avg_profit_factor:.2f} (acceptable)")
+            verdicts.append(
+                f"  [WARN] Profit Factor: {avg_profit_factor:.2f} (acceptable)"
+            )
             score += 0.5
         else:
             verdicts.append(f"  [FAIL] Profit Factor: {avg_profit_factor:.2f} < 1.2")
@@ -393,21 +481,30 @@ class BacktestEngine:
             print("\n  RECOMMENDATION: Model is NOT READY for live trading")
             print("                  Significant improvements needed")
 
-        print('='*60)
+        print("=" * 60)
 
         # Save results
         os.makedirs("results", exist_ok=True)
         df_results.to_csv(f"results/backtest_{self.market}_{days}d.csv", index=False)
-        print(f"\nDetailed results saved to: results/backtest_{self.market}_{days}d.csv")
+        print(
+            f"\nDetailed results saved to: results/backtest_{self.market}_{days}d.csv"
+        )
 
         return df_results
 
 
 def main():
     parser = argparse.ArgumentParser(description="Comprehensive Backtest")
-    parser.add_argument("--market", type=str, default="bist100", choices=["bist100", "binance"])
+    parser.add_argument(
+        "--market", type=str, default="bist100", choices=["bist100", "binance"]
+    )
     parser.add_argument("--days", type=int, default=180, help="Backtest period in days")
-    parser.add_argument("--model", type=str, default=None, help="Model path (auto-detected if not specified)")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Model path (auto-detected if not specified)",
+    )
 
     args = parser.parse_args()
 

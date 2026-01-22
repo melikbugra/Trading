@@ -6,36 +6,37 @@ from financia.envs.trading_env import TradingEnv
 from financia.analyzer import StockAnalyzer
 import sys
 import os
-import financia.envs # Register env
+import financia.envs  # Register env
 from types import SimpleNamespace
 import torch
+
 
 class InferenceEngine:
     def __init__(self, model_path):
         self.model_path = model_path
         if not self.model_path.endswith(".ckpt"):
             self.model_path += ".ckpt"
-            
+
         self.model = None
-        self.device = 'cpu'
-        
+        self.device = "cpu"
+
     def get_dummy_env(self):
         # Always fetch a live sample to determine correct observation shape
         # This ensures the model initializes with constraints matching the current Analyzer logic
         try:
-           # Use a liquid stock for reliable shape detection
-           analyzer = StockAnalyzer("THYAO.IS", horizon="short") 
-           df = analyzer.prepare_rl_features().head(100)
-           df['Ticker'] = "THYAO.IS" 
+            # Use a liquid stock for reliable shape detection
+            analyzer = StockAnalyzer("THYAO.IS", horizon="short")
+            df = analyzer.prepare_rl_features().head(100)
+            df["Ticker"] = "THYAO.IS"
         except Exception:
-           # Ultimate fallback if no internet or API fail (should not happen in prod)
-           # Create a dummy DF with expected columns? No, better to fail loud.
-           # Or try another ticker.
-           print("Warning: Could not fetch live shape, trying fallback ticker...")
-           analyzer = StockAnalyzer("GARAN.IS", horizon="short")
-           df = analyzer.prepare_rl_features().head(100)
-           df['Ticker'] = "GARAN.IS"
-            
+            # Ultimate fallback if no internet or API fail (should not happen in prod)
+            # Create a dummy DF with expected columns? No, better to fail loud.
+            # Or try another ticker.
+            print("Warning: Could not fetch live shape, trying fallback ticker...")
+            analyzer = StockAnalyzer("GARAN.IS", horizon="short")
+            df = analyzer.prepare_rl_features().head(100)
+            df["Ticker"] = "GARAN.IS"
+
         env = TradingEnv(df)
         env.spec = SimpleNamespace(id="TradingEnv-v0")
         return env
@@ -47,15 +48,11 @@ class InferenceEngine:
 
         try:
             env = self.get_dummy_env()
-            
+
             # Initialize PPO with explicit network_type (must match training)
             # Assuming 'mlp' as per train.py
-            self.model = PPO(
-                env=env,
-                network_type="mlp", 
-                device=self.device
-            )
-            
+            self.model = PPO(env=env, network_type="mlp", device=self.device)
+
             self.model.load(self.model_path)
             print(f"Model loaded from {self.model_path}")
             return True
@@ -63,8 +60,15 @@ class InferenceEngine:
             print(f"Error loading model: {e}")
             return False
 
-    def analyze_ticker(self, ticker, horizon='short', use_live=False, market=None,
-                        in_position=False, entry_price=None):
+    def analyze_ticker(
+        self,
+        ticker,
+        horizon="short",
+        use_live=False,
+        market=None,
+        in_position=False,
+        entry_price=None,
+    ):
         """
         Analyze a ticker and return decision.
 
@@ -79,7 +83,7 @@ class InferenceEngine:
         """
         if self.model is None:
             if not self.load_model():
-               return {"error": "Model failed to load"}
+                return {"error": "Model failed to load"}
 
         try:
             analyzer = StockAnalyzer(ticker, horizon=horizon, market=market)
@@ -87,8 +91,8 @@ class InferenceEngine:
                 return {"error": "No data found"}
 
             # Capture Live Data (for UI display) before dropping it for analysis
-            live_price = float(analyzer.data['Close'].iloc[-1])
-            live_volume = float(analyzer.data['Volume'].iloc[-1])
+            live_price = float(analyzer.data["Close"].iloc[-1])
+            live_volume = float(analyzer.data["Volume"].iloc[-1])
             live_timestamp = str(analyzer.data.index[-1])
 
             # --- SIGNAL MODE ---
@@ -101,13 +105,21 @@ class InferenceEngine:
 
             df = analyzer.prepare_rl_features()
             if df.empty:
-                 return {"error": "Not enough data"}
+                return {"error": "Not enough data"}
 
             # Feature Columns Logic
-            exclude_cols = ['Date', 'Ticker', 'Timestamp', 'index', 'Close', 'Datetime']
+            exclude_cols = ["Date", "Ticker", "Timestamp", "index", "Close", "Datetime"]
             feature_cols = [c for c in df.columns if c not in exclude_cols]
 
-            last_obs = df.iloc[-1][feature_cols].values.astype(np.float32)
+            # Normalize features (same as training)
+            feature_data = df[feature_cols].values
+            feature_mean = feature_data.mean(axis=0).astype(np.float32)
+            feature_std = feature_data.std(axis=0).astype(np.float32)
+            feature_std[feature_std < 1e-8] = 1.0  # Avoid division by zero
+
+            raw_obs = df.iloc[-1][feature_cols].values.astype(np.float32)
+            last_obs = (raw_obs - feature_mean) / feature_std
+            last_obs = np.clip(last_obs, -3.0, 3.0)  # Same clipping as training
 
             # Account State - now uses real position info if provided
             in_pos_flag = 1.0 if in_position else 0.0
@@ -115,87 +127,133 @@ class InferenceEngine:
             unrealized_pnl = 0.0
             if in_position and entry_price and entry_price > 0:
                 unrealized_pnl = (live_price - entry_price) / entry_price
+                unrealized_pnl = np.clip(unrealized_pnl, -1.0, 1.0)
 
             # time_progress: 0.5 as neutral mid-point (we don't track episode progress in live)
             time_progress = 0.5
 
-            account_obs = np.array([in_pos_flag, unrealized_pnl, time_progress], dtype=np.float32)
+            account_obs = np.array(
+                [in_pos_flag, unrealized_pnl, time_progress], dtype=np.float32
+            )
             final_obs = np.concatenate([last_obs, account_obs])
-            
+
             # Predict using rl_baselines API
             # Need to convert state to tensor
             # BaseAlgorithm.state_to_torch handles unsqueeze(0)
             state_tensor = self.model.state_to_torch(final_obs)
-            
-            action_tensor = self.model.agent.select_greedy_action(state_tensor, eval=True)
-            
+
+            action_tensor = self.model.agent.select_greedy_action(
+                state_tensor, eval=True
+            )
+
             if self.model.agent.action_type == "discrete":
                 action = action_tensor.item()
             else:
-                action = action_tensor.item() # Wrapper usually handles this, assuming Discrete(3)
-            
+                action = (
+                    action_tensor.item()
+                )  # Wrapper usually handles this, assuming Discrete(3)
+
             action_map = {0: "HOLD", 1: "BUY", 2: "SELL"}
             decision = action_map.get(int(action), "UNKNOWN")
-            
+
             # Perform Full Technical Analysis for UI Details
             # Now calculated on CLOSED DATA (analyzer.data is already stripped)
-            indicators = ["RSI", "MACD", "BB", "MA", "DMI", "SAR", "STOCH", "STOCHRSI", "SUPERTREND", "ICHIMOKU", "ALLIGATOR", "AWESOME", "MFI", "CMF", "WAVETREND", "KAMA", "GATOR", "DEMAND_INDEX", "WILLIAMS_R", "AROON", "DEMA", "MEDIAN", "FISHER", "VWAP", "OBV", "CCI"]
-            
+            indicators = [
+                "RSI",
+                "MACD",
+                "BB",
+                "MA",
+                "DMI",
+                "SAR",
+                "STOCH",
+                "STOCHRSI",
+                "SUPERTREND",
+                "ICHIMOKU",
+                "ALLIGATOR",
+                "AWESOME",
+                "MFI",
+                "CMF",
+                "WAVETREND",
+                "KAMA",
+                "GATOR",
+                "DEMAND_INDEX",
+                "WILLIAMS_R",
+                "AROON",
+                "DEMA",
+                "MEDIAN",
+                "FISHER",
+                "VWAP",
+                "OBV",
+                "CCI",
+            ]
+
             df_decisions = analyzer.get_indicator_decisions(*indicators)
             score, category_scores = analyzer.calculate_final_score(df_decisions)
-            
+
             # Volume Ratio Calculation (on closed data?)
             # Maybe keep live volume ratio?
             # Let's use closed volume for ratio consistency with decision
-            vol = analyzer.data['Volume']
+            vol = analyzer.data["Volume"]
             vol_ma = vol.rolling(window=20).mean()
             vol_ratio = 0.0
             if len(vol) >= 20 and vol_ma.iloc[-1] > 0:
                 vol_ratio = float(vol.iloc[-1] / vol_ma.iloc[-1])
-            
+
             # Convert DataFrame to list of dicts for JSON
             # Handle NaN values for JSON safety
-            details_list = df_decisions.replace({np.nan: None}).to_dict(orient='records')
-            
+            details_list = df_decisions.replace({np.nan: None}).to_dict(
+                orient="records"
+            )
+
             return {
                 "decision": decision,
                 "action_code": int(action),
-                "price": live_price, # Show User LIVE Price
-                "volume": live_volume, # Show User LIVE Volume
-                "volume_ratio": vol_ratio, # Ratio based on CLOSED candle
-                "timestamp": str(df.index[-1]), # Timestamp of the SIGNAL candle (Closed)
+                "price": live_price,  # Show User LIVE Price
+                "volume": live_volume,  # Show User LIVE Volume
+                "volume_ratio": vol_ratio,  # Ratio based on CLOSED candle
+                "timestamp": str(
+                    df.index[-1]
+                ),  # Timestamp of the SIGNAL candle (Closed)
                 # New Fields
                 "final_score": float(score),
                 "category_scores": category_scores,
-                "indicator_details": details_list
+                "indicator_details": details_list,
             }
-            
+
         except Exception as e:
             return {"error": str(e)}
+
 
 # CLI Wrapper using the Class
 def get_decision(model_path, ticker, horizon):
     engine = InferenceEngine(model_path)
     result = engine.analyze_ticker(ticker, horizon)
-    
+
     if "error" in result:
         print(f"Error: {result['error']}")
         return
 
-    print("\n" + "="*30)
+    print("\n" + "=" * 30)
     print(f"ANALYSIS: {ticker}")
     print(f"Horizon: {horizon}")
     print(f"Latest Date: {result['timestamp']}")
     print(f"Close Price: {result['price']:.2f}")
     print("-" * 30)
     print(f"Model Decision: {result['decision']} ({result['action_code']})")
-    print("="*30)
+    print("=" * 30)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Get RL Model Decision for a Ticker")
     parser.add_argument("model_path", type=str, help="Path to the trained model")
     parser.add_argument("ticker", type=str, help="Stock Ticker (e.g., THYAO.IS)")
-    parser.add_argument("--horizon", type=str, default="short", choices=["short", "medium", "long", "short-mid"], help="Trading Horizon")
-    
+    parser.add_argument(
+        "--horizon",
+        type=str,
+        default="short",
+        choices=["short", "medium", "long", "short-mid"],
+        help="Trading Horizon",
+    )
+
     args = parser.parse_args()
     get_decision(args.model_path, args.ticker, args.horizon)
