@@ -32,7 +32,7 @@ def train_agent(dataset_path, model_name, market="bist100", timesteps=50000):
         commission = 0.0  # 0% for BIST as requested
 
     env = TradingEnv(
-        train_df, commission=commission, max_steps=80
+        train_df, commission=commission, max_steps=80, market=market
     )  # ~2 weeks of hourly bars
     # Patch env.spec for library compatibility - using Registered ID
     env.spec = SimpleNamespace(id="TradingEnv-v0")
@@ -45,6 +45,7 @@ def train_agent(dataset_path, model_name, market="bist100", timesteps=50000):
             "df": val_df,
             "max_steps": 80,
             "commission": commission,
+            "market": market,
         },  # Same config as train env
         network_type="mlp",
         network_arch=[128, 128],

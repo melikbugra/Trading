@@ -362,3 +362,122 @@ async def run_market_scan(market: str = "bist100"):
 async def start_scan(background_tasks: BackgroundTasks, market: str = "bist100"):
     background_tasks.add_task(run_market_scan, market)
     return {"status": "Scan started", "market": market}
+
+
+@router.post("/rescan-ticker")
+async def rescan_single_ticker(
+    ticker: str, market: str = "bist100", db: Session = Depends(get_db)
+):
+    """
+    Re-analyze a single ticker and update in DB.
+    """
+    print(f"[{market.upper()}] Re-scanning single ticker: {ticker}")
+
+    engine = get_engine(market)
+    if engine is None:
+        return {"error": f"{market.upper()} model not ready."}
+
+    try:
+        # Analyze
+        result = await asyncio.to_thread(
+            engine.analyze_ticker,
+            ticker,
+            horizon="short",
+            use_live=True,
+            market=market,
+        )
+
+        if not result or "error" in result:
+            error_msg = result.get("error", "Unknown error") if result else "No result"
+            return {"error": error_msg}
+
+        decision = result.get("decision", "HOLD")
+        score = result.get("final_score", 0.0)
+        price = result.get("price", 0.0)
+
+        # Determine if still recommended
+        is_recommended = decision in ["BUY", "STRONG BUY"] and score >= 50
+
+        # Get model class
+        if market == "binance":
+            model_class = BinanceRecommendation
+        else:
+            model_class = BIST100Recommendation
+
+        # Calculate divergence
+        details = result.get("indicator_details", [])
+        div_count = sum(1 for d in details if d.get("Divergence", 0) == 1)
+
+        last_updated = (datetime.utcnow() + timedelta(hours=3)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+
+        if is_recommended:
+            # Update or insert
+            existing = (
+                db.query(model_class).filter(model_class.ticker == ticker).first()
+            )
+            if existing:
+                existing.score = score
+                existing.decision = decision
+                existing.price = price
+                existing.divergence_count = div_count
+                existing.last_updated = last_updated
+            else:
+                rec = model_class(
+                    ticker=ticker,
+                    score=score,
+                    decision=decision,
+                    price=price,
+                    divergence_count=div_count,
+                    last_updated=last_updated,
+                )
+                db.add(rec)
+            db.commit()
+
+            # Broadcast update
+            await manager.broadcast(
+                {
+                    "type": "RECOMMENDATION_UPDATE",
+                    "data": {
+                        "ticker": ticker,
+                        "market": market,
+                        "decision": decision,
+                        "score": score,
+                        "divergence_count": div_count,
+                        "price": price,
+                        "last_updated": datetime.now().strftime("%H:%M"),
+                    },
+                }
+            )
+
+            return {
+                "status": "updated",
+                "ticker": ticker,
+                "decision": decision,
+                "score": score,
+                "price": price,
+                "divergence_count": div_count,
+            }
+        else:
+            # No longer recommended - remove from list
+            db.query(model_class).filter(model_class.ticker == ticker).delete()
+            db.commit()
+
+            # Broadcast removal
+            await manager.broadcast(
+                {
+                    "type": "RECOMMENDATION_REMOVED",
+                    "data": {"ticker": ticker, "market": market},
+                }
+            )
+
+            return {
+                "status": "removed",
+                "ticker": ticker,
+                "reason": f"No longer meets criteria (Decision: {decision}, Score: {score:.1f})",
+            }
+
+    except Exception as e:
+        print(f"Error re-scanning {ticker}: {e}")
+        return {"error": str(e)}

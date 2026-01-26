@@ -47,11 +47,15 @@ class BacktestEngine:
         self.engine = InferenceEngine(model_path)
         self.market = market
         self.initial_balance = initial_balance
-        self.max_slippage = 0.0005  # Max 0.05% slippage
+        # BIST100: yfinance has 15-20 min delay, so random slippage ±0.05%
+        # Binance: Real-time data via ccxt, no slippage needed
+        self.max_slippage = 0.0 if market == "binance" else 0.0005
         self.commission = 0.0 if market == "bist100" else 0.0015
 
     def _random_slippage(self):
         """Random slippage between -max and +max (can be favorable or unfavorable)"""
+        if self.max_slippage == 0:
+            return 0.0
         return np.random.uniform(-self.max_slippage, self.max_slippage)
 
     def run_single_ticker_backtest(self, ticker, days=180, verbose=False):

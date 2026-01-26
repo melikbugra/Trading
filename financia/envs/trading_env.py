@@ -11,13 +11,21 @@ class TradingEnv(gym.Env):
 
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, df, initial_balance=10000, max_steps=1000, commission=0.0):
+    def __init__(
+        self,
+        df,
+        initial_balance=10000,
+        max_steps=1000,
+        commission=0.0,
+        market="bist100",
+    ):
         super(TradingEnv, self).__init__()
 
         self.df = df.reset_index(drop=True)
         self.initial_balance = initial_balance
         self.max_steps = max_steps
         self.commission = commission
+        self.market = market
 
         # Action Space: 0: HOLD, 1: BUY, 2: SELL
         self.action_space = spaces.Discrete(3)
@@ -184,9 +192,13 @@ class TradingEnv(gym.Env):
         # commission is now self.commission
         commission = self.commission
 
-        # Slippage Simulation
-        # 0.1% slippage - accounts for price movement between signal and execution
-        slippage = 0.001
+        # Slippage Simulation - Market Dependent
+        # BIST100: yfinance has 15-20 min delay, so random slippage ±0.05%
+        # Binance: Real-time data via ccxt, no slippage needed
+        if self.market == "binance":
+            slippage = 0.0
+        else:
+            slippage = np.random.uniform(-0.0005, 0.0005)
 
         if action == 1:  # BUY
             # Buy with all available balance
@@ -236,7 +248,7 @@ class TradingEnv(gym.Env):
                 self.steps_since_trade = 0  # Reset inactivity counter
 
     def _calculate_reward(self, prev_net_worth, action=0):
-        # Simple reward: profit-focused with mild trading incentives
+        # Simple reward: profit-focused with trade cost awareness
 
         reward = 0.0
 
@@ -245,13 +257,18 @@ class TradingEnv(gym.Env):
             pct_return = (self.net_worth - prev_net_worth) / prev_net_worth
             reward = pct_return * 100  # 1% gain = +1 reward
 
-        # 2. Completed trade bonus (encourage round trips)
+        # 2. Trade cost penalty - discourage excessive trading in high-commission markets
+        # This helps model learn that each trade has a cost
+        if action in [1, 2]:  # BUY or SELL
+            trade_penalty = self.commission * 50  # 0.15% commission = -0.075 penalty
+            reward -= trade_penalty
+
+        # 3. Completed trade bonus (encourage profitable round trips)
         if action == 2 and self.shares_held == 0:  # Just sold
             if self.net_worth > prev_net_worth:
                 reward += 0.5  # Small bonus for profitable exit
-            # No penalty for losing trades - the loss itself is penalty enough
 
-        # 3. Update peak for tracking
+        # 4. Update peak for tracking
         if self.net_worth > self.peak_net_worth:
             self.peak_net_worth = self.net_worth
 

@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { X, RefreshCw, TrendingUp, AlertTriangle, Zap } from 'lucide-react';
+import { X, RefreshCw, TrendingUp, AlertTriangle, Zap, RotateCw } from 'lucide-react';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { useToast } from '../contexts/ToastContext';
 
@@ -17,16 +17,22 @@ export default function RecommendationsModal({
 }) {
     // Use props from Dashboard - state persists when modal closes
     const recs = recommendations;
+    const [rescanningTicker, setRescanningTicker] = useState(null);
 
     const { lastMessage } = useWebSocket();
     const { addToast } = useToast();
 
-    // Only handle SCAN_FINISHED toast here - other updates handled by Dashboard
+    // Handle WebSocket messages
     useEffect(() => {
-        if (lastMessage && lastMessage.type === 'SCAN_FINISHED' && lastMessage.data.market === market) {
-            addToast("Piyasa taraması tamamlandı!", "success");
+        if (lastMessage) {
+            if (lastMessage.type === 'SCAN_FINISHED' && lastMessage.data.market === market) {
+                addToast("Piyasa taraması tamamlandı!", "success");
+            } else if (lastMessage.type === 'RECOMMENDATION_REMOVED' && lastMessage.data.market === market) {
+                // Remove ticker from list
+                setRecommendations(prev => prev.filter(r => r.ticker !== lastMessage.data.ticker));
+            }
         }
-    }, [lastMessage, market, addToast]);
+    }, [lastMessage, market, addToast, setRecommendations]);
 
     const runScanner = async () => {
         try {
@@ -36,6 +42,28 @@ export default function RecommendationsModal({
         } catch (err) {
             console.error("Error starting scan:", err);
             addToast("Tarama başlatılamadı.", "error");
+        }
+    };
+
+    const rescanTicker = async (ticker) => {
+        setRescanningTicker(ticker);
+        try {
+            const res = await axios.post(`${API_URL}/recommendations/rescan-ticker`, null, {
+                params: { ticker, market }
+            });
+
+            if (res.data.status === 'updated') {
+                addToast(`${ticker.replace('.IS', '')} güncellendi`, "success");
+            } else if (res.data.status === 'removed') {
+                addToast(`${ticker.replace('.IS', '')} artık kriterleri karşılamıyor`, "warning");
+            } else if (res.data.error) {
+                addToast(`Hata: ${res.data.error}`, "error");
+            }
+        } catch (err) {
+            console.error("Error rescanning ticker:", err);
+            addToast("Yeniden analiz başarısız.", "error");
+        } finally {
+            setRescanningTicker(null);
         }
     };
 
@@ -108,13 +136,14 @@ export default function RecommendationsModal({
                                     <th className="p-4">AI Skor</th>
                                     <th className="p-4">Uyumsuzluk</th>
                                     <th className="p-4 text-right">Fiyat</th>
+                                    <th className="p-4 text-center">İşlem</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-800">
                                 {recs.map((rec) => (
                                     <tr key={rec.ticker} className="hover:bg-white/5 transition group">
                                         <td className="p-4 font-black text-lg text-white">
-                                            {rec.ticker.replace('.IS', '')}
+                                            {rec.ticker.replace('.IS', '').replace('/USDT', '')}
                                             <div className="text-xs font-normal text-gray-500 opacity-60 group-hover:opacity-100">{rec.last_updated}</div>
                                         </td>
                                         <td className="p-4">
@@ -142,6 +171,19 @@ export default function RecommendationsModal({
                                         </td>
                                         <td className="p-4 text-right font-mono text-lg text-gray-300">
                                             {rec.price.toFixed(2)} {currency || 'TL'}
+                                        </td>
+                                        <td className="p-4 text-center">
+                                            <button
+                                                onClick={() => rescanTicker(rec.ticker)}
+                                                disabled={rescanningTicker === rec.ticker}
+                                                className={`p-2 rounded-lg transition ${rescanningTicker === rec.ticker
+                                                        ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                                                        : 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/40'
+                                                    }`}
+                                                title="Yeniden Analiz Et"
+                                            >
+                                                <RotateCw size={16} className={rescanningTicker === rec.ticker ? 'animate-spin' : ''} />
+                                            </button>
                                         </td>
                                     </tr>
                                 ))}
