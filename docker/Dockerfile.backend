@@ -18,7 +18,8 @@ RUN poetry config virtualenvs.create false \
 
 # THEN Copy Source Code
 COPY financia ./financia
-COPY models ./models
+
+# Models are mounted as volumes, no need to COPY them
 
 
 
