@@ -189,9 +189,9 @@ export default function Dashboard({ market = 'bist100' }) {
                 tickerToSend += '.IS';
             }
         } else if (market === 'binance') {
-            // Auto-append USDT for crypto
-            if (!tickerToSend.endsWith('USDT')) {
-                tickerToSend += 'USDT';
+            // Auto-append TRY for crypto (or keep USDT if already present)
+            if (!tickerToSend.endsWith('TRY') && !tickerToSend.endsWith('USDT')) {
+                tickerToSend += 'TRY';
             }
         }
 

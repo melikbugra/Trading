@@ -8,6 +8,13 @@ export const WebSocketProvider = ({ children }) => {
     const [lastMessage, setLastMessage] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
     const [activeScans, setActiveScans] = useState([]);
+    const [scannerStatus, setScannerStatus] = useState({
+        is_running: false,
+        is_scanning: false,
+        scan_interval_minutes: 5,
+        last_scan_at: null
+    });
+    const [activeSignals, setActiveSignals] = useState([]);
     const wsRef = useRef(null);
 
     // Get API Endpoint (Convert http/https to ws/wss)
@@ -37,7 +44,11 @@ export const WebSocketProvider = ({ children }) => {
                 const updatedData = JSON.parse(event.data);
                 setLastMessage(updatedData);
 
-                if (updatedData.type === 'SCAN_STARTED') {
+                if (updatedData.type === 'scanner_status') {
+                    setScannerStatus(updatedData.data);
+                } else if (updatedData.type === 'signals_update') {
+                    setActiveSignals(updatedData.data);
+                } else if (updatedData.type === 'SCAN_STARTED') {
                     const m = updatedData.data.market;
                     if (m) setActiveScans(prev => [...new Set([...prev, m])]);
                 } else if (updatedData.type === 'SCAN_FINISHED') {
@@ -69,7 +80,7 @@ export const WebSocketProvider = ({ children }) => {
     }, []);
 
     return (
-        <WebSocketContext.Provider value={{ lastMessage, isConnected, activeScans }}>
+        <WebSocketContext.Provider value={{ lastMessage, isConnected, activeScans, scannerStatus, setScannerStatus, activeSignals }}>
             {children}
         </WebSocketContext.Provider>
     );

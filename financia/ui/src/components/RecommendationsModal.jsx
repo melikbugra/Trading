@@ -143,7 +143,7 @@ export default function RecommendationsModal({
                                 {recs.map((rec) => (
                                     <tr key={rec.ticker} className="hover:bg-white/5 transition group">
                                         <td className="p-4 font-black text-lg text-white">
-                                            {rec.ticker.replace('.IS', '').replace('/USDT', '')}
+                                            {rec.ticker.replace('.IS', '').replace('/TRY', '')}
                                             <div className="text-xs font-normal text-gray-500 opacity-60 group-hover:opacity-100">{rec.last_updated}</div>
                                         </td>
                                         <td className="p-4">
@@ -177,8 +177,8 @@ export default function RecommendationsModal({
                                                 onClick={() => rescanTicker(rec.ticker)}
                                                 disabled={rescanningTicker === rec.ticker}
                                                 className={`p-2 rounded-lg transition ${rescanningTicker === rec.ticker
-                                                        ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                                                        : 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/40'
+                                                    ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                                                    : 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/40'
                                                     }`}
                                                 title="Yeniden Analiz Et"
                                             >

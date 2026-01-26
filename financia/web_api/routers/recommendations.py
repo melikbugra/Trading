@@ -159,8 +159,6 @@ async def run_market_scan(market: str = "bist100"):
             "KONTR.IS",
             "KONYA.IS",
             "KORDS.IS",
-            "KOZAL.IS",
-            "KOZAA.IS",
             "KRDMD.IS",
             "KZBGY.IS",
             "MAVI.IS",
@@ -204,21 +202,21 @@ async def run_market_scan(market: str = "bist100"):
         ]
     elif market == "binance":
         tickers = [
-            "BTC/USDT",
-            "ETH/USDT",
-            "BNB/USDT",
-            "SOL/USDT",
-            "XRP/USDT",
-            "ADA/USDT",
-            "AVAX/USDT",
-            "DOGE/USDT",
-            "TRX/USDT",
-            "DOT/USDT",
-            "MATIC/USDT",
-            "LINK/USDT",
-            "SHIB/USDT",
-            "LTC/USDT",
-            "UNI/USDT",
+            "BTC/TRY",
+            "ETH/TRY",
+            "BNB/TRY",
+            "SOL/TRY",
+            "XRP/TRY",
+            "ADA/TRY",
+            "AVAX/TRY",
+            "DOGE/TRY",
+            "TRX/TRY",
+            "DOT/TRY",
+            "MATIC/TRY",
+            "LINK/TRY",
+            "SHIB/TRY",
+            "LTC/TRY",
+            "UNI/TRY",
         ]
 
     # 5. Scan Loop
@@ -226,7 +224,7 @@ async def run_market_scan(market: str = "bist100"):
     total_tickers = len(tickers)
 
     for idx, ticker in enumerate(tickers, 1):
-        ticker_display = ticker.replace(".IS", "").replace("/USDT", "")
+        ticker_display = ticker.replace(".IS", "").replace("/TRY", "")
 
         try:
             # Log: Starting analysis
