@@ -23,6 +23,7 @@ services:
     # ports:
     #   - "5173:5173"
     environment:
+      - VITE_API_HOST=tradeapi
       - VITE_API_URL=${API_URL:-https://tradeapi.melikbugraozcelik.com}
       - VITE_APP_PIN=${APP_PIN:-meliktrade123}
     depends_on:
