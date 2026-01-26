@@ -38,9 +38,9 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
 
     return (
         <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-4">
-            <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center justify-between gap-4">
                 {/* Scanner Status */}
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 flex-shrink-0">
                     <div className="flex items-center gap-2">
                         <div className={`w-3 h-3 rounded-full ${config.is_running ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`} />
                         <span className="text-gray-300 font-medium">
@@ -60,7 +60,7 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                 </div>
 
                 {/* Interval Setting */}
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-shrink-0">
                     <span className="text-gray-400 text-sm">Tarama Aralığı:</span>
                     {editingInterval ? (
                         <div className="flex items-center gap-2">
@@ -102,7 +102,7 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                 </div>
 
                 {/* Manual Scan */}
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-shrink-0">
                     <span className="text-gray-500 text-xs">
                         Son tarama: {formatLastScan(config.last_scan_at)}
                     </span>
@@ -120,7 +120,7 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                 </div>
 
                 {/* Email Notification Settings */}
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-shrink-0">
                     <span className="text-gray-400 text-sm">📧 E-posta:</span>
                     <button
                         onClick={() => updateEmailNotifications('triggered', !emailNotifications.triggered)}
