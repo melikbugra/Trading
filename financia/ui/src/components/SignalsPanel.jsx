@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import ChartModal from './ChartModal';
 import { useWebSocket } from '../contexts/WebSocketContext';
+import { useToast } from '../contexts/ToastContext';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export default function SignalsPanel({ strategies }) {
     const { activeSignals } = useWebSocket();
+    const { addToast } = useToast();
     const [signals, setSignals] = useState([]);
     const [filter, setFilter] = useState('all'); // all, pending, triggered, entered
     const [marketFilter, setMarketFilter] = useState('all'); // all, bist100, binance
@@ -14,6 +16,12 @@ export default function SignalsPanel({ strategies }) {
     const [chartModal, setChartModal] = useState(null); // { ticker, market, strategyId }
     const [entryModal, setEntryModal] = useState(null); // { signalId, ticker, entry_price }
     const [entryPrice, setEntryPrice] = useState('');
+    const [entryLots, setEntryLots] = useState('');
+    const [entryStopLoss, setEntryStopLoss] = useState('');
+    const [entryTakeProfit, setEntryTakeProfit] = useState('');
+    const [exitModal, setExitModal] = useState(null); // { signalId, ticker, direction, remaining_lots }
+    const [exitPrice, setExitPrice] = useState('');
+    const [exitLots, setExitLots] = useState('');
 
     const openChartModal = (signal) => {
         setChartModal({
@@ -33,28 +41,91 @@ export default function SignalsPanel({ strategies }) {
             take_profit: signal.take_profit
         });
         setEntryPrice(signal.entry_price?.toString() || '');
+        setEntryStopLoss(signal.stop_loss?.toString() || '');
+        setEntryTakeProfit(signal.take_profit?.toString() || '');
+    };
+
+    const openExitModal = (signal) => {
+        setExitModal({
+            signalId: signal.id,
+            ticker: signal.ticker,
+            direction: signal.direction,
+            entry_price: signal.actual_entry_price || signal.entry_price,
+            current_price: signal.current_price,
+            remaining_lots: signal.remaining_lots || 0
+        });
+        setExitPrice(signal.current_price?.toString() || '');
+        setExitLots(signal.remaining_lots?.toString() || '');
     };
 
     const confirmEntry = async () => {
-        if (!entryModal || !entryPrice) return;
+        if (!entryModal || !entryPrice || !entryLots) return;
 
         try {
+            const payload = {
+                actual_entry_price: parseFloat(entryPrice),
+                lots: parseFloat(entryLots)
+            };
+            if (entryStopLoss) payload.stop_loss = parseFloat(entryStopLoss);
+            if (entryTakeProfit) payload.take_profit = parseFloat(entryTakeProfit);
+
             const res = await fetch(`${API_BASE}/strategies/signals/${entryModal.signalId}/confirm-entry`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ actual_entry_price: parseFloat(entryPrice) })
+                body: JSON.stringify(payload)
             });
             if (res.ok) {
+                addToast(`${entryModal.ticker} pozisyona alındı: ${entryLots} lot @ ${entryPrice}`, 'success');
                 setEntryModal(null);
                 setEntryPrice('');
+                setEntryLots('');
+                setEntryStopLoss('');
+                setEntryTakeProfit('');
                 // WebSocket will update the signals
             } else {
                 const err = await res.json();
-                alert(err.detail || 'Hata oluştu');
+                addToast(err.detail || 'Hata oluştu', 'error');
             }
         } catch (err) {
             console.error('Failed to confirm entry:', err);
-            alert('Bağlantı hatası');
+            addToast('Bağlantı hatası', 'error');
+        }
+    };
+
+    const confirmExit = async () => {
+        if (!exitModal || !exitPrice || !exitLots) return;
+
+        try {
+            const res = await fetch(`${API_BASE}/strategies/signals/${exitModal.signalId}/close-position`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    exit_price: parseFloat(exitPrice),
+                    lots: parseFloat(exitLots)
+                })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                const pnlText = `${data.profit_tl >= 0 ? '+' : ''}${data.profit_tl.toLocaleString('tr-TR')} TL`;
+                const lotsText = data.is_fully_closed
+                    ? `${exitLots} lot satıldı (pozisyon kapatıldı)`
+                    : `${exitLots} lot satıldı (kalan: ${data.remaining_lots})`;
+                addToast(
+                    `${exitModal.ticker}: ${lotsText} | ${pnlText}`,
+                    data.profit_tl >= 0 ? 'success' : 'warning',
+                    5000
+                );
+                setExitModal(null);
+                setExitPrice('');
+                setExitLots('');
+                // WebSocket will update the signals
+            } else {
+                const err = await res.json();
+                addToast(err.detail || 'Hata oluştu', 'error');
+            }
+        } catch (err) {
+            console.error('Failed to close position:', err);
+            addToast('Bağlantı hatası', 'error');
         }
     };
 
@@ -234,7 +305,7 @@ export default function SignalsPanel({ strategies }) {
                             key={signal.id}
                             className="bg-gray-900/50 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-colors"
                         >
-                            <div className="flex items-start justify-between">
+                            <div className="flex items-center justify-between">
                                 <div className="flex-1">
                                     {/* Header */}
                                     <div className="flex items-center gap-3 mb-3">
@@ -253,7 +324,7 @@ export default function SignalsPanel({ strategies }) {
 
                                     {/* Price Levels */}
                                     {signal.status !== 'pending' && (
-                                        <div className="grid grid-cols-4 gap-4 mb-3">
+                                        <div className="grid grid-cols-5 gap-4 mb-3">
                                             <div>
                                                 <div className="text-gray-500 text-xs">Giriş</div>
                                                 <div className="text-blue-400 font-mono">{signal.entry_price?.toFixed(2) || '-'}</div>
@@ -270,6 +341,12 @@ export default function SignalsPanel({ strategies }) {
                                                 <div className="text-gray-500 text-xs">Kâr Al</div>
                                                 <div className="text-green-400 font-mono">{signal.take_profit?.toFixed(2) || '-'}</div>
                                             </div>
+                                            {signal.status === 'entered' && (
+                                                <div>
+                                                    <div className="text-gray-500 text-xs">Lot</div>
+                                                    <div className="text-purple-400 font-mono font-bold">{signal.remaining_lots || 0}</div>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
 
@@ -282,22 +359,25 @@ export default function SignalsPanel({ strategies }) {
                                 </div>
 
                                 {/* Actions */}
-                                <div className="flex flex-col gap-2">
-                                    {/* Show "Pozisyona Gir" button if entry is reached */}
-                                    {signal.status === 'triggered' && signal.entry_reached && (
+                                <div className="flex flex-col gap-2 justify-center">
+                                    {/* Show "Pozisyona Al" button for triggered signals */}
+                                    {signal.status === 'triggered' && (
                                         <button
                                             onClick={() => openEntryModal(signal)}
-                                            className="px-3 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-bold transition-colors animate-pulse"
+                                            className={`px-3 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-bold transition-colors ${signal.entry_reached ? 'animate-pulse' : ''}`}
                                         >
-                                            ✅ Pozisyona Gir
+                                            ✅ Pozisyona Al
                                         </button>
                                     )}
-                                    <button
-                                        onClick={() => cancelSignal(signal.id)}
-                                        className="px-3 py-2 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded text-sm transition-colors"
-                                    >
-                                        ✕ İptal
-                                    </button>
+                                    {/* Show "Pozisyondan Çık" button for entered signals */}
+                                    {signal.status === 'entered' && (
+                                        <button
+                                            onClick={() => openExitModal(signal)}
+                                            className="px-3 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded text-sm font-bold transition-colors"
+                                        >
+                                            🚪 Pozisyondan Çık
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -320,7 +400,7 @@ export default function SignalsPanel({ strategies }) {
                 <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
                     <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md">
                         <h3 className="text-xl font-bold text-white mb-4">
-                            ✅ Pozisyona Giriş Onayı
+                            ✅ Pozisyona Giriş
                         </h3>
 
                         <div className="mb-4">
@@ -329,53 +409,226 @@ export default function SignalsPanel({ strategies }) {
                                 {' '}için {entryModal.direction === 'long' ? '📈 LONG' : '📉 SHORT'} pozisyonu
                             </div>
 
-                            <div className="grid grid-cols-3 gap-3 text-sm mb-4">
-                                <div className="bg-gray-800 p-2 rounded text-center">
-                                    <div className="text-gray-500 text-xs">Önerilen</div>
-                                    <div className="text-blue-400 font-mono">{entryModal.suggested_price?.toFixed(2)}</div>
-                                </div>
-                                <div className="bg-gray-800 p-2 rounded text-center">
-                                    <div className="text-gray-500 text-xs">Stop Loss</div>
-                                    <div className="text-red-400 font-mono">{entryModal.stop_loss?.toFixed(2)}</div>
-                                </div>
-                                <div className="bg-gray-800 p-2 rounded text-center">
-                                    <div className="text-gray-500 text-xs">Kâr Al</div>
-                                    <div className="text-green-400 font-mono">{entryModal.take_profit?.toFixed(2)}</div>
-                                </div>
+                            <div className="bg-gray-800 p-2 rounded text-center mb-4">
+                                <div className="text-gray-500 text-xs">Önerilen Giriş</div>
+                                <div className="text-blue-400 font-mono">{entryModal.suggested_price?.toFixed(2)}</div>
                             </div>
                         </div>
 
-                        <div className="mb-4">
-                            <label className="block text-gray-400 text-sm mb-2">
-                                Gerçek Giriş Fiyatınız:
-                            </label>
-                            <input
-                                type="number"
-                                step="0.01"
-                                value={entryPrice}
-                                onChange={(e) => setEntryPrice(e.target.value)}
-                                className="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded text-white text-lg font-mono focus:border-green-500 focus:outline-none"
-                                placeholder="Örn: 123.45"
-                                autoFocus
-                            />
-                            <div className="text-gray-500 text-xs mt-1">
-                                Aracı kurumunuzdaki gerçek işlem fiyatını girin
+                        <div className="space-y-4 mb-4">
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-gray-400 text-sm mb-2">
+                                        Giriş Fiyatı:
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        value={entryPrice}
+                                        onChange={(e) => setEntryPrice(e.target.value)}
+                                        className="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded text-white text-lg font-mono focus:border-green-500 focus:outline-none"
+                                        placeholder="Örn: 123.45"
+                                        autoFocus
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-purple-400 text-sm mb-2">
+                                        Lot Sayısı:
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="1"
+                                        min="1"
+                                        value={entryLots}
+                                        onChange={(e) => setEntryLots(e.target.value)}
+                                        className="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded text-purple-400 text-lg font-mono focus:border-purple-500 focus:outline-none"
+                                        placeholder="Örn: 100"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-red-400 text-sm mb-2">
+                                        Zarar Kes (SL):
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        value={entryStopLoss}
+                                        onChange={(e) => setEntryStopLoss(e.target.value)}
+                                        className="w-full px-4 py-2 bg-gray-800 border border-gray-600 rounded text-red-400 font-mono focus:border-red-500 focus:outline-none"
+                                        placeholder={entryModal.stop_loss?.toFixed(2)}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-green-400 text-sm mb-2">
+                                        Kâr Al (TP):
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        value={entryTakeProfit}
+                                        onChange={(e) => setEntryTakeProfit(e.target.value)}
+                                        className="w-full px-4 py-2 bg-gray-800 border border-gray-600 rounded text-green-400 font-mono focus:border-green-500 focus:outline-none"
+                                        placeholder={entryModal.take_profit?.toFixed(2)}
+                                    />
+                                </div>
+                            </div>
+                            <div className="text-gray-500 text-xs">
+                                Boş bırakırsanız mevcut SL/TP değerleri kullanılır
                             </div>
                         </div>
 
                         <div className="flex gap-3">
                             <button
-                                onClick={() => { setEntryModal(null); setEntryPrice(''); }}
+                                onClick={() => { setEntryModal(null); setEntryPrice(''); setEntryLots(''); setEntryStopLoss(''); setEntryTakeProfit(''); }}
                                 className="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
                             >
                                 İptal
                             </button>
                             <button
                                 onClick={confirmEntry}
-                                disabled={!entryPrice}
+                                disabled={!entryPrice || !entryLots}
                                 className="flex-1 px-4 py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold rounded transition-colors"
                             >
-                                ✅ Onayla
+                                ✅ Pozisyona Al
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Exit Position Modal */}
+            {exitModal && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+                    <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md">
+                        <h3 className="text-xl font-bold text-white mb-4">
+                            🚪 Pozisyondan Çıkış
+                        </h3>
+
+                        <div className="mb-4">
+                            <div className="text-gray-400 mb-2">
+                                <span className="font-bold text-white">{exitModal.ticker}</span>
+                                {' '}{exitModal.direction === 'long' ? '📈 LONG' : '📉 SHORT'} pozisyonu
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-3 text-sm mb-4">
+                                <div className="bg-gray-800 p-2 rounded text-center">
+                                    <div className="text-gray-500 text-xs">Giriş Fiyatı</div>
+                                    <div className="text-blue-400 font-mono">{exitModal.entry_price?.toFixed(2)}</div>
+                                </div>
+                                <div className="bg-gray-800 p-2 rounded text-center">
+                                    <div className="text-gray-500 text-xs">Güncel Fiyat</div>
+                                    <div className="text-white font-mono">{exitModal.current_price?.toFixed(2)}</div>
+                                </div>
+                                <div className="bg-purple-800/50 p-2 rounded text-center">
+                                    <div className="text-gray-500 text-xs">Mevcut Lot</div>
+                                    <div className="text-purple-400 font-mono font-bold">{exitModal.remaining_lots}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3 mb-4">
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-2">
+                                    Çıkış Fiyatı:
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={exitPrice}
+                                    onChange={(e) => setExitPrice(e.target.value)}
+                                    className="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded text-white text-lg font-mono focus:border-orange-500 focus:outline-none"
+                                    placeholder="Örn: 125.50"
+                                    autoFocus
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-purple-400 text-sm mb-2">
+                                    Satılacak Lot:
+                                </label>
+                                <input
+                                    type="number"
+                                    step="1"
+                                    min="1"
+                                    max={exitModal.remaining_lots}
+                                    value={exitLots}
+                                    onChange={(e) => setExitLots(e.target.value)}
+                                    className="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded text-purple-400 text-lg font-mono focus:border-purple-500 focus:outline-none"
+                                    placeholder={exitModal.remaining_lots?.toString()}
+                                />
+                            </div>
+                        </div>
+
+                        {/* Quick lot selection buttons */}
+                        <div className="flex gap-2 mb-4">
+                            <button
+                                onClick={() => setExitLots(Math.ceil(exitModal.remaining_lots * 0.25).toString())}
+                                className="flex-1 px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded"
+                            >
+                                25%
+                            </button>
+                            <button
+                                onClick={() => setExitLots(Math.ceil(exitModal.remaining_lots * 0.5).toString())}
+                                className="flex-1 px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded"
+                            >
+                                50%
+                            </button>
+                            <button
+                                onClick={() => setExitLots(Math.ceil(exitModal.remaining_lots * 0.75).toString())}
+                                className="flex-1 px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded"
+                            >
+                                75%
+                            </button>
+                            <button
+                                onClick={() => setExitLots(exitModal.remaining_lots.toString())}
+                                className="flex-1 px-2 py-1 bg-orange-700 hover:bg-orange-600 text-white text-xs rounded font-bold"
+                            >
+                                Tümü
+                            </button>
+                        </div>
+
+                        {exitPrice && exitLots && exitModal.entry_price && (
+                            <div className="mb-4 p-3 bg-gray-800 rounded">
+                                <div className="text-gray-400 text-sm mb-1">Tahmini Kâr/Zarar:</div>
+                                {(() => {
+                                    const entry = exitModal.entry_price;
+                                    const exit = parseFloat(exitPrice);
+                                    const lots = parseFloat(exitLots);
+                                    const pnlPercent = exitModal.direction === 'long'
+                                        ? ((exit - entry) / entry) * 100
+                                        : ((entry - exit) / entry) * 100;
+                                    const pnlTL = exitModal.direction === 'long'
+                                        ? (exit - entry) * lots
+                                        : (entry - exit) * lots;
+                                    return (
+                                        <div className="flex items-center gap-4">
+                                            <div className={`text-2xl font-bold ${pnlTL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                {pnlTL >= 0 ? '+' : ''}{pnlTL.toLocaleString('tr-TR', { maximumFractionDigits: 2 })} TL
+                                            </div>
+                                            <div className={`text-sm ${pnlPercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                ({pnlPercent >= 0 ? '+' : ''}{pnlPercent.toFixed(2)}%)
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+                            </div>
+                        )}
+
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => { setExitModal(null); setExitPrice(''); setExitLots(''); }}
+                                className="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+                            >
+                                İptal
+                            </button>
+                            <button
+                                onClick={confirmExit}
+                                disabled={!exitPrice || !exitLots}
+                                className="flex-1 px-4 py-3 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold rounded transition-colors"
+                            >
+                                {parseFloat(exitLots) >= exitModal.remaining_lots ? '🚪 Pozisyonu Kapat' : '📤 Kısmi Satış'}
                             </button>
                         </div>
                     </div>

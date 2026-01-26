@@ -42,6 +42,11 @@ class ScannerService:
         self._task: Optional[asyncio.Task] = None
         self._ws_manager = None  # WebSocket manager reference
         self.last_scan_at: Optional[datetime] = None
+        # Email notification settings (in-memory, configurable via API)
+        self.email_notifications = {
+            "triggered": True,  # Send email when signal is triggered
+            "entryReached": True,  # Send email when entry price is reached
+        }
 
     def set_ws_manager(self, manager):
         """Set WebSocket manager for broadcasting updates."""
@@ -93,6 +98,8 @@ class ScannerService:
                         "last_trough": s.last_trough,
                         "entry_reached": s.entry_reached or False,
                         "actual_entry_price": s.actual_entry_price,
+                        "lots": s.lots or 0,
+                        "remaining_lots": s.remaining_lots or 0,
                         "notes": s.notes,
                         "created_at": s.created_at.isoformat()
                         if s.created_at
@@ -320,21 +327,22 @@ class ScannerService:
                     f"[Scanner] 🎯 NEW SIGNAL: {item.ticker} {result.direction.upper()} @ {entry_price}"
                 )
 
-                # Send email notification for new triggered signal
-                strategy = (
-                    db.query(Strategy).filter(Strategy.id == item.strategy_id).first()
-                )
-                strategy_name = strategy.name if strategy else ""
-                EmailService.send_signal_triggered(
-                    ticker=item.ticker,
-                    market=item.market,
-                    direction=result.direction,
-                    entry_price=entry_price,
-                    stop_loss=stop_loss,
-                    take_profit=take_profit,
-                    current_price=current_price,
-                    strategy_name=strategy_name,
-                )
+                # Send email notification for new triggered signal (if enabled)
+                if self.email_notifications.get("triggered", True):
+                    strategy = (
+                        db.query(Strategy).filter(Strategy.id == item.strategy_id).first()
+                    )
+                    strategy_name = strategy.name if strategy else ""
+                    EmailService.send_signal_triggered(
+                        ticker=item.ticker,
+                        market=item.market,
+                        direction=result.direction,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        take_profit=take_profit,
+                        current_price=current_price,
+                        strategy_name=strategy_name,
+                    )
 
         # Case 2: Precondition met but main condition not - pending
         elif result.precondition_met:
@@ -399,15 +407,16 @@ class ScannerService:
                     f"[Scanner] 📍 ENTRY REACHED: {signal.ticker} LONG @ {current_price} - Awaiting user confirmation"
                 )
 
-                # Send email notification - user should confirm entry
-                EmailService.send_signal_entered(
-                    ticker=signal.ticker,
-                    market=signal.market,
-                    direction=signal.direction,
-                    entry_price=signal.entry_price,
-                    stop_loss=signal.stop_loss,
-                    take_profit=signal.take_profit,
-                )
+                # Send email notification - user should confirm entry (if enabled)
+                if self.email_notifications.get("entryReached", True):
+                    EmailService.send_signal_entered(
+                        ticker=signal.ticker,
+                        market=signal.market,
+                        direction=signal.direction,
+                        entry_price=signal.entry_price,
+                        stop_loss=signal.stop_loss,
+                        take_profit=signal.take_profit,
+                    )
 
         else:  # short
             # Check stop loss
@@ -431,15 +440,16 @@ class ScannerService:
                     f"[Scanner] 📍 ENTRY REACHED: {signal.ticker} SHORT @ {current_price} - Awaiting user confirmation"
                 )
 
-                # Send email notification - user should confirm entry
-                EmailService.send_signal_entered(
-                    ticker=signal.ticker,
-                    market=signal.market,
-                    direction=signal.direction,
-                    entry_price=signal.entry_price,
-                    stop_loss=signal.stop_loss,
-                    take_profit=signal.take_profit,
-                )
+                # Send email notification - user should confirm entry (if enabled)
+                if self.email_notifications.get("entryReached", True):
+                    EmailService.send_signal_entered(
+                        ticker=signal.ticker,
+                        market=signal.market,
+                        direction=signal.direction,
+                        entry_price=signal.entry_price,
+                        stop_loss=signal.stop_loss,
+                        take_profit=signal.take_profit,
+                    )
 
         db.commit()
         await self._broadcast_signals(db)

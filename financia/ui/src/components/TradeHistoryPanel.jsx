@@ -63,7 +63,7 @@ export default function TradeHistoryPanel({ strategies }) {
         <div>
             {/* Stats Cards */}
             {stats && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
                     <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-4 text-center">
                         <div className="text-2xl font-bold text-white">{stats.total_trades}</div>
                         <div className="text-gray-500 text-sm">Toplam İşlem</div>
@@ -74,11 +74,15 @@ export default function TradeHistoryPanel({ strategies }) {
                         </div>
                         <div className="text-gray-500 text-sm">Kazanç Oranı</div>
                     </div>
-                    <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-4 text-center">
-                        <div className={`text-2xl font-bold ${stats.total_profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                            {stats.total_profit >= 0 ? '+' : ''}{stats.total_profit}%
+                    <div className="bg-gradient-to-br from-gray-900/80 to-gray-800/50 border border-green-800/50 rounded-lg p-4 text-center">
+                        <div className={`text-2xl font-bold ${(stats.total_profit_tl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {(stats.total_profit_tl || 0) >= 0 ? '+' : ''}{(stats.total_profit_tl || 0).toLocaleString('tr-TR')} ₺
                         </div>
-                        <div className="text-gray-500 text-sm">Toplam Getiri</div>
+                        <div className="text-gray-500 text-sm">Toplam Kazanç</div>
+                    </div>
+                    <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-4 text-center">
+                        <div className="text-2xl font-bold text-purple-400">{stats.total_lots || 0}</div>
+                        <div className="text-gray-500 text-sm">Toplam Lot</div>
                     </div>
                     <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-4 text-center">
                         <div className="text-2xl font-bold text-blue-400">{stats.avg_rr}R</div>
@@ -127,9 +131,10 @@ export default function TradeHistoryPanel({ strategies }) {
                                 <th className="text-left px-4 py-3 text-gray-400 text-sm font-medium">Tarih</th>
                                 <th className="text-left px-4 py-3 text-gray-400 text-sm font-medium">Sembol</th>
                                 <th className="text-left px-4 py-3 text-gray-400 text-sm font-medium">Yön</th>
+                                <th className="text-left px-4 py-3 text-gray-400 text-sm font-medium">Lot</th>
                                 <th className="text-left px-4 py-3 text-gray-400 text-sm font-medium">Giriş / Çıkış</th>
                                 <th className="text-left px-4 py-3 text-gray-400 text-sm font-medium">Sonuç</th>
-                                <th className="text-right px-4 py-3 text-gray-400 text-sm font-medium">Getiri</th>
+                                <th className="text-right px-4 py-3 text-gray-400 text-sm font-medium">Kazanç</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -159,6 +164,9 @@ export default function TradeHistoryPanel({ strategies }) {
                                             {trade.direction === 'long' ? '📈 LONG' : '📉 SHORT'}
                                         </span>
                                     </td>
+                                    <td className="px-4 py-3 text-purple-400 font-mono font-bold">
+                                        {trade.lots || '-'}
+                                    </td>
                                     <td className="px-4 py-3 text-gray-300 font-mono text-sm">
                                         {trade.entry_price.toFixed(2)} → {trade.exit_price.toFixed(2)}
                                     </td>
@@ -173,12 +181,12 @@ export default function TradeHistoryPanel({ strategies }) {
                                         </span>
                                     </td>
                                     <td className="px-4 py-3 text-right">
-                                        <div className={`font-bold ${trade.profit_percent >= 0 ? 'text-green-400' : 'text-red-400'
+                                        <div className={`font-bold ${(trade.profit_tl || 0) >= 0 ? 'text-green-400' : 'text-red-400'
                                             }`}>
-                                            {trade.profit_percent >= 0 ? '+' : ''}{trade.profit_percent}%
+                                            {(trade.profit_tl || 0) >= 0 ? '+' : ''}{(trade.profit_tl || 0).toLocaleString('tr-TR')} ₺
                                         </div>
                                         <div className="text-gray-500 text-xs">
-                                            {trade.risk_reward_achieved}R
+                                            {trade.profit_percent >= 0 ? '+' : ''}{trade.profit_percent}%
                                         </div>
                                     </td>
                                 </tr>

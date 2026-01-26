@@ -105,6 +105,10 @@ class Signal(Base):
     entry_reached = Column(Boolean, default=False)  # True when price hits entry level
     actual_entry_price = Column(Float, nullable=True)  # User's actual entry price
 
+    # Lot tracking
+    lots = Column(Float, default=0.0)  # Total lots entered
+    remaining_lots = Column(Float, default=0.0)  # Remaining lots (for partial exits)
+
     # Extra data
     notes = Column(String, default="")
     extra_data = Column(JSON, default={})
@@ -129,6 +133,8 @@ class TradeHistory(Base):
 
     result = Column(String, nullable=False)  # "win", "loss", "breakeven"
     profit_percent = Column(Float, default=0.0)
+    profit_tl = Column(Float, default=0.0)  # TL profit/loss
+    lots = Column(Float, default=0.0)  # Lots sold in this trade
     risk_reward_achieved = Column(Float, default=0.0)
 
     entered_at = Column(DateTime, nullable=False)

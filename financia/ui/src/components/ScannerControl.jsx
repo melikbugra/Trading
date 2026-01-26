@@ -4,6 +4,18 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
     const [editingInterval, setEditingInterval] = useState(false);
     const [tempInterval, setTempInterval] = useState(config.scan_interval_minutes);
 
+    // Email notification settings (synced with backend via config prop)
+    const emailNotifications = config.email_notifications || {
+        triggered: true,
+        entryReached: true
+    };
+
+    // Update email notification settings via API
+    const updateEmailNotifications = (key, value) => {
+        const updated = { ...emailNotifications, [key]: value };
+        onUpdate({ email_notifications: updated });
+    };
+
     const toggleScanner = () => {
         onUpdate({ is_running: !config.is_running });
     };
@@ -98,12 +110,39 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                         onClick={onScanNow}
                         disabled={isScanning}
                         className={`px-4 py-2 rounded font-bold text-sm transition-all flex items-center gap-2 ${isScanning
-                                ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                                : 'bg-blue-600 hover:bg-blue-700 text-white'
+                            ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                            : 'bg-blue-600 hover:bg-blue-700 text-white'
                             }`}
                     >
                         <span className={isScanning ? 'animate-spin' : ''}>🔄</span>
                         {isScanning ? 'Taranıyor...' : 'Şimdi Tara'}
+                    </button>
+                </div>
+
+                {/* Email Notification Settings */}
+                <div className="flex items-center gap-3">
+                    <span className="text-gray-400 text-sm">📧 E-posta:</span>
+                    <button
+                        onClick={() => updateEmailNotifications('triggered', !emailNotifications.triggered)}
+                        className={`px-3 py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1.5 ${emailNotifications.triggered
+                            ? 'bg-orange-600/80 text-white'
+                            : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                            }`}
+                        title="Sinyal tetiklendiğinde e-posta bildirimi"
+                    >
+                        <span>{emailNotifications.triggered ? '🔔' : '🔕'}</span>
+                        Tetiklenen
+                    </button>
+                    <button
+                        onClick={() => updateEmailNotifications('entryReached', !emailNotifications.entryReached)}
+                        className={`px-3 py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1.5 ${emailNotifications.entryReached
+                            ? 'bg-green-600/80 text-white'
+                            : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                            }`}
+                        title="Giriş fiyatına ulaşıldığında e-posta bildirimi"
+                    >
+                        <span>{emailNotifications.entryReached ? '🔔' : '🔕'}</span>
+                        Giriş Fiyatı
                     </button>
                 </div>
             </div>

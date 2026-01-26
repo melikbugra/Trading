@@ -91,6 +91,8 @@ class SignalResponse(BaseModel):
     last_trough: Optional[float]
     entry_reached: bool = False
     actual_entry_price: Optional[float]
+    lots: float = 0.0
+    remaining_lots: float = 0.0
     created_at: datetime
     triggered_at: Optional[datetime]
     entered_at: Optional[datetime]
@@ -104,6 +106,15 @@ class SignalResponse(BaseModel):
 
 class ConfirmEntryRequest(BaseModel):
     actual_entry_price: float
+    lots: float
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+
+
+class ClosePositionRequest(BaseModel):
+    exit_price: float
+    lots: float  # Lots to sell (partial exit supported)
+    notes: Optional[str] = None
 
 
 class TradeHistoryResponse(BaseModel):
@@ -119,6 +130,8 @@ class TradeHistoryResponse(BaseModel):
     take_profit: Optional[float]
     result: str
     profit_percent: float
+    profit_tl: float = 0.0
+    lots: float = 0.0
     risk_reward_achieved: float
     entered_at: datetime
     closed_at: datetime
@@ -131,6 +144,7 @@ class TradeHistoryResponse(BaseModel):
 class ScannerConfigUpdate(BaseModel):
     scan_interval_minutes: Optional[int] = None
     is_running: Optional[bool] = None
+    email_notifications: Optional[Dict[str, bool]] = None  # {"triggered": bool, "entryReached": bool}
 
 
 class ScannerConfigResponse(BaseModel):
@@ -138,6 +152,7 @@ class ScannerConfigResponse(BaseModel):
     is_running: bool
     is_scanning: bool  # True while actively scanning
     last_scan_at: Optional[datetime]
+    email_notifications: Dict[str, bool]  # {"triggered": bool, "entryReached": bool}
 
     class Config:
         from_attributes = True
@@ -367,24 +382,30 @@ async def cancel_signal(signal_id: int, db: Session = Depends(get_db)):
 async def confirm_entry(
     signal_id: int, request: ConfirmEntryRequest, db: Session = Depends(get_db)
 ):
-    """Confirm entry to a triggered signal with actual entry price."""
+    """Confirm entry to a triggered signal with actual entry price and lot count."""
     signal = db.query(Signal).filter(Signal.id == signal_id).first()
     if not signal:
         raise HTTPException(404, "Signal not found")
 
-    if signal.status != "triggered":
+    if signal.status not in ["triggered", "pending"]:
         raise HTTPException(
-            400, f"Signal is not in triggered state (current: {signal.status})"
+            400, f"Signal must be in triggered or pending state (current: {signal.status})"
         )
-
-    if not signal.entry_reached:
-        raise HTTPException(400, "Entry price has not been reached yet")
 
     # Update signal
     signal.status = "entered"
     signal.entered_at = datetime.utcnow()
     signal.actual_entry_price = request.actual_entry_price
-    signal.notes = f"Manually confirmed entry @ {request.actual_entry_price}"
+    signal.lots = request.lots
+    signal.remaining_lots = request.lots
+
+    # Update SL/TP if provided
+    if request.stop_loss is not None:
+        signal.stop_loss = request.stop_loss
+    if request.take_profit is not None:
+        signal.take_profit = request.take_profit
+
+    signal.notes = f"Entered @ {request.actual_entry_price} x {request.lots} lot"
     db.commit()
 
     # Broadcast updated signals
@@ -394,6 +415,107 @@ async def confirm_entry(
         "message": "Entry confirmed",
         "signal_id": signal_id,
         "actual_entry_price": request.actual_entry_price,
+        "lots": request.lots,
+        "stop_loss": signal.stop_loss,
+        "take_profit": signal.take_profit,
+    }
+
+
+@router.post("/signals/{signal_id}/close-position")
+async def close_position(
+    signal_id: int, request: ClosePositionRequest, db: Session = Depends(get_db)
+):
+    """Close an entered position (partial or full) with actual exit price and record to trade history."""
+    signal = db.query(Signal).filter(Signal.id == signal_id).first()
+    if not signal:
+        raise HTTPException(404, "Signal not found")
+
+    if signal.status != "entered":
+        raise HTTPException(
+            400, f"Signal must be in entered state to close (current: {signal.status})"
+        )
+
+    # Validate lots
+    lots_to_sell = request.lots
+    if lots_to_sell <= 0:
+        raise HTTPException(400, "Lots must be greater than 0")
+    if lots_to_sell > signal.remaining_lots:
+        raise HTTPException(
+            400, f"Cannot sell {lots_to_sell} lots. Only {signal.remaining_lots} lots remaining."
+        )
+
+    # Calculate profit/loss
+    entry_price = signal.actual_entry_price or signal.entry_price
+    exit_price = request.exit_price
+
+    if signal.direction == "long":
+        profit_percent = ((exit_price - entry_price) / entry_price) * 100
+        profit_per_lot = exit_price - entry_price
+    else:  # short
+        profit_percent = ((entry_price - exit_price) / entry_price) * 100
+        profit_per_lot = entry_price - exit_price
+
+    # Calculate TL profit for the lots being sold
+    profit_tl = profit_per_lot * lots_to_sell
+
+    # Determine result
+    result = "win" if profit_percent > 0 else "loss"
+
+    # Calculate risk/reward achieved
+    risk = abs(entry_price - signal.stop_loss) if signal.stop_loss else 1
+    reward = abs(exit_price - entry_price)
+    rr_achieved = reward / risk if risk > 0 else 0
+
+    # Create trade history record
+    trade = TradeHistory(
+        signal_id=signal.id,
+        ticker=signal.ticker,
+        market=signal.market,
+        strategy_id=signal.strategy_id,
+        direction=signal.direction,
+        entry_price=entry_price,
+        exit_price=exit_price,
+        stop_loss=signal.stop_loss,
+        take_profit=signal.take_profit,
+        result=result,
+        profit_percent=round(profit_percent, 2),
+        profit_tl=round(profit_tl, 2),
+        lots=lots_to_sell,
+        risk_reward_achieved=round(rr_achieved, 2),
+        entered_at=signal.entered_at,
+        closed_at=datetime.utcnow(),
+        notes=request.notes or f"Sold {lots_to_sell} lots @ {exit_price}",
+    )
+    db.add(trade)
+
+    # Update remaining lots
+    signal.remaining_lots -= lots_to_sell
+
+    # If all lots sold, close the position
+    is_fully_closed = signal.remaining_lots <= 0
+    if is_fully_closed:
+        signal.status = "closed"
+        signal.closed_at = datetime.utcnow()
+        signal.notes = f"Fully closed @ {exit_price} | P/L: {profit_percent:+.2f}%"
+    else:
+        signal.notes = f"Partial exit: {lots_to_sell} lots @ {exit_price} | Remaining: {signal.remaining_lots} lots"
+
+    db.commit()
+
+    # Broadcast updated signals
+    await scanner._broadcast_signals(db)
+
+    return {
+        "message": "Position fully closed" if is_fully_closed else "Partial exit completed",
+        "signal_id": signal_id,
+        "exit_price": exit_price,
+        "lots_sold": lots_to_sell,
+        "remaining_lots": signal.remaining_lots,
+        "profit_percent": round(profit_percent, 2),
+        "profit_tl": round(profit_tl, 2),
+        "result": result,
+        "trade_id": trade.id,
+        "is_fully_closed": is_fully_closed,
     }
 
 
@@ -443,6 +565,8 @@ def get_trade_stats(
             "avg_profit": 0,
             "avg_rr": 0,
             "total_profit": 0,
+            "total_profit_tl": 0,
+            "total_lots": 0,
         }
 
     wins = len([t for t in trades if t.result == "win"])
@@ -456,6 +580,8 @@ def get_trade_stats(
         "avg_profit": round(sum(t.profit_percent for t in trades) / len(trades), 2),
         "avg_rr": round(sum(t.risk_reward_achieved for t in trades) / len(trades), 2),
         "total_profit": round(sum(t.profit_percent for t in trades), 2),
+        "total_profit_tl": round(sum(t.profit_tl or 0 for t in trades), 2),
+        "total_lots": round(sum(t.lots or 0 for t in trades), 2),
     }
 
 
@@ -477,6 +603,7 @@ def get_scanner_config(db: Session = Depends(get_db)):
         is_running=scanner.is_running,
         is_scanning=scanner.is_scanning,
         last_scan_at=config.last_scan_at,
+        email_notifications=scanner.email_notifications,
     )
 
 
@@ -501,6 +628,10 @@ async def update_scanner_config(
             await scanner.stop()
         config.is_running = update.is_running
 
+    # Update email notification settings
+    if update.email_notifications is not None:
+        scanner.email_notifications.update(update.email_notifications)
+
     config.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(config)
@@ -510,6 +641,7 @@ async def update_scanner_config(
         is_running=scanner.is_running,
         is_scanning=scanner.is_scanning,
         last_scan_at=config.last_scan_at,
+        email_notifications=scanner.email_notifications,
     )
 
 
