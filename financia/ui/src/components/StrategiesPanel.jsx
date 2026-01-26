@@ -312,6 +312,30 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         setChartModal({ ticker, market, strategyId });
     };
 
+    // Single ticker scan
+    const scanSingleTicker = async (ticker, market) => {
+        try {
+            addToast(`🔍 ${ticker} taranıyor...`, 'info', 2000);
+            const res = await fetch(`${API_BASE}/strategies/scanner/scan-ticker/${encodeURIComponent(ticker)}?market=${market}`, {
+                method: 'POST'
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.results && data.results.length > 0) {
+                    const result = data.results[0];
+                    addToast(`✅ ${ticker}: ${result.direction?.toUpperCase() || 'Sinyal yok'} - ${result.status}`, 'success', 4000);
+                } else {
+                    addToast(`ℹ️ ${ticker}: Sinyal bulunamadı`, 'info', 3000);
+                }
+            } else {
+                addToast(`❌ ${ticker} taranamadı`, 'error', 3000);
+            }
+        } catch (err) {
+            console.error('Failed to scan ticker:', err);
+            addToast(`❌ Tarama hatası`, 'error', 3000);
+        }
+    };
+
     return (
         <div>
             {/* Header */}
@@ -440,9 +464,9 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                                         </span>
                                                         <div className="flex items-center gap-1 ml-2">
                                                             <button
-                                                                onClick={() => openChartModal(item.ticker, item.market, strategy.id)}
+                                                                onClick={() => scanSingleTicker(item.ticker, item.market)}
                                                                 className="p-1 hover:bg-blue-600/30 text-blue-400 rounded transition-colors"
-                                                                title="Grafik Görüntüle"
+                                                                title="Tekli Tara"
                                                             >
                                                                 🔍
                                                             </button>

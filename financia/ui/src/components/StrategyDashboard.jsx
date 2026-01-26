@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import SignalsPanel from './SignalsPanel';
 import StrategiesPanel from './StrategiesPanel';
+import EODAnalysisPanel from './EODAnalysisPanel';
 import TradeHistoryPanel from './TradeHistoryPanel';
 import ScannerControl from './ScannerControl';
 import { useWebSocket } from '../contexts/WebSocketContext';
@@ -87,6 +88,9 @@ export default function StrategyDashboard({ activeTab }) {
                 )}
                 {activeTab === 'strategies' && (
                     <StrategiesPanel strategies={strategies} onRefresh={fetchStrategies} />
+                )}
+                {activeTab === 'eod' && (
+                    <EODAnalysisPanel strategies={strategies} />
                 )}
                 {activeTab === 'history' && (
                     <TradeHistoryPanel strategies={strategies} />

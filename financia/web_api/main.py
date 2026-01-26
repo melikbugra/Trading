@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from financia.web_api.database import init_db, SessionLocal, ScannerConfig
 from financia.web_api.websocket_manager import manager
 from financia.scanner import scanner
+from financia.eod_service import eod_service
 
 # Routers
 from financia.web_api.routers import strategies
@@ -50,14 +51,19 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
+    # Start EOD analysis scheduler (runs at 18:15 Turkey time)
+    await eod_service.start()
+    print("[EOD] Scheduler started - will run at 18:15 on weekdays")
+
     print("\n✅ System Ready!")
     print("=" * 50)
 
     yield  # App is running
 
     # Shutdown
-    print("\nShutting down scanner...")
+    print("\nShutting down services...")
     await scanner.stop()
+    await eod_service.stop()
     print("Goodbye!")
 
 

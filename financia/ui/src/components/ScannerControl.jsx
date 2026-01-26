@@ -44,7 +44,7 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                     <div className="flex items-center gap-2">
                         <div className={`w-3 h-3 rounded-full ${config.is_running ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`} />
                         <span className="text-gray-300 font-medium">
-                            Scanner {config.is_running ? 'Çalışıyor' : 'Durduruldu'}
+                            Tarama
                         </span>
                     </div>
 

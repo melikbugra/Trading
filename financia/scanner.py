@@ -23,6 +23,7 @@ from financia.web_api.database import (
     SessionLocal,
     engine,
     Base,
+    now_turkey,
 )
 from financia.notification_service import EmailService
 
@@ -146,10 +147,35 @@ class ScannerService:
         self.scan_interval = max(1, minutes)
         print(f"[Scanner] Interval set to {self.scan_interval} minutes")
 
+    def _is_bist_market_open(self) -> bool:
+        """
+        Check if BIST100 market is open.
+        BIST100 hours: Monday-Friday, 10:00-18:00 Turkey time
+        With +-30 min buffer: 09:30-18:30
+        """
+        now = now_turkey()
+
+        # Check if weekend (Saturday=5, Sunday=6)
+        if now.weekday() >= 5:
+            return False
+
+        # Check time (09:30 - 18:30 with buffer)
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=18, minute=30, second=0, microsecond=0)
+
+        return market_open <= now <= market_close
+
     async def _scan_loop(self):
         """Main scanning loop."""
         while self.is_running:
             try:
+                # Check if BIST market is open
+                if not self._is_bist_market_open():
+                    now = now_turkey()
+                    print(f"[Scanner] Market closed ({now.strftime('%H:%M')}), skipping scan...")
+                    await asyncio.sleep(self.scan_interval * 60)
+                    continue
+
                 await self.scan_all()
                 await asyncio.sleep(self.scan_interval * 60)
             except asyncio.CancelledError:
@@ -196,7 +222,7 @@ class ScannerService:
                     continue  # Continue with next ticker on error
 
             # Update last scan time
-            self.last_scan_at = datetime.utcnow()
+            self.last_scan_at = now_turkey()
             if config:
                 config.last_scan_at = self.last_scan_at
                 db.commit()
@@ -318,7 +344,7 @@ class ScannerService:
                     current_price=current_price,
                     last_peak=last_peak,
                     last_trough=last_trough,
-                    triggered_at=datetime.utcnow(),
+                    triggered_at=now_turkey(),
                     notes=result.notes,
                     extra_data=extra_data,
                 )
@@ -371,7 +397,7 @@ class ScannerService:
         else:
             if existing_signal and existing_signal.status == "pending":
                 existing_signal.status = "cancelled"
-                existing_signal.closed_at = datetime.utcnow()
+                existing_signal.closed_at = now_turkey()
                 existing_signal.notes = "Ön koşul artık sağlanmıyor"
 
         db.commit()
@@ -460,7 +486,7 @@ class ScannerService:
         """Close a signal and record trade history."""
 
         signal.status = reason
-        signal.closed_at = datetime.utcnow()
+        signal.closed_at = now_turkey()
 
         # Calculate profit/loss
         if signal.entered_at:  # Only if actually entered
@@ -504,7 +530,7 @@ class ScannerService:
                 profit_percent=round(profit_percent, 2),
                 risk_reward_achieved=round(rr_achieved, 2),
                 entered_at=signal.entered_at,
-                closed_at=datetime.utcnow(),
+                closed_at=now_turkey(),
                 notes=f"Closed by {reason}",
             )
             db.add(trade)

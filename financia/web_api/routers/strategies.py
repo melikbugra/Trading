@@ -15,6 +15,7 @@ from financia.web_api.database import (
     Signal,
     ScannerConfig,
     TradeHistory,
+    now_turkey,
 )
 from financia.strategies import list_available_strategies, get_strategy_class
 from financia.scanner import scanner
@@ -301,15 +302,31 @@ def add_to_watchlist(item: WatchlistCreate, db: Session = Depends(get_db)):
 
 
 @router.delete("/watchlist/{item_id}")
-def remove_from_watchlist(item_id: int, db: Session = Depends(get_db)):
-    """Remove ticker from watchlist."""
+async def remove_from_watchlist(item_id: int, db: Session = Depends(get_db)):
+    """Remove ticker from watchlist and delete related signals."""
     item = db.query(WatchlistItem).filter(WatchlistItem.id == item_id).first()
     if not item:
         raise HTTPException(404, "Watchlist item not found")
 
+    # Also delete any pending or triggered signals for this ticker/strategy
+    deleted_signals = (
+        db.query(Signal)
+        .filter(
+            Signal.ticker == item.ticker,
+            Signal.strategy_id == item.strategy_id,
+            Signal.status.in_(["pending", "triggered"]),
+        )
+        .delete(synchronize_session=False)
+    )
+
     db.delete(item)
     db.commit()
-    return {"message": "Removed from watchlist"}
+
+    # Broadcast updated signals if any were deleted
+    if deleted_signals > 0:
+        await scanner._broadcast_signals(db)
+
+    return {"message": f"Removed from watchlist, {deleted_signals} signal(s) deleted"}
 
 
 @router.put("/watchlist/{item_id}/toggle")
@@ -368,7 +385,7 @@ async def cancel_signal(signal_id: int, db: Session = Depends(get_db)):
         raise HTTPException(400, "Signal already closed")
 
     signal.status = "cancelled"
-    signal.closed_at = datetime.utcnow()
+    signal.closed_at = now_turkey()
     signal.notes = "Manually cancelled"
     db.commit()
 
@@ -394,7 +411,7 @@ async def confirm_entry(
 
     # Update signal
     signal.status = "entered"
-    signal.entered_at = datetime.utcnow()
+    signal.entered_at = now_turkey()
     signal.actual_entry_price = request.actual_entry_price
     signal.lots = request.lots
     signal.remaining_lots = request.lots
@@ -483,7 +500,7 @@ async def close_position(
         lots=lots_to_sell,
         risk_reward_achieved=round(rr_achieved, 2),
         entered_at=signal.entered_at,
-        closed_at=datetime.utcnow(),
+        closed_at=now_turkey(),
         notes=request.notes or f"Sold {lots_to_sell} lots @ {exit_price}",
     )
     db.add(trade)
@@ -495,7 +512,7 @@ async def close_position(
     is_fully_closed = signal.remaining_lots <= 0
     if is_fully_closed:
         signal.status = "closed"
-        signal.closed_at = datetime.utcnow()
+        signal.closed_at = now_turkey()
         signal.notes = f"Fully closed @ {exit_price} | P/L: {profit_percent:+.2f}%"
     else:
         signal.notes = f"Partial exit: {lots_to_sell} lots @ {exit_price} | Remaining: {signal.remaining_lots} lots"
@@ -632,7 +649,7 @@ async def update_scanner_config(
     if update.email_notifications is not None:
         scanner.email_notifications.update(update.email_notifications)
 
-    config.updated_at = datetime.utcnow()
+    config.updated_at = now_turkey()
     db.commit()
     db.refresh(config)
 
@@ -840,3 +857,58 @@ async def get_chart_data(
         },
         "signal": signal_data,
     }
+
+
+# ============= End of Day Analysis Endpoints =============
+
+
+@router.get("/eod-analysis")
+async def get_eod_analysis(
+    min_change: float = 0.0,
+    min_relative_volume: float = 2.0,
+    min_volume: float = 100_000_000,
+):
+    """
+    Run end-of-day analysis on all BIST stocks.
+
+    Filters:
+    - min_change: Minimum daily % change (default 0 = positive close)
+    - min_relative_volume: Minimum relative volume (default 2.0)
+    - min_volume: Minimum daily volume in lots (default 100M lots)
+
+    Returns list of stocks meeting criteria with their metrics.
+    """
+    from financia.eod_service import eod_service
+    
+    # Update filters
+    eod_service.filters = {
+        "min_change": min_change,
+        "min_relative_volume": min_relative_volume,
+        "min_volume": min_volume,
+    }
+    
+    # Run analysis
+    result = await eod_service.run_analysis()
+    
+    return {
+        "count": result["count"],
+        "total_scanned": result["total_scanned"],
+        "filters": eod_service.filters,
+        "results": result["results"],
+    }
+
+
+@router.get("/eod-analysis/status")
+async def get_eod_status():
+    """Get EOD analysis scheduler status and last results."""
+    from financia.eod_service import eod_service
+    
+    return {
+        "is_running": eod_service.is_running,
+        "last_run_at": eod_service.last_run_at.isoformat() if eod_service.last_run_at else None,
+        "schedule_time": f"{eod_service.run_hour:02d}:{eod_service.run_minute:02d}",
+        "filters": eod_service.filters,
+        "last_results_count": len(eod_service.last_results),
+        "last_results": eod_service.last_results,  # Include actual results
+    }
+

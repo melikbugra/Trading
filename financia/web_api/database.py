@@ -10,9 +10,15 @@ from sqlalchemy import (
     Enum as SQLEnum,
 )
 from sqlalchemy.orm import sessionmaker, declarative_base
-from datetime import datetime
+from datetime import datetime, timedelta
 import enum
 import os
+
+
+def now_turkey():
+    """Return current time in Turkey timezone (UTC+3)."""
+    return datetime.utcnow() + timedelta(hours=3)
+
 
 DATABASE_URL = "sqlite:///./data/portfolio.db"
 # Ensure data directory exists
@@ -55,7 +61,7 @@ class Strategy(Base):
         String, default="short"
     )  # Timeframe: short, short-mid, medium, long
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=now_turkey)
 
 
 class WatchlistItem(Base):
@@ -68,7 +74,7 @@ class WatchlistItem(Base):
     market = Column(String, nullable=False)  # "bist100" or "binance"
     strategy_id = Column(Integer, nullable=False)
     is_active = Column(Boolean, default=True)
-    added_at = Column(DateTime, default=datetime.utcnow)
+    added_at = Column(DateTime, default=now_turkey)
 
 
 class Signal(Base):
@@ -96,7 +102,7 @@ class Signal(Base):
     last_trough = Column(Float, nullable=True)
 
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=now_turkey)
     triggered_at = Column(DateTime, nullable=True)
     entered_at = Column(DateTime, nullable=True)
     closed_at = Column(DateTime, nullable=True)
@@ -138,7 +144,7 @@ class TradeHistory(Base):
     risk_reward_achieved = Column(Float, default=0.0)
 
     entered_at = Column(DateTime, nullable=False)
-    closed_at = Column(DateTime, default=datetime.utcnow)
+    closed_at = Column(DateTime, default=now_turkey)
     notes = Column(String, default="")
 
 
@@ -151,7 +157,7 @@ class ScannerConfig(Base):
     scan_interval_minutes = Column(Integer, default=5)
     is_running = Column(Boolean, default=False)
     last_scan_at = Column(DateTime, nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=now_turkey)
 
 
 # ============= BIST100 Tables =============

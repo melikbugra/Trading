@@ -57,6 +57,15 @@ function App() {
               ⚙️ Stratejiler
             </button>
             <button
+              onClick={() => handleTabChange('eod')}
+              className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 ${activeTab === 'eod'
+                ? 'border-blue-500 text-blue-400 bg-gray-800/50'
+                : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-800/30'
+                }`}
+            >
+              🌙 Gün Sonu
+            </button>
+            <button
               onClick={() => handleTabChange('history')}
               className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 ${activeTab === 'history'
                 ? 'border-yellow-500 text-yellow-400 bg-gray-800/50'
