@@ -72,7 +72,7 @@ export default function StrategyDashboard({ activeTab }) {
     };
 
     return (
-        <div className="max-w-6xl mx-auto px-8 py-6">
+        <div className="max-w-6xl mx-auto px-3 sm:px-8 py-4 sm:py-6">
             {/* Scanner Control - Always visible */}
             <ScannerControl
                 config={scannerStatus}

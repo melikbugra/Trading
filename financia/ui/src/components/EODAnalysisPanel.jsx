@@ -19,8 +19,8 @@ export default function EODAnalysisPanel({ strategies }) {
     // Filters
     const [filters, setFilters] = useState({
         min_change: 0,
-        min_relative_volume: 2,
-        min_volume: 100000000,
+        min_relative_volume: 1.5,
+        min_volume: 50000000,
     });
 
     // Load last results when component mounts
@@ -145,32 +145,32 @@ export default function EODAnalysisPanel({ strategies }) {
     return (
         <div>
             {/* Header with Run Button */}
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 sm:mb-6">
                 <div>
-                    <h2 className="text-xl font-bold text-white">Gün Sonu Analizi</h2>
-                    <p className="text-gray-500 text-sm">
-                        BIST'te işlem gören hisseleri filtreleyin
+                    <h2 className="text-lg sm:text-xl font-bold text-white">Gün Sonu Analizi</h2>
+                    <p className="text-gray-500 text-xs sm:text-sm">
+                        BIST hisselerini filtreleyin
                     </p>
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 sm:gap-4">
                     {lastRun && (
-                        <span className="text-gray-500 text-sm">
+                        <span className="text-gray-500 text-xs sm:text-sm hidden sm:inline">
                             Son: {lastRun.toLocaleTimeString('tr-TR')}
                         </span>
                     )}
                     <button
                         onClick={runAnalysis}
                         disabled={loading}
-                        className="px-6 py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white font-bold rounded-lg transition-colors flex items-center gap-2"
+                        className="px-4 sm:px-6 py-2 sm:py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white font-bold rounded-lg transition-colors flex items-center gap-2 text-sm sm:text-base"
                     >
                         {loading ? (
                             <>
                                 <span className="animate-spin">⏳</span>
-                                Taranıyor...
+                                <span className="hidden sm:inline">Taranıyor...</span>
                             </>
                         ) : (
                             <>
-                                🔍 Analizi Çalıştır
+                                🔍 <span className="hidden sm:inline">Analizi </span>Çalıştır
                             </>
                         )}
                     </button>
@@ -178,9 +178,9 @@ export default function EODAnalysisPanel({ strategies }) {
             </div>
 
             {/* Filters */}
-            <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-4 mb-6">
-                <h3 className="text-sm font-bold text-gray-400 mb-3">Filtreler</h3>
-                <div className="grid grid-cols-3 gap-4">
+            <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-3 sm:p-4 mb-4 sm:mb-6">
+                <h3 className="text-xs sm:text-sm font-bold text-gray-400 mb-2 sm:mb-3">Filtreler</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                     <div>
                         <label className="block text-gray-500 text-xs mb-1">Min. Değişim (%)</label>
                         <input
@@ -188,7 +188,7 @@ export default function EODAnalysisPanel({ strategies }) {
                             step="0.1"
                             value={filters.min_change}
                             onChange={(e) => setFilters({ ...filters, min_change: parseFloat(e.target.value) || 0 })}
-                            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white font-mono focus:border-purple-500 focus:outline-none"
+                            className="w-full px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-800 border border-gray-700 rounded text-white font-mono text-sm focus:border-purple-500 focus:outline-none"
                         />
                     </div>
                     <div>
@@ -198,26 +198,25 @@ export default function EODAnalysisPanel({ strategies }) {
                             step="0.1"
                             value={filters.min_relative_volume}
                             onChange={(e) => setFilters({ ...filters, min_relative_volume: parseFloat(e.target.value) || 0 })}
-                            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white font-mono focus:border-purple-500 focus:outline-none"
+                            className="w-full px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-800 border border-gray-700 rounded text-white font-mono text-sm focus:border-purple-500 focus:outline-none"
                         />
                     </div>
                     <div>
-                        <label className="block text-gray-500 text-xs mb-1">Min. Hacim</label>
+                        <label className="block text-gray-500 text-xs mb-1">Min. Hacim ({formatVolume(filters.min_volume)})</label>
                         <input
                             type="number"
                             step="1000000"
                             value={filters.min_volume}
                             onChange={(e) => setFilters({ ...filters, min_volume: parseFloat(e.target.value) || 0 })}
-                            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white font-mono focus:border-purple-500 focus:outline-none"
+                            className="w-full px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-800 border border-gray-700 rounded text-white font-mono text-sm focus:border-purple-500 focus:outline-none"
                         />
-                        <span className="text-gray-600 text-xs">{formatVolume(filters.min_volume)}</span>
                     </div>
                 </div>
             </div>
 
             {/* Stats */}
             {stats.count > 0 && (
-                <div className="flex gap-4 mb-4 text-sm">
+                <div className="flex gap-2 sm:gap-4 mb-3 sm:mb-4 text-xs sm:text-sm">
                     <span className="text-green-400">{stats.count} hisse bulundu</span>
                     <span className="text-gray-500">/ {stats.total_scanned} taranan</span>
                 </div>
@@ -225,81 +224,83 @@ export default function EODAnalysisPanel({ strategies }) {
 
             {/* Results Table */}
             {results.length === 0 ? (
-                <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-12 text-center">
-                    <div className="text-4xl mb-4">📊</div>
-                    <div className="text-gray-400">Henüz analiz çalıştırılmadı</div>
-                    <div className="text-gray-600 text-sm mt-2">
-                        Yukarıdaki butona tıklayarak gün sonu analizini başlatın
+                <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-8 sm:p-12 text-center">
+                    <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">📊</div>
+                    <div className="text-gray-400 text-sm sm:text-base">Henüz analiz çalıştırılmadı</div>
+                    <div className="text-gray-600 text-xs sm:text-sm mt-2">
+                        Yukarıdaki butona tıklayarak analizi başlatın
                     </div>
                 </div>
             ) : (
                 <div className="bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden">
-                    <table className="w-full">
-                        <thead className="bg-gray-800/50">
-                            <tr>
-                                <th className="text-left px-4 py-3 text-gray-400 text-sm font-medium">Sembol</th>
-                                <th className="text-right px-4 py-3 text-gray-400 text-sm font-medium">Kapanış</th>
-                                <th
-                                    className="text-right px-4 py-3 text-gray-400 text-sm font-medium cursor-pointer hover:text-white"
-                                    onClick={() => handleSort('change_percent')}
-                                >
-                                    Değişim <SortIcon field="change_percent" />
-                                </th>
-                                <th
-                                    className="text-right px-4 py-3 text-gray-400 text-sm font-medium cursor-pointer hover:text-white"
-                                    onClick={() => handleSort('relative_volume')}
-                                >
-                                    Bağıl Hacim <SortIcon field="relative_volume" />
-                                </th>
-                                <th
-                                    className="text-right px-4 py-3 text-gray-400 text-sm font-medium cursor-pointer hover:text-white"
-                                    onClick={() => handleSort('volume')}
-                                >
-                                    Hacim (Lot) <SortIcon field="volume" />
-                                </th>
-                                <th className="text-center px-4 py-3 text-gray-400 text-sm font-medium">İşlem</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {sortedResults.map((result, idx) => (
-                                <tr key={result.ticker} className="border-t border-gray-800 hover:bg-gray-800/30">
-                                    <td className="px-4 py-3">
-                                        <button
-                                            onClick={() => openChartModal(result)}
-                                            className="text-white font-mono font-bold hover:text-purple-400 transition-colors flex items-center gap-2"
-                                        >
-                                            {result.symbol}
-                                            <span className="text-xs text-gray-500">📊</span>
-                                        </button>
-                                    </td>
-                                    <td className="px-4 py-3 text-right text-white font-mono">
-                                        {result.close.toFixed(2)}
-                                    </td>
-                                    <td className="px-4 py-3 text-right">
-                                        <span className={`font-bold ${result.change_percent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                            {result.change_percent >= 0 ? '+' : ''}{result.change_percent.toFixed(2)}%
-                                        </span>
-                                    </td>
-                                    <td className="px-4 py-3 text-right">
-                                        <span className={`font-mono ${result.relative_volume >= 3 ? 'text-yellow-400 font-bold' : result.relative_volume >= 2 ? 'text-blue-400' : 'text-gray-400'}`}>
-                                            {result.relative_volume.toFixed(1)}x
-                                        </span>
-                                    </td>
-                                    <td className="px-4 py-3 text-right text-gray-300 font-mono text-sm">
-                                        {formatVolume(result.volume)}
-                                    </td>
-                                    <td className="px-4 py-3 text-center">
-                                        <button
-                                            onClick={() => openAddToStrategyModal(result)}
-                                            className="px-3 py-1 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded text-sm transition-colors"
-                                        >
-                                            + Stratejiye Ekle
-                                        </button>
-                                    </td>
+                    <div className="overflow-x-auto">
+                        <table className="w-full min-w-[500px]">
+                            <thead className="bg-gray-800/50">
+                                <tr>
+                                    <th className="text-left px-2 sm:px-4 py-2 sm:py-3 text-gray-400 text-xs sm:text-sm font-medium">Sembol</th>
+                                    <th className="text-right px-2 sm:px-4 py-2 sm:py-3 text-gray-400 text-xs sm:text-sm font-medium">Kapanış</th>
+                                    <th
+                                        className="text-right px-2 sm:px-4 py-2 sm:py-3 text-gray-400 text-xs sm:text-sm font-medium cursor-pointer hover:text-white"
+                                        onClick={() => handleSort('change_percent')}
+                                    >
+                                        Değişim <SortIcon field="change_percent" />
+                                    </th>
+                                    <th
+                                        className="text-right px-2 sm:px-4 py-2 sm:py-3 text-gray-400 text-xs sm:text-sm font-medium cursor-pointer hover:text-white"
+                                        onClick={() => handleSort('relative_volume')}
+                                    >
+                                        <span className="hidden sm:inline">Bağıl </span>Hacim <SortIcon field="relative_volume" />
+                                    </th>
+                                    <th
+                                        className="text-right px-2 sm:px-4 py-2 sm:py-3 text-gray-400 text-xs sm:text-sm font-medium cursor-pointer hover:text-white hidden sm:table-cell"
+                                        onClick={() => handleSort('volume')}
+                                    >
+                                        Lot <SortIcon field="volume" />
+                                    </th>
+                                    <th className="text-center px-2 sm:px-4 py-2 sm:py-3 text-gray-400 text-xs sm:text-sm font-medium">+</th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                                {sortedResults.map((result, idx) => (
+                                    <tr key={result.ticker} className="border-t border-gray-800 hover:bg-gray-800/30">
+                                        <td className="px-2 sm:px-4 py-2 sm:py-3">
+                                            <button
+                                                onClick={() => openChartModal(result)}
+                                                className="text-white font-mono font-bold hover:text-purple-400 transition-colors flex items-center gap-1 sm:gap-2 text-xs sm:text-sm"
+                                            >
+                                                {result.symbol}
+                                                <span className="text-xs text-gray-500">📊</span>
+                                            </button>
+                                        </td>
+                                        <td className="px-2 sm:px-4 py-2 sm:py-3 text-right text-white font-mono text-xs sm:text-sm">
+                                            {result.close.toFixed(2)}
+                                        </td>
+                                        <td className="px-2 sm:px-4 py-2 sm:py-3 text-right">
+                                            <span className={`font-bold text-xs sm:text-sm ${result.change_percent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                {result.change_percent >= 0 ? '+' : ''}{result.change_percent.toFixed(2)}%
+                                            </span>
+                                        </td>
+                                        <td className="px-2 sm:px-4 py-2 sm:py-3 text-right">
+                                            <span className={`font-mono text-xs sm:text-sm ${result.relative_volume >= 3 ? 'text-yellow-400 font-bold' : result.relative_volume >= 2 ? 'text-blue-400' : 'text-gray-400'}`}>
+                                                {result.relative_volume.toFixed(1)}x
+                                            </span>
+                                        </td>
+                                        <td className="px-2 sm:px-4 py-2 sm:py-3 text-right text-gray-300 font-mono text-xs sm:text-sm hidden sm:table-cell">
+                                            {formatVolume(result.volume)}
+                                        </td>
+                                        <td className="px-2 sm:px-4 py-2 sm:py-3 text-center">
+                                            <button
+                                                onClick={() => openAddToStrategyModal(result)}
+                                                className="px-2 sm:px-3 py-1 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded text-xs sm:text-sm transition-colors"
+                                            >
+                                                +<span className="hidden sm:inline"> Ekle</span>
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             )}
 
@@ -314,8 +315,8 @@ export default function EODAnalysisPanel({ strategies }) {
 
             {/* Add to Strategy Modal */}
             {addToStrategyModal && (
-                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-                    <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md">
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
                         <h3 className="text-xl font-bold text-white mb-4">
                             Stratejiye Ekle
                         </h3>

@@ -31,9 +31,6 @@ services:
     networks:
       - web
 
-# Note: Ideally, frontend should use an environment variable for API URL.
-# But since this is client-side code running in the USER's browser, localhost:8000 is correct 
-# if the USER is accessing both on their machine.
 networks:
   web:
     external: true

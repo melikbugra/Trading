@@ -97,9 +97,10 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
             priceLineVisible: false,  // Hide automatic price line
         });
 
-        // Convert candle data
+        // Convert candle data (add Turkey timezone offset: UTC+3 = 10800 seconds)
+        const turkeyOffset = 3 * 60 * 60;
         const candleData = data.candles.map(c => ({
-            time: c.time / 1000, // Convert ms to seconds
+            time: (c.time / 1000) + turkeyOffset, // Convert ms to seconds + Turkey offset
             open: c.open,
             high: c.high,
             low: c.low,
@@ -154,7 +155,7 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
                 lineWidth: 2,
             });
             const emaData = data.indicators.ema200.map(e => ({
-                time: e.time / 1000,
+                time: (e.time / 1000) + turkeyOffset,
                 value: e.value,
             }));
             emaSeries.setData(emaData);
@@ -167,7 +168,7 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
             // Find the signal start time (triggered_at or last 20% of candles)
             let signalStartTime;
             if (triggered_at) {
-                signalStartTime = new Date(triggered_at).getTime() / 1000;
+                signalStartTime = (new Date(triggered_at).getTime() / 1000) + turkeyOffset;
             } else {
                 // Default to ~20% from the end of the chart
                 const startIndex = Math.floor(candleData.length * 0.8);
@@ -313,15 +314,15 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
             });
 
             const macdData = data.indicators.macd.map(m => ({
-                time: m.time / 1000,
+                time: (m.time / 1000) + turkeyOffset,
                 value: m.macd,
             }));
             const signalData = data.indicators.macd.map(m => ({
-                time: m.time / 1000,
+                time: (m.time / 1000) + turkeyOffset,
                 value: m.signal,
             }));
             const histData = data.indicators.macd.map(m => ({
-                time: m.time / 1000,
+                time: (m.time / 1000) + turkeyOffset,
                 value: m.histogram,
                 color: m.histogram >= 0 ? '#22c55e' : '#ef4444',
             }));
@@ -417,36 +418,36 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
     }, [isFullscreen]);
 
     return (
-        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-2">
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-1 sm:p-2">
             <div className={`bg-gray-900 border border-gray-700 rounded-lg overflow-hidden flex flex-col transition-all duration-300 ${isFullscreen
                 ? 'w-full h-full'
                 : 'w-full max-w-5xl h-[85vh]'
                 }`}>
                 {/* Header */}
-                <div className="flex items-center justify-between p-3 border-b border-gray-700 bg-gray-800/50">
-                    <div className="flex items-center gap-4">
-                        <span className={`text-lg ${market === 'bist100' ? 'text-red-400' : 'text-yellow-400'}`}>
+                <div className="flex items-center justify-between p-2 sm:p-3 border-b border-gray-700 bg-gray-800/50">
+                    <div className="flex items-center gap-2 sm:gap-4">
+                        <span className={`text-base sm:text-lg ${market === 'bist100' ? 'text-red-400' : 'text-yellow-400'}`}>
                             {market === 'bist100' ? '🇹🇷' : '₿'}
                         </span>
-                        <h2 className="text-xl font-bold text-white">{displayTicker}</h2>
+                        <h2 className="text-lg sm:text-xl font-bold text-white">{displayTicker}</h2>
                         {data?.current_price && (
-                            <span className="text-2xl font-mono text-purple-400">
+                            <span className="text-lg sm:text-2xl font-mono text-purple-400">
                                 ₺{data.current_price.toFixed(2)}
                             </span>
                         )}
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1 sm:gap-2">
                         {/* Fullscreen Toggle */}
                         <button
                             onClick={() => setIsFullscreen(!isFullscreen)}
-                            className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded-lg text-sm transition-colors"
+                            className="px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded-lg text-sm transition-colors hidden sm:block"
                             title={isFullscreen ? 'Küçült' : 'Tam Ekran'}
                         >
                             {isFullscreen ? '⊙' : '⛶'}
                         </button>
                         <button
                             onClick={onClose}
-                            className="px-3 py-2 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded-lg text-xl transition-colors"
+                            className="px-2 sm:px-3 py-1.5 sm:py-2 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded-lg text-lg sm:text-xl transition-colors"
                         >
                             ✕
                         </button>
@@ -455,47 +456,47 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
 
                 {/* Signal Info */}
                 {data?.signal && (
-                    <div className={`p-4 border-b border-gray-700 ${data.signal.direction === 'long' ? 'bg-green-900/30' : 'bg-red-900/30'
+                    <div className={`p-2 sm:p-4 border-b border-gray-700 ${data.signal.direction === 'long' ? 'bg-green-900/30' : 'bg-red-900/30'
                         }`}>
-                        <div className="flex items-center gap-6 flex-wrap">
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-6">
                             <div className="flex items-center gap-2">
-                                <span className={`text-lg font-bold ${data.signal.direction === 'long' ? 'text-green-400' : 'text-red-400'
+                                <span className={`text-sm sm:text-lg font-bold ${data.signal.direction === 'long' ? 'text-green-400' : 'text-red-400'
                                     }`}>
                                     {data.signal.direction === 'long' ? '📈 LONG' : '📉 SHORT'}
                                 </span>
-                                <span className={`px-2 py-1 rounded text-xs font-bold ${data.signal.status === 'triggered' ? 'bg-blue-600 text-white' :
+                                <span className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-xs font-bold ${data.signal.status === 'triggered' ? 'bg-blue-600 text-white' :
                                     data.signal.status === 'pending' ? 'bg-yellow-600 text-white' :
                                         data.signal.status === 'entered' ? 'bg-green-600 text-white' :
                                             'bg-gray-600 text-white'
                                     }`}>
-                                    {data.signal.status === 'triggered' ? 'Tetiklendi' :
-                                        data.signal.status === 'pending' ? 'Beklemede' :
-                                            data.signal.status === 'entered' ? 'Pozisyonda' :
+                                    {data.signal.status === 'triggered' ? 'Tetik' :
+                                        data.signal.status === 'pending' ? 'Bekle' :
+                                            data.signal.status === 'entered' ? 'Poz' :
                                                 data.signal.status}
                                 </span>
                             </div>
 
                             {data.signal.entry_price && (
-                                <div className="text-sm">
-                                    <span className="text-gray-400">Giriş: </span>
+                                <div className="text-xs sm:text-sm">
+                                    <span className="text-gray-400">G: </span>
                                     <span className="text-blue-400 font-mono font-bold">₺{data.signal.entry_price.toFixed(2)}</span>
                                 </div>
                             )}
                             {data.signal.stop_loss && (
-                                <div className="text-sm">
-                                    <span className="text-gray-400">Zarar Kes: </span>
+                                <div className="text-xs sm:text-sm">
+                                    <span className="text-gray-400">SL: </span>
                                     <span className="text-red-400 font-mono font-bold">₺{data.signal.stop_loss.toFixed(2)}</span>
                                 </div>
                             )}
                             {data.signal.take_profit && (
-                                <div className="text-sm">
-                                    <span className="text-gray-400">Kâr Al: </span>
+                                <div className="text-xs sm:text-sm">
+                                    <span className="text-gray-400">TP: </span>
                                     <span className="text-green-400 font-mono font-bold">₺{data.signal.take_profit.toFixed(2)}</span>
                                 </div>
                             )}
                         </div>
                         {data.signal.notes && (
-                            <p className="text-gray-400 text-sm mt-2 italic">{data.signal.notes}</p>
+                            <p className="text-gray-400 text-xs sm:text-sm mt-1 sm:mt-2 italic hidden sm:block">{data.signal.notes}</p>
                         )}
                     </div>
                 )}

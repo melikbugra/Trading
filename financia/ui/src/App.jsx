@@ -36,38 +36,38 @@ function App() {
     <div className="min-h-screen bg-terminal-dark">
       {/* Navigation Tabs */}
       <div className="bg-gray-900 border-b border-gray-800">
-        <div className="max-w-6xl mx-auto px-8">
-          <div className="flex gap-1">
+        <div className="max-w-6xl mx-auto px-2 sm:px-8">
+          <div className="flex overflow-x-auto scrollbar-hide">
             <button
               onClick={() => handleTabChange('signals')}
-              className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 ${activeTab === 'signals'
+              className={`px-3 sm:px-6 py-3 font-bold text-xs sm:text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'signals'
                 ? 'border-green-500 text-green-400 bg-gray-800/50'
                 : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-800/30'
                 }`}
             >
-              🎯 Sinyaller
+              🎯 <span className="hidden xs:inline">Sinyaller</span><span className="xs:hidden">Sinyal</span>
             </button>
             <button
               onClick={() => handleTabChange('strategies')}
-              className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 ${activeTab === 'strategies'
+              className={`px-3 sm:px-6 py-3 font-bold text-xs sm:text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'strategies'
                 ? 'border-purple-500 text-purple-400 bg-gray-800/50'
                 : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-800/30'
                 }`}
             >
-              ⚙️ Stratejiler
+              ⚙️ <span className="hidden xs:inline">Stratejiler</span><span className="xs:hidden">Strateji</span>
             </button>
             <button
               onClick={() => handleTabChange('eod')}
-              className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 ${activeTab === 'eod'
+              className={`px-3 sm:px-6 py-3 font-bold text-xs sm:text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'eod'
                 ? 'border-blue-500 text-blue-400 bg-gray-800/50'
                 : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-800/30'
                 }`}
             >
-              🌙 Gün Sonu
+              🌙 <span className="hidden sm:inline">Gün Sonu</span><span className="sm:hidden">EOD</span>
             </button>
             <button
               onClick={() => handleTabChange('history')}
-              className={`px-6 py-3 font-bold text-sm transition-colors border-b-2 ${activeTab === 'history'
+              className={`px-3 sm:px-6 py-3 font-bold text-xs sm:text-sm transition-colors border-b-2 whitespace-nowrap ${activeTab === 'history'
                 ? 'border-yellow-500 text-yellow-400 bg-gray-800/50'
                 : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-800/30'
                 }`}

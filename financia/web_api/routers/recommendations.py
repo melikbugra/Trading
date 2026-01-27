@@ -13,6 +13,7 @@ from financia.web_api.database import (
     SessionLocal,
     BIST100Recommendation,
     BinanceRecommendation,
+    now_turkey,
 )
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
@@ -301,7 +302,7 @@ async def run_market_scan(market: str = "bist100"):
                             price=price,
                             divergence_count=div_count,
                             last_updated=(
-                                datetime.utcnow() + timedelta(hours=3)
+                                now_turkey()
                             ).strftime("%Y-%m-%d %H:%M:%S"),
                         )
                     else:
@@ -312,7 +313,7 @@ async def run_market_scan(market: str = "bist100"):
                             price=price,
                             divergence_count=div_count,
                             last_updated=(
-                                datetime.utcnow() + timedelta(hours=3)
+                                now_turkey()
                             ).strftime("%Y-%m-%d %H:%M:%S"),
                         )
 
@@ -335,7 +336,7 @@ async def run_market_scan(market: str = "bist100"):
                             "score": score,
                             "divergence_count": div_count,
                             "price": price,
-                            "last_updated": datetime.now().strftime("%H:%M"),
+                            "last_updated": now_turkey().strftime("%H:%M"),
                         },
                     }
                 )
@@ -406,7 +407,7 @@ async def rescan_single_ticker(
         details = result.get("indicator_details", [])
         div_count = sum(1 for d in details if d.get("Divergence", 0) == 1)
 
-        last_updated = (datetime.utcnow() + timedelta(hours=3)).strftime(
+        last_updated = (now_turkey()).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
 
@@ -444,7 +445,7 @@ async def rescan_single_ticker(
                         "score": score,
                         "divergence_count": div_count,
                         "price": price,
-                        "last_updated": datetime.now().strftime("%H:%M"),
+                        "last_updated": now_turkey().strftime("%H:%M"),
                     },
                 }
             )

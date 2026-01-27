@@ -59,7 +59,6 @@ class EmailService:
             print(f"[EmailService] Failed to send email: {e}")
 
     @staticmethod
-    @staticmethod
     def send_decision_alert(ticker, old_decision, new_decision, price, score):
         # Determine emoji based on decision
         emoji = "ℹ️"

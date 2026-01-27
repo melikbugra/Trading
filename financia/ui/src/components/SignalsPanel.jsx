@@ -236,19 +236,19 @@ export default function SignalsPanel({ strategies }) {
     return (
         <div>
             {/* Filter Tabs */}
-            <div className="flex flex-wrap gap-2 mb-4">
+            <div className="flex flex-col sm:flex-row gap-2 mb-4">
                 {/* Status Filters */}
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-1 sm:gap-2">
                     {['all', 'pending', 'triggered', 'entered'].map(f => (
                         <button
                             key={f}
                             onClick={() => setFilter(f)}
-                            className={`px-4 py-2 rounded text-sm font-medium transition-colors ${filter === f
+                            className={`px-2 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-medium transition-colors ${filter === f
                                 ? 'bg-blue-600 text-white'
                                 : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
                                 }`}
                         >
-                            {f === 'all' ? 'Tümü' : f === 'pending' ? 'Bekleyen' : f === 'triggered' ? 'Tetiklenen' : 'Pozisyonda'}
+                            {f === 'all' ? 'Tümü' : f === 'pending' ? 'Bekleyen' : f === 'triggered' ? 'Tetik' : 'Pozisyon'}
                             {f !== 'all' && (
                                 <span className="ml-1 text-xs">
                                     ({signals.filter(s => s.status === f).length})
@@ -258,35 +258,36 @@ export default function SignalsPanel({ strategies }) {
                     ))}
                 </div>
 
-                {/* Market Filters */}
-                <div className="flex gap-2 ml-auto">
-                    {[{ key: 'all', label: 'Tüm Marketler' }, { key: 'bist100', label: '🇹🇷 BIST' }, { key: 'binance', label: '₿ Binance' }].map(m => (
+                {/* Market Filters & Sort */}
+                <div className="flex gap-1 sm:gap-2 sm:ml-auto flex-wrap">
+                    {[{ key: 'all', label: 'Tümü', shortLabel: 'Tümü' }, { key: 'bist100', label: '🇹🇷 BIST', shortLabel: '🇹🇷' }, { key: 'binance', label: '₿ Binance', shortLabel: '₿' }].map(m => (
                         <button
                             key={m.key}
                             onClick={() => setMarketFilter(m.key)}
-                            className={`px-3 py-2 rounded text-sm font-medium transition-colors ${marketFilter === m.key
+                            className={`px-2 sm:px-3 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-medium transition-colors ${marketFilter === m.key
                                 ? 'bg-purple-600 text-white'
                                 : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
                                 }`}
                         >
-                            {m.label}
-                            <span className="ml-1 text-xs">
+                            <span className="sm:hidden">{m.shortLabel}</span>
+                            <span className="hidden sm:inline">{m.label}</span>
+                            <span className="ml-1 text-xs hidden sm:inline">
                                 ({signals.filter(s => m.key === 'all' || s.market === m.key).length})
                             </span>
                         </button>
                     ))}
-                </div>
 
-                {/* Sort Selector */}
-                <select
-                    value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value)}
-                    className="px-3 py-2 bg-gray-800 border border-gray-700 rounded text-sm text-gray-300 focus:outline-none focus:border-gray-600"
-                >
-                    <option value="date">⏰ Tarih (Yeni)</option>
-                    <option value="ticker">🔤 Sembol (A-Z)</option>
-                    <option value="status">🚦 Durum (Öncelik)</option>
-                </select>
+                    {/* Sort Selector */}
+                    <select
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        className="px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-800 border border-gray-700 rounded text-xs sm:text-sm text-gray-300 focus:outline-none focus:border-gray-600"
+                    >
+                        <option value="date">⏰ Tarih</option>
+                        <option value="ticker">🔤 A-Z</option>
+                        <option value="status">🚦 Durum</option>
+                    </select>
+                </div>
             </div>
 
             {/* Signals List */}
@@ -299,83 +300,83 @@ export default function SignalsPanel({ strategies }) {
                     </div>
                 </div>
             ) : (
-                <div className="grid gap-4">
+                <div className="grid gap-3 sm:gap-4">
                     {filteredSignals.map(signal => (
                         <div
                             key={signal.id}
-                            className="bg-gray-900/50 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-colors"
+                            className="bg-gray-900/50 border border-gray-800 rounded-lg p-3 sm:p-4 hover:border-gray-700 transition-colors"
                         >
-                            <div className="flex items-center justify-between">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                                 <div className="flex-1">
                                     {/* Header */}
-                                    <div className="flex items-center gap-3 mb-3">
+                                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-2 sm:mb-3">
                                         <button
                                             onClick={() => openChartModal(signal)}
-                                            className="text-xl font-bold text-white hover:text-purple-400 transition-colors flex items-center gap-2"
+                                            className="text-lg sm:text-xl font-bold text-white hover:text-purple-400 transition-colors flex items-center gap-1 sm:gap-2"
                                             title="Grafiği görüntüle"
                                         >
                                             {signal.ticker.replace('.IS', '').replace('TRY', '')}
-                                            <span className="text-sm">📊</span>
+                                            <span className="text-xs sm:text-sm">📊</span>
                                         </button>
-                                        <span className="text-gray-500 text-sm">{signal.market === 'bist100' ? 'BIST' : 'Binance'}</span>
+                                        <span className="text-gray-500 text-xs sm:text-sm">{signal.market === 'bist100' ? 'BIST' : 'Binance'}</span>
                                         {getDirectionBadge(signal.direction)}
                                         {getStatusBadge(signal)}
                                     </div>
 
                                     {/* Price Levels */}
                                     {signal.status !== 'pending' && (
-                                        <div className="grid grid-cols-5 gap-4 mb-3">
+                                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-4 mb-2 sm:mb-3">
                                             <div>
                                                 <div className="text-gray-500 text-xs">Giriş</div>
-                                                <div className="text-blue-400 font-mono">{signal.entry_price?.toFixed(2) || '-'}</div>
+                                                <div className="text-blue-400 font-mono text-sm sm:text-base">{signal.entry_price?.toFixed(2) || '-'}</div>
                                             </div>
                                             <div>
                                                 <div className="text-gray-500 text-xs">Güncel</div>
-                                                <div className="text-white font-mono">{signal.current_price?.toFixed(2) || '-'}</div>
+                                                <div className="text-white font-mono text-sm sm:text-base">{signal.current_price?.toFixed(2) || '-'}</div>
                                             </div>
                                             <div>
-                                                <div className="text-gray-500 text-xs">Zarar Kes</div>
-                                                <div className="text-red-400 font-mono">{signal.stop_loss?.toFixed(2) || '-'}</div>
+                                                <div className="text-gray-500 text-xs">SL</div>
+                                                <div className="text-red-400 font-mono text-sm sm:text-base">{signal.stop_loss?.toFixed(2) || '-'}</div>
                                             </div>
                                             <div>
-                                                <div className="text-gray-500 text-xs">Kâr Al</div>
-                                                <div className="text-green-400 font-mono">{signal.take_profit?.toFixed(2) || '-'}</div>
+                                                <div className="text-gray-500 text-xs">TP</div>
+                                                <div className="text-green-400 font-mono text-sm sm:text-base">{signal.take_profit?.toFixed(2) || '-'}</div>
                                             </div>
                                             {signal.status === 'entered' && (
                                                 <div>
                                                     <div className="text-gray-500 text-xs">Lot</div>
-                                                    <div className="text-purple-400 font-mono font-bold">{signal.remaining_lots || 0}</div>
+                                                    <div className="text-purple-400 font-mono font-bold text-sm sm:text-base">{signal.remaining_lots || 0}</div>
                                                 </div>
                                             )}
                                         </div>
                                     )}
 
                                     {/* Meta Info */}
-                                    <div className="flex items-center gap-4 text-xs text-gray-500">
+                                    <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-xs text-gray-500">
                                         <span>📋 {getStrategyName(signal.strategy_id)}</span>
-                                        <span>🕐 {new Date(signal.created_at).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' })}</span>
-                                        {signal.notes && <span className="text-gray-400 italic">{signal.notes}</span>}
+                                        <span className="hidden sm:inline">🕐 {new Date(signal.created_at).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' })}</span>
+                                        {signal.notes && <span className="text-gray-400 italic hidden md:inline">{signal.notes}</span>}
                                     </div>
                                 </div>
 
                                 {/* Actions */}
-                                <div className="flex flex-col gap-2 justify-center">
+                                <div className="flex sm:flex-col gap-2 justify-start sm:justify-center">
                                     {/* Show "Pozisyona Al" button for triggered signals */}
                                     {signal.status === 'triggered' && (
                                         <button
                                             onClick={() => openEntryModal(signal)}
-                                            className={`px-3 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-bold transition-colors ${signal.entry_reached ? 'animate-pulse' : ''}`}
+                                            className={`px-3 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-xs sm:text-sm font-bold transition-colors flex-1 sm:flex-none ${signal.entry_reached ? 'animate-pulse' : ''}`}
                                         >
-                                            ✅ Pozisyona Al
+                                            ✅ <span className="hidden sm:inline">Pozisyona </span>Al
                                         </button>
                                     )}
                                     {/* Show "Pozisyondan Çık" button for entered signals */}
                                     {signal.status === 'entered' && (
                                         <button
                                             onClick={() => openExitModal(signal)}
-                                            className="px-3 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded text-sm font-bold transition-colors"
+                                            className="px-3 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded text-xs sm:text-sm font-bold transition-colors flex-1 sm:flex-none"
                                         >
-                                            🚪 Pozisyondan Çık
+                                            🚪 <span className="hidden sm:inline">Pozisyondan </span>Çık
                                         </button>
                                     )}
                                 </div>
@@ -397,8 +398,8 @@ export default function SignalsPanel({ strategies }) {
 
             {/* Entry Confirmation Modal */}
             {entryModal && (
-                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-                    <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md">
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
                         <h3 className="text-xl font-bold text-white mb-4">
                             ✅ Pozisyona Giriş
                         </h3>
@@ -501,8 +502,8 @@ export default function SignalsPanel({ strategies }) {
 
             {/* Exit Position Modal */}
             {exitModal && (
-                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-                    <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md">
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
                         <h3 className="text-xl font-bold text-white mb-4">
                             🚪 Pozisyondan Çıkış
                         </h3>

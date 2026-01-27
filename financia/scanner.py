@@ -227,7 +227,7 @@ class ScannerService:
                 config.last_scan_at = self.last_scan_at
                 db.commit()
 
-            print(f"[Scanner] Scan complete at {datetime.now().strftime('%H:%M:%S')}")
+            print(f"[Scanner] Scan complete at {now_turkey().strftime('%H:%M:%S')}")
 
         except Exception as e:
             print(f"[Scanner] Error in scan_all: {e}")
@@ -288,13 +288,13 @@ class ScannerService:
         # Evaluate strategy
         result = strategy.evaluate(data)
 
-        # Check for existing signal
+        # Check for existing signal (including entered positions to avoid duplicates)
         existing_signal = (
             db.query(Signal)
             .filter(
                 Signal.ticker == item.ticker,
                 Signal.strategy_id == item.strategy_id,
-                Signal.status.in_(["pending", "triggered"]),
+                Signal.status.in_(["pending", "triggered", "entered"]),
             )
             .first()
         )
@@ -326,6 +326,11 @@ class ScannerService:
             if existing_signal and existing_signal.status == "triggered":
                 # Already triggered, check price levels
                 await self._check_entry_exit(db, existing_signal, result)
+            elif existing_signal and existing_signal.status == "entered":
+                # Already in position, just update current price and check SL/TP
+                existing_signal.current_price = current_price
+                # Check if SL or TP hit for entered position
+                await self._check_position_levels(db, existing_signal, result)
             else:
                 # Create new triggered signal
                 if existing_signal:
@@ -372,7 +377,10 @@ class ScannerService:
 
         # Case 2: Precondition met but main condition not - pending
         elif result.precondition_met:
-            if not existing_signal:
+            # Skip if already in position
+            if existing_signal and existing_signal.status == "entered":
+                existing_signal.current_price = current_price
+            elif not existing_signal:
                 new_signal = Signal(
                     ticker=item.ticker,
                     market=item.market,
@@ -393,12 +401,15 @@ class ScannerService:
                 existing_signal.last_trough = last_trough
                 existing_signal.extra_data = extra_data
 
-        # Case 3: Precondition not met - cancel pending signals
+        # Case 3: Precondition not met - cancel pending signals (but not entered positions)
         else:
             if existing_signal and existing_signal.status == "pending":
                 existing_signal.status = "cancelled"
                 existing_signal.closed_at = now_turkey()
                 existing_signal.notes = "Ön koşul artık sağlanmıyor"
+            elif existing_signal and existing_signal.status == "entered":
+                # Just update current price for entered positions
+                existing_signal.current_price = current_price
 
         db.commit()
         await self._broadcast_signals(db)
@@ -476,6 +487,40 @@ class ScannerService:
                         stop_loss=signal.stop_loss,
                         take_profit=signal.take_profit,
                     )
+
+        db.commit()
+        await self._broadcast_signals(db)
+
+    async def _check_position_levels(
+        self, db: Session, signal: Signal, result: StrategyResult
+    ):
+        """Check SL/TP levels for an entered position."""
+
+        current_price = to_python_native(result.current_price)
+        signal.current_price = current_price
+
+        if signal.direction == "long":
+            # Check stop loss
+            if current_price <= signal.stop_loss:
+                print(f"[Scanner] ⚠️ SL HIT: {signal.ticker} LONG @ {current_price}")
+                # Don't auto-close, just notify - user manages position manually
+                return
+
+            # Check take profit
+            if current_price >= signal.take_profit:
+                print(f"[Scanner] 🎯 TP HIT: {signal.ticker} LONG @ {current_price}")
+                return
+
+        else:  # short
+            # Check stop loss
+            if current_price >= signal.stop_loss:
+                print(f"[Scanner] ⚠️ SL HIT: {signal.ticker} SHORT @ {current_price}")
+                return
+
+            # Check take profit
+            if current_price <= signal.take_profit:
+                print(f"[Scanner] 🎯 TP HIT: {signal.ticker} SHORT @ {current_price}")
+                return
 
         db.commit()
         await self._broadcast_signals(db)

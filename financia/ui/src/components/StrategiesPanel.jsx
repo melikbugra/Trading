@@ -340,12 +340,12 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         <div>
             {/* Header */}
             <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-bold text-white">Stratejiler ({strategies.length})</h2>
+                <h2 className="text-base sm:text-lg font-bold text-white">Stratejiler ({strategies.length})</h2>
                 <button
                     onClick={openAddModal}
-                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded font-bold text-sm transition-colors"
+                    className="px-3 sm:px-4 py-1.5 sm:py-2 bg-purple-600 hover:bg-purple-700 text-white rounded font-bold text-xs sm:text-sm transition-colors"
                 >
-                    ➕ Strateji Oluştur
+                    ➕ <span className="hidden sm:inline">Strateji </span>Oluştur
                 </button>
             </div>
 
@@ -370,12 +370,12 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                     }`}
                             >
                                 {/* Strategy Header */}
-                                <div className="p-4">
-                                    <div className="flex items-start justify-between">
+                                <div className="p-3 sm:p-4">
+                                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                                         <div className="flex-1">
-                                            <div className="flex items-center gap-3 mb-2">
-                                                <span className="text-lg font-bold text-white">{strategy.name}</span>
-                                                <span className={`px-2 py-1 rounded text-xs ${strategy.is_active
+                                            <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-2">
+                                                <span className="text-base sm:text-lg font-bold text-white">{strategy.name}</span>
+                                                <span className={`px-2 py-0.5 sm:py-1 rounded text-xs ${strategy.is_active
                                                     ? 'bg-green-500/20 text-green-400'
                                                     : 'bg-gray-500/20 text-gray-400'
                                                     }`}>
@@ -384,26 +384,26 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                             </div>
 
                                             {strategy.description && (
-                                                <div className="text-gray-400 text-sm mb-2">{strategy.description}</div>
+                                                <div className="text-gray-400 text-xs sm:text-sm mb-2 hidden sm:block">{strategy.description}</div>
                                             )}
 
-                                            <div className="flex items-center gap-4 text-xs text-gray-500">
-                                                <span>📊 R:R = 1:{strategy.risk_reward_ratio}</span>
+                                            <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-xs text-gray-500">
+                                                <span>📊 1:{strategy.risk_reward_ratio}</span>
                                                 <span>⏱️ {
-                                                    strategy.horizon === 'short' ? '1 Saatlik' :
-                                                        strategy.horizon === 'short-mid' ? '4 Saatlik' :
-                                                            strategy.horizon === 'medium' ? 'Günlük' :
-                                                                strategy.horizon === 'long' ? 'Haftalık' : '1 Saatlik'
+                                                    strategy.horizon === 'short' ? '1h' :
+                                                        strategy.horizon === 'short-mid' ? '4h' :
+                                                            strategy.horizon === 'medium' ? '1D' :
+                                                                strategy.horizon === 'long' ? '1W' : '1h'
                                                 }</span>
-                                                <span>👁️ {strategyTickers.length} sembol</span>
+                                                <span>👁️ {strategyTickers.length}</span>
                                             </div>
                                         </div>
 
                                         {/* Strategy Actions */}
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-1 sm:gap-2">
                                             <button
                                                 onClick={() => toggleStrategy(strategy)}
-                                                className={`px-3 py-2 rounded text-sm transition-colors ${strategy.is_active
+                                                className={`px-2 sm:px-3 py-1.5 sm:py-2 rounded text-sm transition-colors ${strategy.is_active
                                                     ? 'bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-400'
                                                     : 'bg-green-600/20 hover:bg-green-600/40 text-green-400'
                                                     }`}
@@ -412,13 +412,13 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                             </button>
                                             <button
                                                 onClick={() => openEditModal(strategy)}
-                                                className="px-3 py-2 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded text-sm transition-colors"
+                                                className="px-2 sm:px-3 py-1.5 sm:py-2 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded text-sm transition-colors"
                                             >
                                                 ✏️
                                             </button>
                                             <button
                                                 onClick={() => deleteStrategy(strategy.id)}
-                                                className="px-3 py-2 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded text-sm transition-colors"
+                                                className="px-2 sm:px-3 py-1.5 sm:py-2 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded text-sm transition-colors"
                                             >
                                                 🗑️
                                             </button>
@@ -428,29 +428,29 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
 
                                 {/* Tickers Section */}
                                 <div className="border-t border-gray-800 bg-gray-800/30">
-                                    <div className="px-4 py-2 flex items-center justify-between">
-                                        <span className="text-gray-400 text-sm font-medium">
-                                            İzlenen Semboller
+                                    <div className="px-3 sm:px-4 py-2 flex items-center justify-between">
+                                        <span className="text-gray-400 text-xs sm:text-sm font-medium">
+                                            Semboller
                                         </span>
                                         <button
                                             onClick={() => openAddTickerModal(strategy.id)}
-                                            className="px-3 py-1 bg-green-600/20 hover:bg-green-600/40 text-green-400 rounded text-xs transition-colors"
+                                            className="px-2 sm:px-3 py-1 bg-green-600/20 hover:bg-green-600/40 text-green-400 rounded text-xs transition-colors"
                                         >
-                                            ➕ Sembol Ekle
+                                            ➕ <span className="hidden sm:inline">Sembol </span>Ekle
                                         </button>
                                     </div>
 
                                     {strategyTickers.length === 0 ? (
-                                        <div className="px-4 pb-4 text-center text-gray-600 text-sm">
+                                        <div className="px-3 sm:px-4 pb-3 sm:pb-4 text-center text-gray-600 text-xs sm:text-sm">
                                             Henüz sembol eklenmedi
                                         </div>
                                     ) : (
-                                        <div className="px-4 pb-3">
-                                            <div className="flex flex-wrap gap-2">
+                                        <div className="px-3 sm:px-4 pb-2 sm:pb-3">
+                                            <div className="flex flex-wrap gap-1 sm:gap-2">
                                                 {strategyTickers.map(item => (
                                                     <div
                                                         key={item.id}
-                                                        className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${item.is_active
+                                                        className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-2 rounded-lg border ${item.is_active
                                                             ? 'bg-gray-800 border-gray-700'
                                                             : 'bg-gray-900 border-gray-800 opacity-50'
                                                             }`}
@@ -459,20 +459,20 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                                             }`}>
                                                             {item.market === 'bist100' ? '🇹🇷' : '₿'}
                                                         </span>
-                                                        <span className="text-white font-mono font-bold text-sm">
+                                                        <span className="text-white font-mono font-bold text-xs sm:text-sm">
                                                             {item.ticker.replace('.IS', '').replace('TRY', '')}
                                                         </span>
-                                                        <div className="flex items-center gap-1 ml-2">
+                                                        <div className="flex items-center gap-0.5 sm:gap-1 ml-1 sm:ml-2">
                                                             <button
                                                                 onClick={() => scanSingleTicker(item.ticker, item.market)}
-                                                                className="p-1 hover:bg-blue-600/30 text-blue-400 rounded transition-colors"
+                                                                className="p-0.5 sm:p-1 hover:bg-blue-600/30 text-blue-400 rounded transition-colors text-xs sm:text-sm"
                                                                 title="Tekli Tara"
                                                             >
                                                                 🔍
                                                             </button>
                                                             <button
                                                                 onClick={() => toggleTicker(item.id)}
-                                                                className={`p-1 rounded transition-colors ${item.is_active
+                                                                className={`p-0.5 sm:p-1 rounded transition-colors text-xs sm:text-sm ${item.is_active
                                                                     ? 'hover:bg-yellow-600/30 text-yellow-400'
                                                                     : 'hover:bg-green-600/30 text-green-400'
                                                                     }`}
@@ -482,7 +482,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                                             </button>
                                                             <button
                                                                 onClick={() => removeTicker(item.id)}
-                                                                className="p-1 hover:bg-red-600/30 text-red-400 rounded transition-colors"
+                                                                className="p-0.5 sm:p-1 hover:bg-red-600/30 text-red-400 rounded transition-colors text-xs sm:text-sm"
                                                                 title="Kaldır"
                                                             >
                                                                 ✕
@@ -502,8 +502,8 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
 
             {/* Add/Edit Modal */}
             {showAddModal && (
-                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-                    <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
                         <h3 className="text-lg font-bold text-white mb-4">
                             {editingStrategy ? 'Stratejiyi Düzenle' : 'Strateji Ekle'}
                         </h3>
@@ -632,8 +632,8 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
 
             {/* Add Ticker Modal */}
             {showAddTickerModal && (
-                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-                    <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md">
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 sm:p-6 w-full max-w-md">
                         <h3 className="text-lg font-bold text-white mb-4">Sembol Ekle</h3>
 
                         <form onSubmit={addTicker}>

@@ -37,20 +37,20 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
     };
 
     return (
-        <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-4">
-            <div className="flex items-center justify-between gap-4">
+        <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-3 sm:p-4">
+            <div className="flex flex-wrap items-center gap-3 sm:gap-4">
                 {/* Scanner Status */}
-                <div className="flex items-center gap-4 flex-shrink-0">
+                <div className="flex items-center gap-2 sm:gap-4">
                     <div className="flex items-center gap-2">
                         <div className={`w-3 h-3 rounded-full ${config.is_running ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`} />
-                        <span className="text-gray-300 font-medium">
+                        <span className="text-gray-300 font-medium text-sm sm:text-base">
                             Tarama
                         </span>
                     </div>
 
                     <button
                         onClick={toggleScanner}
-                        className={`px-4 py-2 rounded font-bold text-sm transition-colors ${config.is_running
+                        className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded font-bold text-xs sm:text-sm transition-colors ${config.is_running
                             ? 'bg-red-600 hover:bg-red-700 text-white'
                             : 'bg-green-600 hover:bg-green-700 text-white'
                             }`}
@@ -60,14 +60,14 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                 </div>
 
                 {/* Interval Setting */}
-                <div className="flex items-center gap-3 flex-shrink-0">
-                    <span className="text-gray-400 text-sm">Tarama Aralığı:</span>
+                <div className="flex items-center gap-2 sm:gap-3">
+                    <span className="text-gray-400 text-xs sm:text-sm hidden sm:inline">Aralık:</span>
                     {editingInterval ? (
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1 sm:gap-2">
                             <select
                                 value={tempInterval}
                                 onChange={(e) => setTempInterval(e.target.value)}
-                                className="bg-gray-800 border border-gray-700 text-white px-3 py-1 rounded text-sm"
+                                className="bg-gray-800 border border-gray-700 text-white px-2 sm:px-3 py-1 rounded text-xs sm:text-sm"
                             >
                                 <option value="1">1 dk</option>
                                 <option value="5">5 dk</option>
@@ -77,15 +77,15 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                             </select>
                             <button
                                 onClick={saveInterval}
-                                className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm"
+                                className="px-2 sm:px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs sm:text-sm"
                             >
-                                Kaydet
+                                ✓
                             </button>
                             <button
                                 onClick={() => setEditingInterval(false)}
-                                className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm"
+                                className="px-2 sm:px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs sm:text-sm"
                             >
-                                İptal
+                                ✕
                             </button>
                         </div>
                     ) : (
@@ -94,7 +94,7 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                                 setTempInterval(config.scan_interval_minutes);
                                 setEditingInterval(true);
                             }}
-                            className="px-3 py-1 bg-gray-800 hover:bg-gray-700 text-white rounded text-sm border border-gray-700"
+                            className="px-2 sm:px-3 py-1 bg-gray-800 hover:bg-gray-700 text-white rounded text-xs sm:text-sm border border-gray-700"
                         >
                             {config.scan_interval_minutes} dk 📝
                         </button>
@@ -102,47 +102,47 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                 </div>
 
                 {/* Manual Scan */}
-                <div className="flex items-center gap-3 flex-shrink-0">
-                    <span className="text-gray-500 text-xs">
-                        Son tarama: {formatLastScan(config.last_scan_at)}
+                <div className="flex items-center gap-2 sm:gap-3">
+                    <span className="text-gray-500 text-xs hidden md:inline">
+                        Son: {formatLastScan(config.last_scan_at)}
                     </span>
                     <button
                         onClick={onScanNow}
                         disabled={isScanning}
-                        className={`px-4 py-2 rounded font-bold text-sm transition-all flex items-center gap-2 ${isScanning
+                        className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded font-bold text-xs sm:text-sm transition-all flex items-center gap-1 sm:gap-2 ${isScanning
                             ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
                             : 'bg-blue-600 hover:bg-blue-700 text-white'
                             }`}
                     >
                         <span className={isScanning ? 'animate-spin' : ''}>🔄</span>
-                        {isScanning ? 'Taranıyor...' : 'Şimdi Tara'}
+                        <span className="hidden sm:inline">{isScanning ? 'Taranıyor...' : 'Şimdi Tara'}</span>
                     </button>
                 </div>
 
                 {/* Email Notification Settings */}
-                <div className="flex items-center gap-3 flex-shrink-0">
-                    <span className="text-gray-400 text-sm">📧 E-posta:</span>
+                <div className="flex items-center gap-2 sm:gap-3 ml-auto">
+                    <span className="text-gray-400 text-xs sm:text-sm hidden lg:inline">📧</span>
                     <button
                         onClick={() => updateEmailNotifications('triggered', !emailNotifications.triggered)}
-                        className={`px-3 py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1.5 ${emailNotifications.triggered
+                        className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1 ${emailNotifications.triggered
                             ? 'bg-orange-600/80 text-white'
                             : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
                             }`}
                         title="Sinyal tetiklendiğinde e-posta bildirimi"
                     >
                         <span>{emailNotifications.triggered ? '🔔' : '🔕'}</span>
-                        Tetiklenen
+                        <span className="hidden sm:inline">Tetiklenen</span>
                     </button>
                     <button
                         onClick={() => updateEmailNotifications('entryReached', !emailNotifications.entryReached)}
-                        className={`px-3 py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1.5 ${emailNotifications.entryReached
+                        className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1 ${emailNotifications.entryReached
                             ? 'bg-green-600/80 text-white'
                             : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
                             }`}
                         title="Giriş fiyatına ulaşıldığında e-posta bildirimi"
                     >
                         <span>{emailNotifications.entryReached ? '🔔' : '🔕'}</span>
-                        Giriş Fiyatı
+                        <span className="hidden sm:inline">Giriş</span>
                     </button>
                 </div>
             </div>
