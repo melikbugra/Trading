@@ -459,9 +459,13 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                                             }`}>
                                                             {item.market === 'bist100' ? '🇹🇷' : '₿'}
                                                         </span>
-                                                        <span className="text-white font-mono font-bold text-xs sm:text-sm">
+                                                        <button
+                                                            onClick={() => openChartModal(item.ticker, item.market, strategy.id)}
+                                                            className="text-white font-mono font-bold text-xs sm:text-sm hover:text-purple-400 transition-colors"
+                                                            title="Grafiği görüntüle"
+                                                        >
                                                             {item.ticker.replace('.IS', '').replace('TRY', '')}
-                                                        </span>
+                                                        </button>
                                                         <div className="flex items-center gap-0.5 sm:gap-1 ml-1 sm:ml-2">
                                                             <button
                                                                 onClick={() => scanSingleTicker(item.ticker, item.market)}

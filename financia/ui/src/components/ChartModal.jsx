@@ -5,10 +5,10 @@ const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export default function ChartModal({ ticker, market, strategyId, onClose }) {
     const chartContainerRef = useRef(null);
-    const macdContainerRef = useRef(null);
+    const indicatorContainerRef = useRef(null);
     const chartAreaRef = useRef(null);
     const chartRef = useRef(null);
-    const macdChartRef = useRef(null);
+    const indicatorChartRef = useRef(null);
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -54,9 +54,9 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
             chartRef.current.remove();
             chartRef.current = null;
         }
-        if (macdChartRef.current) {
-            macdChartRef.current.remove();
-            macdChartRef.current = null;
+        if (indicatorChartRef.current) {
+            indicatorChartRef.current.remove();
+            indicatorChartRef.current = null;
         }
 
         // Create main chart
@@ -272,10 +272,13 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
 
         chart.timeScale().fitContent();
 
-        // Create MACD chart
-        if (macdContainerRef.current && data.indicators?.macd?.length > 0) {
-            const macdChart = createChart(macdContainerRef.current, {
-                width: macdContainerRef.current.clientWidth,
+        // Create indicator chart (MACD or Stochastic RSI based on strategy type)
+        const hasMACD = data.indicators?.macd?.length > 0;
+        const hasStochRSI = data.indicators?.stoch_rsi?.length > 0;
+
+        if (indicatorContainerRef.current && (hasMACD || hasStochRSI)) {
+            const indicatorChart = createChart(indicatorContainerRef.current, {
+                width: indicatorContainerRef.current.clientWidth,
                 height: macdHeight,
                 layout: {
                     background: { type: 'solid', color: '#1a1a2e' },
@@ -294,52 +297,96 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
                     secondsVisible: false,
                 },
             });
-            macdChartRef.current = macdChart;
+            indicatorChartRef.current = indicatorChart;
 
-            // MACD line (v4 API)
-            const macdLine = macdChart.addSeries(LineSeries, {
-                color: '#3b82f6',
-                lineWidth: 2,
-            });
+            if (hasStochRSI) {
+                // Stochastic RSI indicator
+                const stochKLine = indicatorChart.addSeries(LineSeries, {
+                    color: '#3b82f6',
+                    lineWidth: 2,
+                    title: '%K',
+                });
 
-            // Signal line
-            const signalLine = macdChart.addSeries(LineSeries, {
-                color: '#f59e0b',
-                lineWidth: 2,
-            });
+                const stochDLine = indicatorChart.addSeries(LineSeries, {
+                    color: '#f59e0b',
+                    lineWidth: 2,
+                    title: '%D',
+                });
 
-            // Histogram
-            const histogram = macdChart.addSeries(HistogramSeries, {
-                color: '#22c55e',
-            });
+                const stochKData = data.indicators.stoch_rsi.map(s => ({
+                    time: (s.time / 1000) + turkeyOffset,
+                    value: s.k,
+                }));
+                const stochDData = data.indicators.stoch_rsi.map(s => ({
+                    time: (s.time / 1000) + turkeyOffset,
+                    value: s.d,
+                }));
 
-            const macdData = data.indicators.macd.map(m => ({
-                time: (m.time / 1000) + turkeyOffset,
-                value: m.macd,
-            }));
-            const signalData = data.indicators.macd.map(m => ({
-                time: (m.time / 1000) + turkeyOffset,
-                value: m.signal,
-            }));
-            const histData = data.indicators.macd.map(m => ({
-                time: (m.time / 1000) + turkeyOffset,
-                value: m.histogram,
-                color: m.histogram >= 0 ? '#22c55e' : '#ef4444',
-            }));
+                stochKLine.setData(stochKData);
+                stochDLine.setData(stochDData);
 
-            macdLine.setData(macdData);
-            signalLine.setData(signalData);
-            histogram.setData(histData);
+                // Add oversold (20) and overbought (80) reference lines
+                stochKLine.createPriceLine({
+                    price: 20,
+                    color: '#22c55e',
+                    lineWidth: 1,
+                    lineStyle: 2,
+                    axisLabelVisible: true,
+                    title: '',
+                });
+                stochKLine.createPriceLine({
+                    price: 80,
+                    color: '#ef4444',
+                    lineWidth: 1,
+                    lineStyle: 2,
+                    axisLabelVisible: true,
+                    title: '',
+                });
 
-            macdChart.timeScale().fitContent();
+            } else if (hasMACD) {
+                // MACD indicator
+                const macdLine = indicatorChart.addSeries(LineSeries, {
+                    color: '#3b82f6',
+                    lineWidth: 2,
+                });
+
+                const signalLine = indicatorChart.addSeries(LineSeries, {
+                    color: '#f59e0b',
+                    lineWidth: 2,
+                });
+
+                const histogram = indicatorChart.addSeries(HistogramSeries, {
+                    color: '#22c55e',
+                });
+
+                const macdData = data.indicators.macd.map(m => ({
+                    time: (m.time / 1000) + turkeyOffset,
+                    value: m.macd,
+                }));
+                const signalData = data.indicators.macd.map(m => ({
+                    time: (m.time / 1000) + turkeyOffset,
+                    value: m.signal,
+                }));
+                const histData = data.indicators.macd.map(m => ({
+                    time: (m.time / 1000) + turkeyOffset,
+                    value: m.histogram,
+                    color: m.histogram >= 0 ? '#22c55e' : '#ef4444',
+                }));
+
+                macdLine.setData(macdData);
+                signalLine.setData(signalData);
+                histogram.setData(histData);
+            }
+
+            indicatorChart.timeScale().fitContent();
 
             // Sync time scales
             chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
                 if (range) {
-                    macdChart.timeScale().setVisibleLogicalRange(range);
+                    indicatorChart.timeScale().setVisibleLogicalRange(range);
                 }
             });
-            macdChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+            indicatorChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
                 if (range) {
                     chart.timeScale().setVisibleLogicalRange(range);
                 }
@@ -354,9 +401,9 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
                     height: chartHeight
                 });
             }
-            if (macdContainerRef.current && macdChartRef.current) {
-                macdChartRef.current.applyOptions({
-                    width: macdContainerRef.current.clientWidth,
+            if (indicatorContainerRef.current && indicatorChartRef.current) {
+                indicatorChartRef.current.applyOptions({
+                    width: indicatorContainerRef.current.clientWidth,
                     height: macdHeight
                 });
             }
@@ -370,9 +417,9 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
                 chartRef.current.remove();
                 chartRef.current = null;
             }
-            if (macdChartRef.current) {
-                macdChartRef.current.remove();
-                macdChartRef.current = null;
+            if (indicatorChartRef.current) {
+                indicatorChartRef.current.remove();
+                indicatorChartRef.current = null;
             }
         };
     }, [data, chartHeight, macdHeight]);
@@ -407,11 +454,11 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
                 });
                 chartRef.current.timeScale().fitContent();
             }
-            if (macdContainerRef.current && macdChartRef.current) {
-                macdChartRef.current.applyOptions({
-                    width: macdContainerRef.current.clientWidth
+            if (indicatorContainerRef.current && indicatorChartRef.current) {
+                indicatorChartRef.current.applyOptions({
+                    width: indicatorContainerRef.current.clientWidth
                 });
-                macdChartRef.current.timeScale().fitContent();
+                indicatorChartRef.current.timeScale().fitContent();
             }
         }, 100);
         return () => clearTimeout(timer);
@@ -556,14 +603,26 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
                                 <div className="w-10 h-1 bg-gray-500 rounded" />
                             </div>
 
-                            {/* MACD Chart */}
+                            {/* Indicator Chart (MACD or Stochastic RSI) */}
                             <div>
                                 <div className="flex items-center gap-4 mb-1">
-                                    <span className="text-gray-400 text-sm">MACD</span>
-                                    <span className="text-blue-400 text-xs">━━ MACD</span>
-                                    <span className="text-yellow-400 text-xs">━━ Signal</span>
+                                    {data?.indicators?.stoch_rsi?.length > 0 ? (
+                                        <>
+                                            <span className="text-gray-400 text-sm">Stochastic RSI</span>
+                                            <span className="text-blue-400 text-xs">━━ %K</span>
+                                            <span className="text-yellow-400 text-xs">━━ %D</span>
+                                            <span className="text-green-400 text-xs">┄┄ 20</span>
+                                            <span className="text-red-400 text-xs">┄┄ 80</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <span className="text-gray-400 text-sm">MACD</span>
+                                            <span className="text-blue-400 text-xs">━━ MACD</span>
+                                            <span className="text-yellow-400 text-xs">━━ Signal</span>
+                                        </>
+                                    )}
                                 </div>
-                                <div ref={macdContainerRef} className="w-full" style={{ height: macdHeight }} />
+                                <div ref={indicatorContainerRef} className="w-full" style={{ height: macdHeight }} />
                             </div>
                         </div>
                     )}

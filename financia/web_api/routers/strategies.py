@@ -725,8 +725,8 @@ async def get_chart_data(
 ):
     """
     Get chart data for a ticker including:
-    - Last 7 days of OHLC data
-    - Indicator values (EMA200, MACD)
+    - Last 50 bars of OHLC data
+    - Indicator values based on strategy type (EMA200, MACD or Stochastic RSI)
     - Current price
     - Active signal if any
     """
@@ -734,12 +734,14 @@ async def get_chart_data(
     from financia.strategies.base import to_python_native
     import numpy as np
 
-    # Get horizon from strategy if provided
+    # Get horizon and strategy type from strategy if provided
     horizon = "short"  # Default to 1h candles
+    strategy_type = "EMAMACDStrategy"  # Default strategy type
     if strategy_id:
         strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
         if strategy:
             horizon = strategy.horizon or "short"
+            strategy_type = strategy.strategy_type or "EMAMACDStrategy"
 
     try:
         # Get data based on strategy's timeframe
@@ -755,22 +757,14 @@ async def get_chart_data(
     if data.empty:
         raise HTTPException(404, f"No data found for {ticker}")
 
-    # Last 7 days (roughly 7 * 24 hours if hourly, or 7 bars if daily)
-    # For daily data, take last 50 bars for good chart view
+    # Last 50 bars for good chart view
     chart_data = data.tail(50).copy()
 
     # Calculate indicators
     close = data["Close"]
 
-    # EMA 200
+    # EMA 200 (common for all strategies)
     ema200 = close.ewm(span=200, adjust=False).mean()
-
-    # MACD
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    macd = ema12 - ema26
-    macd_signal = macd.ewm(span=9, adjust=False).mean()
-    macd_hist = macd - macd_signal
 
     # Prepare candle data
     candles = []
@@ -800,25 +794,85 @@ async def get_chart_data(
                     {"time": timestamp or str(idx), "value": to_python_native(val)}
                 )
 
-    # Prepare MACD data
-    macd_data = []
-    for idx in chart_data.index:
-        if idx in macd.index:
-            m = macd.loc[idx]
-            s = macd_signal.loc[idx]
-            h = macd_hist.loc[idx]
-            if not (np.isnan(m) or np.isnan(s)):
-                timestamp = (
-                    int(idx.timestamp() * 1000) if hasattr(idx, "timestamp") else None
-                )
-                macd_data.append(
-                    {
-                        "time": timestamp or str(idx),
-                        "macd": to_python_native(m),
-                        "signal": to_python_native(s),
-                        "histogram": to_python_native(h),
-                    }
-                )
+    # Build indicators dict based on strategy type
+    indicators = {"ema200": ema_data}
+
+    if strategy_type == "ResistanceBreakoutStrategy":
+        # Calculate Stochastic RSI for this strategy
+        rsi_period = 14
+        stoch_period = 14
+        k_period = 3
+        d_period = 3
+
+        # Calculate RSI
+        delta = close.diff()
+        gain = delta.where(delta > 0, 0.0)
+        loss = (-delta).where(delta < 0, 0.0)
+        avg_gain = gain.rolling(window=rsi_period).mean()
+        avg_loss = loss.rolling(window=rsi_period).mean()
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+        # Calculate Stochastic of RSI
+        rsi_min = rsi.rolling(window=stoch_period).min()
+        rsi_max = rsi.rolling(window=stoch_period).max()
+        rsi_range = rsi_max - rsi_min
+        rsi_range = rsi_range.replace(0, np.nan)
+        stoch_rsi = ((rsi - rsi_min) / rsi_range) * 100
+
+        # Smooth with SMA for %K and %D
+        stoch_k = stoch_rsi.rolling(window=k_period).mean()
+        stoch_d = stoch_k.rolling(window=d_period).mean()
+
+        # Prepare Stochastic RSI data
+        stoch_rsi_data = []
+        for idx in chart_data.index:
+            if idx in stoch_k.index:
+                k = stoch_k.loc[idx]
+                d = stoch_d.loc[idx]
+                if not (np.isnan(k) or np.isnan(d)):
+                    timestamp = (
+                        int(idx.timestamp() * 1000) if hasattr(idx, "timestamp") else None
+                    )
+                    stoch_rsi_data.append(
+                        {
+                            "time": timestamp or str(idx),
+                            "k": to_python_native(k),
+                            "d": to_python_native(d),
+                        }
+                    )
+
+        indicators["stoch_rsi"] = stoch_rsi_data
+
+    else:
+        # Default: Calculate MACD for EMAMACDStrategy
+        ema12 = close.ewm(span=12, adjust=False).mean()
+        ema26 = close.ewm(span=26, adjust=False).mean()
+        macd = ema12 - ema26
+        macd_signal = macd.ewm(span=9, adjust=False).mean()
+        macd_hist = macd - macd_signal
+
+        # Prepare MACD data
+        macd_data = []
+        for idx in chart_data.index:
+            if idx in macd.index:
+                m = macd.loc[idx]
+                s = macd_signal.loc[idx]
+                h = macd_hist.loc[idx]
+                if not (np.isnan(m) or np.isnan(s)):
+                    timestamp = (
+                        int(idx.timestamp() * 1000) if hasattr(idx, "timestamp") else None
+                    )
+                    macd_data.append(
+                        {
+                            "time": timestamp or str(idx),
+                            "macd": to_python_native(m),
+                            "signal": to_python_native(s),
+                            "histogram": to_python_native(h),
+                        }
+                    )
+
+        indicators["macd"] = macd_data
 
     # Current price
     current_price = to_python_native(close.iloc[-1])
@@ -844,6 +898,7 @@ async def get_chart_data(
                 "stop_loss": to_python_native(signal.stop_loss),
                 "take_profit": to_python_native(signal.take_profit),
                 "notes": signal.notes,
+                "triggered_at": signal.triggered_at.isoformat() if signal.triggered_at else None,
             }
 
     return {
@@ -851,11 +906,9 @@ async def get_chart_data(
         "market": market,
         "current_price": current_price,
         "candles": candles,
-        "indicators": {
-            "ema200": ema_data,
-            "macd": macd_data,
-        },
+        "indicators": indicators,
         "signal": signal_data,
+        "strategy_type": strategy_type,
     }
 
 
