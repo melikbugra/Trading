@@ -18,6 +18,18 @@ const BIST100_TICKERS = [
     'VESBE', 'VESTL', 'YEOTK', 'YKBNK', 'YYLGD', 'ZOREN'
 ];
 
+// BIST30 hisse listesi (en büyük 30)
+const BIST30_TICKERS = [
+    'AKBNK', 'ARCLK', 'ASELS', 'BIMAS', 'EKGYO', 'EREGL', 'FROTO', 'GARAN', 'GUBRF', 'HALKB',
+    'ISCTR', 'KCHOL', 'KOZAL', 'KRDMD', 'MGROS', 'PGSUS', 'SAHOL', 'SASA', 'SISE', 'TAVHL',
+    'TCELL', 'THYAO', 'TKFEN', 'TOASO', 'TTKOM', 'TUPRS', 'VAKBN', 'VESTL', 'YKBNK', 'ENKAI'
+];
+
+// En popüler 10 kripto para
+const TOP_CRYPTO_TICKERS = [
+    'BTC', 'ETH', 'BNB', 'XRP', 'SOL', 'ADA', 'DOGE', 'AVAX', 'DOT', 'LINK'
+];
+
 export default function StrategiesPanel({ strategies, onRefresh }) {
     const { addToast } = useToast();
     const [availableTypes, setAvailableTypes] = useState([]);
@@ -26,6 +38,9 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
     const [editingStrategy, setEditingStrategy] = useState(null);
     const [showAddTickerModal, setShowAddTickerModal] = useState(null); // strategy id
     const [addingAllBist, setAddingAllBist] = useState(false); // bulk add loading state
+    const [addingBist30, setAddingBist30] = useState(false); // BIST30 bulk add loading
+    const [addingCrypto, setAddingCrypto] = useState(false); // Crypto bulk add loading
+    const [deletingAllTickers, setDeletingAllTickers] = useState(null); // strategy id being cleared
     const [chartModal, setChartModal] = useState(null); // { ticker, market, strategyId }
 
     // Strategy form state
@@ -299,6 +314,105 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         addToast(`✅ BIST100: ${added} sembol eklendi${skipped > 0 ? `, ${skipped} atlandı` : ''}`, 'success', 5000);
     };
 
+    const addAllBist30 = async () => {
+        if (!showAddTickerModal) return;
+
+        setAddingBist30(true);
+        setAddTickerError('');
+
+        let added = 0;
+        let skipped = 0;
+
+        for (const ticker of BIST30_TICKERS) {
+            const formattedTicker = ticker + '.IS';
+            try {
+                const res = await fetch(`${API_BASE}/strategies/watchlist`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ticker: formattedTicker,
+                        market: 'bist100',
+                        strategy_id: showAddTickerModal
+                    })
+                });
+
+                if (res.ok) {
+                    added++;
+                } else {
+                    skipped++;
+                }
+            } catch (err) {
+                skipped++;
+            }
+        }
+
+        setAddingBist30(false);
+        fetchWatchlist();
+        setShowAddTickerModal(null);
+        addToast(`✅ BIST30: ${added} sembol eklendi${skipped > 0 ? `, ${skipped} atlandı` : ''}`, 'success', 5000);
+    };
+
+    const addTopCrypto = async () => {
+        if (!showAddTickerModal) return;
+
+        setAddingCrypto(true);
+        setAddTickerError('');
+
+        let added = 0;
+        let skipped = 0;
+
+        for (const ticker of TOP_CRYPTO_TICKERS) {
+            const formattedTicker = ticker + 'TRY';
+            try {
+                const res = await fetch(`${API_BASE}/strategies/watchlist`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ticker: formattedTicker,
+                        market: 'binance',
+                        strategy_id: showAddTickerModal
+                    })
+                });
+
+                if (res.ok) {
+                    added++;
+                } else {
+                    skipped++;
+                }
+            } catch (err) {
+                skipped++;
+            }
+        }
+
+        setAddingCrypto(false);
+        fetchWatchlist();
+        setShowAddTickerModal(null);
+        addToast(`✅ Top 10 Crypto: ${added} sembol eklendi${skipped > 0 ? `, ${skipped} atlandı` : ''}`, 'success', 5000);
+    };
+
+    const deleteAllTickers = async (strategyId) => {
+        const tickers = getWatchlistForStrategy(strategyId);
+        if (tickers.length === 0) return;
+
+        if (!confirm(`Bu stratejideki tüm sembolleri (${tickers.length} adet) silmek istediğinize emin misiniz?`)) return;
+
+        setDeletingAllTickers(strategyId);
+
+        let deleted = 0;
+        for (const item of tickers) {
+            try {
+                await fetch(`${API_BASE}/strategies/watchlist/${item.id}`, { method: 'DELETE' });
+                deleted++;
+            } catch (err) {
+                console.error('Failed to delete ticker:', err);
+            }
+        }
+
+        setDeletingAllTickers(null);
+        fetchWatchlist();
+        addToast(`🗑️ ${deleted} sembol silindi`, 'info', 3000);
+    };
+
     const toggleTicker = async (itemId) => {
         try {
             await fetch(`${API_BASE}/strategies/watchlist/${itemId}/toggle`, { method: 'PUT' });
@@ -430,14 +544,26 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                 <div className="border-t border-gray-800 bg-gray-800/30">
                                     <div className="px-3 sm:px-4 py-2 flex items-center justify-between">
                                         <span className="text-gray-400 text-xs sm:text-sm font-medium">
-                                            Semboller
+                                            Semboller ({strategyTickers.length})
                                         </span>
-                                        <button
-                                            onClick={() => openAddTickerModal(strategy.id)}
-                                            className="px-2 sm:px-3 py-1 bg-green-600/20 hover:bg-green-600/40 text-green-400 rounded text-xs transition-colors"
-                                        >
-                                            ➕ <span className="hidden sm:inline">Sembol </span>Ekle
-                                        </button>
+                                        <div className="flex items-center gap-2">
+                                            {strategyTickers.length > 0 && (
+                                                <button
+                                                    onClick={() => deleteAllTickers(strategy.id)}
+                                                    disabled={deletingAllTickers === strategy.id}
+                                                    className="px-2 sm:px-3 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded text-xs transition-colors disabled:opacity-50"
+                                                    title="Tüm sembolleri sil"
+                                                >
+                                                    {deletingAllTickers === strategy.id ? '⏳' : '🗑️'} <span className="hidden sm:inline">Tümünü Sil</span>
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={() => openAddTickerModal(strategy.id)}
+                                                className="px-2 sm:px-3 py-1 bg-green-600/20 hover:bg-green-600/40 text-green-400 rounded text-xs transition-colors"
+                                            >
+                                                ➕ <span className="hidden sm:inline">Sembol </span>Ekle
+                                            </button>
+                                        </div>
                                     </div>
 
                                     {strategyTickers.length === 0 ? (
@@ -676,25 +802,63 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                         onChange={(e) => setNewTicker(e.target.value)}
                                         placeholder={newMarket === 'bist100' ? 'THYAO' : 'BTC'}
                                         className="w-full bg-gray-800 border border-gray-700 text-white px-4 py-2 rounded font-mono uppercase"
+                                        autoFocus
                                     />
                                 </div>
 
-                                {/* Tüm BIST100 Ekle butonu */}
-                                {newMarket === 'bist100' && (
+                                {/* Toplu ekleme butonları */}
+                                {newMarket === 'bist100' ? (
+                                    <div className="space-y-2">
+                                        <button
+                                            type="button"
+                                            onClick={addAllBist100}
+                                            disabled={addingAllBist || addingBist30}
+                                            className="w-full px-4 py-3 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 disabled:from-gray-600 disabled:to-gray-700 text-white rounded font-bold text-sm transition-all flex items-center justify-center gap-2"
+                                        >
+                                            {addingAllBist ? (
+                                                <>
+                                                    <span className="animate-spin">⏳</span>
+                                                    BIST100 ekleniyor...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    🇹🇷 Tüm BIST100'ü Ekle ({BIST100_TICKERS.length} hisse)
+                                                </>
+                                            )}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={addAllBist30}
+                                            disabled={addingAllBist || addingBist30}
+                                            className="w-full px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 disabled:from-gray-600 disabled:to-gray-700 text-white rounded font-bold text-sm transition-all flex items-center justify-center gap-2"
+                                        >
+                                            {addingBist30 ? (
+                                                <>
+                                                    <span className="animate-spin">⏳</span>
+                                                    BIST30 ekleniyor...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    🇹🇷 BIST30'u Ekle ({BIST30_TICKERS.length} hisse)
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
+                                ) : (
                                     <button
                                         type="button"
-                                        onClick={addAllBist100}
-                                        disabled={addingAllBist}
-                                        className="w-full px-4 py-3 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 disabled:from-gray-600 disabled:to-gray-700 text-white rounded font-bold text-sm transition-all flex items-center justify-center gap-2"
+                                        onClick={addTopCrypto}
+                                        disabled={addingCrypto}
+                                        className="w-full px-4 py-3 bg-gradient-to-r from-yellow-600 to-yellow-700 hover:from-yellow-700 hover:to-yellow-800 disabled:from-gray-600 disabled:to-gray-700 text-white rounded font-bold text-sm transition-all flex items-center justify-center gap-2"
                                     >
-                                        {addingAllBist ? (
+                                        {addingCrypto ? (
                                             <>
                                                 <span className="animate-spin">⏳</span>
-                                                BIST100 ekleniyor...
+                                                Crypto ekleniyor...
                                             </>
                                         ) : (
                                             <>
-                                                🇹🇷 Tüm BIST100'ü Ekle ({BIST100_TICKERS.length} hisse)
+                                                ₿ Top 10 Crypto Ekle ({TOP_CRYPTO_TICKERS.length} coin)
                                             </>
                                         )}
                                     </button>

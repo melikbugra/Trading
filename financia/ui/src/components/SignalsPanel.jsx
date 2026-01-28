@@ -239,14 +239,14 @@ export default function SignalsPanel({ strategies }) {
     return (
         <div>
             {/* Filter Tabs */}
-            <div className="flex flex-col sm:flex-row gap-2 mb-4">
+            <div className="flex flex-wrap items-center gap-2 mb-4">
                 {/* Status Filters */}
-                <div className="flex flex-wrap gap-1 sm:gap-2">
+                <div className="flex gap-1 sm:gap-2 shrink-0">
                     {['all', 'pending', 'triggered', 'entered'].map(f => (
                         <button
                             key={f}
                             onClick={() => setFilter(f)}
-                            className={`px-2 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-medium transition-colors ${filter === f
+                            className={`px-2 sm:px-3 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${filter === f
                                 ? 'bg-blue-600 text-white'
                                 : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
                                 }`}
@@ -261,13 +261,16 @@ export default function SignalsPanel({ strategies }) {
                     ))}
                 </div>
 
-                {/* Market Filters, Strategy Filter & Sort */}
-                <div className="flex gap-1 sm:gap-2 sm:ml-auto flex-wrap">
+                {/* Separator */}
+                <div className="hidden sm:block w-px h-6 bg-gray-700" />
+
+                {/* Market Filters */}
+                <div className="flex gap-1 sm:gap-2 shrink-0">
                     {[{ key: 'all', label: 'Tümü', shortLabel: 'Tümü' }, { key: 'bist100', label: '🇹🇷 BIST', shortLabel: '🇹🇷' }, { key: 'binance', label: '₿ Binance', shortLabel: '₿' }].map(m => (
                         <button
                             key={m.key}
                             onClick={() => setMarketFilter(m.key)}
-                            className={`px-2 sm:px-3 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-medium transition-colors ${marketFilter === m.key
+                            className={`px-2 sm:px-3 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${marketFilter === m.key
                                 ? 'bg-purple-600 text-white'
                                 : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
                                 }`}
@@ -279,8 +282,10 @@ export default function SignalsPanel({ strategies }) {
                             </span>
                         </button>
                     ))}
+                </div>
 
-                    {/* Strategy Filter */}
+                {/* Strategy Filter & Sort - pushed to right */}
+                <div className="flex gap-1 sm:gap-2 ml-auto shrink-0">
                     <select
                         value={strategyFilter}
                         onChange={(e) => setStrategyFilter(e.target.value)}
@@ -294,7 +299,6 @@ export default function SignalsPanel({ strategies }) {
                         ))}
                     </select>
 
-                    {/* Sort Selector */}
                     <select
                         value={sortBy}
                         onChange={(e) => setSortBy(e.target.value)}
