@@ -6,13 +6,14 @@ export default function TradeHistoryPanel({ strategies }) {
     const [trades, setTrades] = useState([]);
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState({ market: '', result: '' });
+    const [filter, setFilter] = useState({ market: '', result: '', strategy_id: '' });
 
     const fetchTrades = useCallback(async () => {
         try {
             let url = `${API_BASE}/strategies/trades?limit=100`;
             if (filter.market) url += `&market=${filter.market}`;
             if (filter.result) url += `&result=${filter.result}`;
+            if (filter.strategy_id) url += `&strategy_id=${filter.strategy_id}`;
 
             const res = await fetch(url);
             if (res.ok) {
@@ -28,8 +29,12 @@ export default function TradeHistoryPanel({ strategies }) {
 
     const fetchStats = useCallback(async () => {
         try {
+            const params = new URLSearchParams();
+            if (filter.market) params.append('market', filter.market);
+            if (filter.strategy_id) params.append('strategy_id', filter.strategy_id);
+
             let url = `${API_BASE}/strategies/trades/stats`;
-            if (filter.market) url += `?market=${filter.market}`;
+            if (params.toString()) url += `?${params.toString()}`;
 
             const res = await fetch(url);
             if (res.ok) {
@@ -39,7 +44,7 @@ export default function TradeHistoryPanel({ strategies }) {
         } catch (err) {
             console.error('Failed to fetch stats:', err);
         }
-    }, [filter.market]);
+    }, [filter.market, filter.strategy_id]);
 
     useEffect(() => {
         fetchTrades();
@@ -101,6 +106,18 @@ export default function TradeHistoryPanel({ strategies }) {
                     <option value="">Tüm Marketler</option>
                     <option value="bist100">🇹🇷 BIST100</option>
                     <option value="binance">₿ Binance</option>
+                </select>
+                <select
+                    value={filter.strategy_id}
+                    onChange={(e) => setFilter({ ...filter, strategy_id: e.target.value })}
+                    className="bg-gray-800 border border-gray-700 text-white px-2 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-sm flex-1 sm:flex-none min-w-0"
+                >
+                    <option value="">📋 Tüm Stratejiler</option>
+                    {strategies.map(s => (
+                        <option key={s.id} value={s.id}>
+                            {s.name}
+                        </option>
+                    ))}
                 </select>
                 <select
                     value={filter.result}

@@ -11,6 +11,7 @@ export default function SignalsPanel({ strategies }) {
     const [signals, setSignals] = useState([]);
     const [filter, setFilter] = useState('all'); // all, pending, triggered, entered
     const [marketFilter, setMarketFilter] = useState('all'); // all, bist100, binance
+    const [strategyFilter, setStrategyFilter] = useState('all'); // all or strategy_id
     const [sortBy, setSortBy] = useState('status'); // date, ticker, status
     const [loading, setLoading] = useState(true);
     const [chartModal, setChartModal] = useState(null); // { ticker, market, strategyId }
@@ -209,6 +210,8 @@ export default function SignalsPanel({ strategies }) {
         if (filter !== 'all' && s.status !== filter) return false;
         // Market filter
         if (marketFilter !== 'all' && s.market !== marketFilter) return false;
+        // Strategy filter
+        if (strategyFilter !== 'all' && s.strategy_id !== parseInt(strategyFilter)) return false;
         return true;
     }).sort((a, b) => {
         // Sorting
@@ -258,7 +261,7 @@ export default function SignalsPanel({ strategies }) {
                     ))}
                 </div>
 
-                {/* Market Filters & Sort */}
+                {/* Market Filters, Strategy Filter & Sort */}
                 <div className="flex gap-1 sm:gap-2 sm:ml-auto flex-wrap">
                     {[{ key: 'all', label: 'Tümü', shortLabel: 'Tümü' }, { key: 'bist100', label: '🇹🇷 BIST', shortLabel: '🇹🇷' }, { key: 'binance', label: '₿ Binance', shortLabel: '₿' }].map(m => (
                         <button
@@ -276,6 +279,20 @@ export default function SignalsPanel({ strategies }) {
                             </span>
                         </button>
                     ))}
+
+                    {/* Strategy Filter */}
+                    <select
+                        value={strategyFilter}
+                        onChange={(e) => setStrategyFilter(e.target.value)}
+                        className="px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-800 border border-gray-700 rounded text-xs sm:text-sm text-gray-300 focus:outline-none focus:border-gray-600"
+                    >
+                        <option value="all">📋 Tüm Stratejiler</option>
+                        {strategies.map(s => (
+                            <option key={s.id} value={s.id}>
+                                {s.name}
+                            </option>
+                        ))}
+                    </select>
 
                     {/* Sort Selector */}
                     <select
