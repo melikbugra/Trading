@@ -15,6 +15,12 @@ export const WebSocketProvider = ({ children }) => {
         last_scan_at: null
     });
     const [activeSignals, setActiveSignals] = useState([]);
+    const [eodStatus, setEodStatus] = useState({
+        is_analyzing: false,
+        last_run_at: null,
+        results: [],
+        total_scanned: 0
+    });
     const wsRef = useRef(null);
 
     // Get API Endpoint (Convert http/https to ws/wss)
@@ -48,6 +54,8 @@ export const WebSocketProvider = ({ children }) => {
                     setScannerStatus(updatedData.data);
                 } else if (updatedData.type === 'signals_update') {
                     setActiveSignals(updatedData.data);
+                } else if (updatedData.type === 'eod_status') {
+                    setEodStatus(updatedData.data);
                 } else if (updatedData.type === 'SCAN_STARTED') {
                     const m = updatedData.data.market;
                     if (m) setActiveScans(prev => [...new Set([...prev, m])]);
@@ -80,7 +88,7 @@ export const WebSocketProvider = ({ children }) => {
     }, []);
 
     return (
-        <WebSocketContext.Provider value={{ lastMessage, isConnected, activeScans, scannerStatus, setScannerStatus, activeSignals }}>
+        <WebSocketContext.Provider value={{ lastMessage, isConnected, activeScans, scannerStatus, setScannerStatus, activeSignals, eodStatus, setEodStatus }}>
             {children}
         </WebSocketContext.Provider>
     );

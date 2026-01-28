@@ -35,8 +35,9 @@ async def lifespan(app: FastAPI):
     print("\nInitializing Database...")
     init_db()
 
-    # Connect scanner to WebSocket manager for broadcasting
+    # Connect scanner and EOD service to WebSocket manager for broadcasting
     scanner.set_ws_manager(manager)
+    eod_service.set_ws_manager(manager)
 
     # Load scanner config and auto-start if enabled
     db = SessionLocal()

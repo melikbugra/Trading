@@ -19,9 +19,13 @@ class EODAnalysisService:
 
     def __init__(self):
         self.is_running = False
+        self.is_analyzing = False  # True while analysis is in progress
         self.last_run_at: Optional[datetime] = None
         self.last_results: List[Dict] = []
+        self.total_scanned: int = 0
         self._task: Optional[asyncio.Task] = None
+        self._analysis_task: Optional[asyncio.Task] = None
+        self._ws_manager = None  # WebSocket manager reference
         # Default filters
         self.filters = {
             "min_change": 0.0,
@@ -31,6 +35,28 @@ class EODAnalysisService:
         # Schedule time (18:15 Turkey time)
         self.run_hour = 18
         self.run_minute = 15
+
+    def set_ws_manager(self, manager):
+        """Set WebSocket manager for broadcasting updates."""
+        self._ws_manager = manager
+
+    async def _broadcast_status(self):
+        """Broadcast current EOD status to all connected clients."""
+        if self._ws_manager:
+            try:
+                await self._ws_manager.broadcast({
+                    "type": "eod_status",
+                    "data": {
+                        "is_analyzing": self.is_analyzing,
+                        "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
+                        "total_scanned": self.total_scanned,
+                        "results_count": len(self.last_results),
+                        "results": self.last_results,
+                        "filters": self.filters,
+                    }
+                })
+            except Exception as e:
+                print(f"[EOD] Failed to broadcast status: {e}")
 
     async def start(self):
         """Start the EOD scheduler."""
@@ -83,100 +109,138 @@ class EODAnalysisService:
                 print(f"[EOD] Error in schedule loop: {e}")
                 await asyncio.sleep(60)  # Wait a minute before retrying
 
-    async def run_analysis(self) -> Dict:
-        """Run the EOD analysis and send email summary."""
+    async def start_analysis(self, send_email: bool = False):
+        """Start analysis in background (non-blocking)."""
+        if self.is_analyzing:
+            return {"status": "already_running"}
+
+        # Cancel previous task if exists
+        if self._analysis_task and not self._analysis_task.done():
+            self._analysis_task.cancel()
+
+        self._analysis_task = asyncio.create_task(self.run_analysis(send_email=send_email))
+        return {"status": "started"}
+
+    async def run_analysis(self, send_email: bool = True) -> Dict:
+        """Run the EOD analysis and optionally send email summary."""
         import yfinance as yf
-        
-        print(f"[EOD] Starting analysis at {now_turkey().strftime('%H:%M:%S')}")
-        
-        # Dynamically fetch BIST tickers from yfinance
-        tickers = await self._get_dynamic_tickers()
-        
-        results = []
-        errors = []
-        
-        def analyze_ticker(ticker: str) -> Optional[Dict]:
-            try:
-                stock = yf.Ticker(ticker)
-                hist = stock.history(period="30d", interval="1d")
-                
-                if hist.empty or len(hist) < 5:
-                    return None
-                
-                today = hist.iloc[-1]
-                today_open = today["Open"]
-                today_close = today["Close"]
-                today_high = today["High"]
-                today_low = today["Low"]
-                today_volume = today["Volume"]
-                
-                # Get previous day's close for proper change calculation
-                prev_close = hist["Close"].iloc[-2] if len(hist) > 1 else today_open
-                
-                # Calculate daily change % (previous close → current close, like TradingView)
-                if prev_close > 0:
-                    daily_change = ((today_close - prev_close) / prev_close) * 100
-                else:
-                    daily_change = 0
-                
-                # Calculate average volume (last 10 days, excluding today)
-                vol_data = hist["Volume"].iloc[-11:-1] if len(hist) > 10 else hist["Volume"].iloc[:-1]
-                avg_volume = vol_data.mean() if len(vol_data) > 0 else today_volume
-                relative_volume = today_volume / avg_volume if avg_volume > 0 else 0
-                
-                # Calculate volume in TL (approximate)
-                volume_tl = today_volume * today_close
-                
-                return {
-                    "ticker": ticker,
-                    "symbol": ticker.replace(".IS", ""),
-                    "close": round(today_close, 2),
-                    "open": round(today_open, 2),
-                    "high": round(today_high, 2),
-                    "low": round(today_low, 2),
-                    "prev_close": round(prev_close, 2),
-                    "change_percent": round(daily_change, 2),
-                    "volume": int(today_volume),
-                    "avg_volume": int(avg_volume),
-                    "relative_volume": round(relative_volume, 2),
-                    "volume_tl": round(volume_tl, 0),
-                }
-            except Exception as e:
-                return {"ticker": ticker, "error": str(e)}
-        
-        # Run analysis in parallel
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(analyze_ticker, t): t for t in tickers}
-            
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    if "error" in result:
-                        errors.append(result)
+
+        if self.is_analyzing:
+            return {
+                "count": len(self.last_results),
+                "total_scanned": self.total_scanned,
+                "results": self.last_results,
+                "status": "already_running"
+            }
+
+        self.is_analyzing = True
+        await self._broadcast_status()  # Notify clients analysis started
+        try:
+            print(f"[EOD] Starting analysis at {now_turkey().strftime('%H:%M:%S')}")
+
+            # Dynamically fetch BIST tickers from yfinance
+            tickers = await self._get_dynamic_tickers()
+
+            results = []
+            errors = []
+
+            def analyze_ticker(ticker: str) -> Optional[Dict]:
+                try:
+                    stock = yf.Ticker(ticker)
+                    hist = stock.history(period="30d", interval="1d")
+
+                    if hist.empty or len(hist) < 5:
+                        return None
+
+                    today = hist.iloc[-1]
+                    today_open = today["Open"]
+                    today_close = today["Close"]
+                    today_high = today["High"]
+                    today_low = today["Low"]
+                    today_volume = today["Volume"]
+
+                    # Get previous day's close for proper change calculation
+                    prev_close = hist["Close"].iloc[-2] if len(hist) > 1 else today_open
+
+                    # Calculate daily change % (previous close → current close, like TradingView)
+                    if prev_close > 0:
+                        daily_change = ((today_close - prev_close) / prev_close) * 100
                     else:
-                        # Apply filters
-                        if (result["change_percent"] >= self.filters["min_change"] and
-                            result["relative_volume"] >= self.filters["min_relative_volume"] and
-                            result["volume"] >= self.filters["min_volume"]):
-                            results.append(result)
-        
-        # Sort by change_percent descending
-        results.sort(key=lambda x: x["change_percent"], reverse=True)
-        
-        self.last_run_at = now_turkey()
-        self.last_results = results
-        
-        print(f"[EOD] Analysis complete: {len(results)} stocks found from {len(tickers)} scanned")
-        
-        # Send email summary
-        await self._send_email_summary(results, len(tickers), len(errors))
-        
-        return {
-            "count": len(results),
-            "total_scanned": len(tickers),
-            "results": results,
-        }
+                        daily_change = 0
+
+                    # Calculate average volume (last 10 days, excluding today)
+                    vol_data = hist["Volume"].iloc[-11:-1] if len(hist) > 10 else hist["Volume"].iloc[:-1]
+                    avg_volume = vol_data.mean() if len(vol_data) > 0 else today_volume
+                    relative_volume = today_volume / avg_volume if avg_volume > 0 else 0
+
+                    # Calculate volume in TL (approximate)
+                    volume_tl = today_volume * today_close
+
+                    return {
+                        "ticker": ticker,
+                        "symbol": ticker.replace(".IS", ""),
+                        "close": round(today_close, 2),
+                        "open": round(today_open, 2),
+                        "high": round(today_high, 2),
+                        "low": round(today_low, 2),
+                        "prev_close": round(prev_close, 2),
+                        "change_percent": round(daily_change, 2),
+                        "volume": int(today_volume),
+                        "avg_volume": int(avg_volume),
+                        "relative_volume": round(relative_volume, 2),
+                        "volume_tl": round(volume_tl, 0),
+                    }
+                except Exception as e:
+                    return {"ticker": ticker, "error": str(e)}
+
+            # Run analysis in parallel
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = {executor.submit(analyze_ticker, t): t for t in tickers}
+
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        if "error" in result:
+                            errors.append(result)
+                        else:
+                            # Apply filters
+                            if (result["change_percent"] >= self.filters["min_change"] and
+                                result["relative_volume"] >= self.filters["min_relative_volume"] and
+                                result["volume"] >= self.filters["min_volume"]):
+                                results.append(result)
+
+            # Sort by change_percent descending
+            results.sort(key=lambda x: x["change_percent"], reverse=True)
+
+            self.last_run_at = now_turkey()
+            self.last_results = results
+            self.total_scanned = len(tickers)
+
+            print(f"[EOD] Analysis complete: {len(results)} stocks found from {len(tickers)} scanned")
+
+            # Send email summary (only if enabled)
+            if send_email:
+                await self._send_email_summary(results, len(tickers), len(errors))
+
+            return {
+                "count": len(results),
+                "total_scanned": len(tickers),
+                "results": results,
+                "status": "completed"
+            }
+        except Exception as e:
+            print(f"[EOD] Analysis error: {e}")
+            return {
+                "count": 0,
+                "total_scanned": 0,
+                "results": [],
+                "status": "error",
+                "error": str(e)
+            }
+        finally:
+            self.is_analyzing = False
+            await self._broadcast_status()  # Notify clients analysis finished
 
     async def _get_dynamic_tickers(self) -> List[str]:
         """

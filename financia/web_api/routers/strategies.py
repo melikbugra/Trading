@@ -862,53 +862,47 @@ async def get_chart_data(
 # ============= End of Day Analysis Endpoints =============
 
 
-@router.get("/eod-analysis")
-async def get_eod_analysis(
+@router.post("/eod-analysis/start")
+async def start_eod_analysis(
     min_change: float = 0.0,
-    min_relative_volume: float = 2.0,
-    min_volume: float = 100_000_000,
+    min_relative_volume: float = 1.5,
+    min_volume: float = 50_000_000,
 ):
     """
-    Run end-of-day analysis on all BIST stocks.
-
-    Filters:
-    - min_change: Minimum daily % change (default 0 = positive close)
-    - min_relative_volume: Minimum relative volume (default 2.0)
-    - min_volume: Minimum daily volume in lots (default 100M lots)
-
-    Returns list of stocks meeting criteria with their metrics.
+    Start end-of-day analysis asynchronously (non-blocking).
+    Use GET /eod-analysis/status to check progress and results.
     """
     from financia.eod_service import eod_service
-    
+
     # Update filters
     eod_service.filters = {
         "min_change": min_change,
         "min_relative_volume": min_relative_volume,
         "min_volume": min_volume,
     }
-    
-    # Run analysis
-    result = await eod_service.run_analysis()
-    
+
+    # Start analysis in background
+    result = await eod_service.start_analysis(send_email=False)
+
     return {
-        "count": result["count"],
-        "total_scanned": result["total_scanned"],
+        "status": result["status"],
         "filters": eod_service.filters,
-        "results": result["results"],
     }
 
 
 @router.get("/eod-analysis/status")
 async def get_eod_status():
-    """Get EOD analysis scheduler status and last results."""
+    """Get EOD analysis scheduler status, progress, and last results."""
     from financia.eod_service import eod_service
-    
+
     return {
         "is_running": eod_service.is_running,
+        "is_analyzing": eod_service.is_analyzing,
         "last_run_at": eod_service.last_run_at.isoformat() if eod_service.last_run_at else None,
         "schedule_time": f"{eod_service.run_hour:02d}:{eod_service.run_minute:02d}",
         "filters": eod_service.filters,
+        "total_scanned": eod_service.total_scanned,
         "last_results_count": len(eod_service.last_results),
-        "last_results": eod_service.last_results,  # Include actual results
+        "last_results": eod_service.last_results,
     }
 

@@ -1,11 +1,13 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import ChartModal from './ChartModal';
 import { useToast } from '../contexts/ToastContext';
+import { useWebSocket } from '../contexts/WebSocketContext';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export default function EODAnalysisPanel({ strategies }) {
     const { addToast } = useToast();
+    const { eodStatus } = useWebSocket();
     const [results, setResults] = useState([]);
     const [loading, setLoading] = useState(false);
     const [lastRun, setLastRun] = useState(null);
@@ -15,6 +17,7 @@ export default function EODAnalysisPanel({ strategies }) {
     const [chartModal, setChartModal] = useState(null);
     const [addToStrategyModal, setAddToStrategyModal] = useState(null);
     const [addingToStrategy, setAddingToStrategy] = useState(false);
+    const prevAnalyzingRef = useRef(false);
 
     // Filters
     const [filters, setFilters] = useState({
@@ -23,32 +26,69 @@ export default function EODAnalysisPanel({ strategies }) {
         min_volume: 50000000,
     });
 
-    // Load last results when component mounts
+    // Load last results on mount
     useEffect(() => {
-        const loadLastResults = async () => {
+        const loadInitialStatus = async () => {
             try {
                 const res = await fetch(`${API_BASE}/strategies/eod-analysis/status`);
                 if (res.ok) {
                     const data = await res.json();
+
+                    // If analysis is running, set loading state
+                    if (data.is_analyzing) {
+                        setLoading(true);
+                        prevAnalyzingRef.current = true;
+                    }
+
+                    // Load previous results if available
                     if (data.last_results && data.last_results.length > 0) {
                         setResults(data.last_results);
-                        setStats({ count: data.last_results.length, total_scanned: data.last_results_count });
+                        setStats({ count: data.last_results_count, total_scanned: data.total_scanned });
                         if (data.last_run_at) {
                             setLastRun(new Date(data.last_run_at));
                         }
                     }
                 }
             } catch (err) {
-                console.error('Failed to load last EOD results:', err);
+                console.error('Failed to load EOD status:', err);
             }
         };
-        loadLastResults();
+        loadInitialStatus();
     }, []);
 
+    // Handle WebSocket updates for EOD status
+    useEffect(() => {
+        if (!eodStatus) return;
+
+        // Update loading state from WebSocket
+        setLoading(eodStatus.is_analyzing);
+
+        // Check if analysis just completed (was analyzing, now not)
+        if (prevAnalyzingRef.current && !eodStatus.is_analyzing) {
+            // Analysis just completed
+            if (eodStatus.results && eodStatus.results.length > 0) {
+                setResults(eodStatus.results);
+                setStats({ count: eodStatus.results_count, total_scanned: eodStatus.total_scanned });
+                if (eodStatus.last_run_at) {
+                    setLastRun(new Date(eodStatus.last_run_at));
+                }
+                addToast(`Analiz tamamlandı: ${eodStatus.results_count} hisse bulundu`, 'success');
+            } else {
+                addToast('Analiz tamamlandı: Sonuç bulunamadı', 'info');
+            }
+        }
+
+        // Update ref for next comparison
+        prevAnalyzingRef.current = eodStatus.is_analyzing;
+    }, [eodStatus, addToast]);
+
     const runAnalysis = useCallback(async () => {
+        if (loading) return; // Already running
+
         setLoading(true);
         setResults([]);  // Clear old results
         setStats({ count: 0, total_scanned: 0 });  // Reset stats
+
         try {
             const params = new URLSearchParams({
                 min_change: filters.min_change,
@@ -56,23 +96,29 @@ export default function EODAnalysisPanel({ strategies }) {
                 min_volume: filters.min_volume,
             });
 
-            const res = await fetch(`${API_BASE}/strategies/eod-analysis?${params}`);
+            // Start analysis asynchronously
+            const res = await fetch(`${API_BASE}/strategies/eod-analysis/start?${params}`, {
+                method: 'POST',
+            });
+
             if (res.ok) {
                 const data = await res.json();
-                setResults(data.results);
-                setStats({ count: data.count, total_scanned: data.total_scanned });
-                setLastRun(new Date());
-                addToast(`Analiz tamamlandı: ${data.count} hisse bulundu`, 'success');
+                if (data.status === 'already_running') {
+                    addToast('Analiz zaten çalışıyor...', 'info');
+                } else {
+                    addToast('Analiz başlatıldı...', 'info');
+                }
+                // WebSocket will handle the rest
             } else {
-                addToast('Analiz başarısız', 'error');
+                addToast('Analiz başlatılamadı', 'error');
+                setLoading(false);
             }
         } catch (err) {
-            console.error('Failed to run EOD analysis:', err);
+            console.error('Failed to start EOD analysis:', err);
             addToast('Bağlantı hatası', 'error');
-        } finally {
             setLoading(false);
         }
-    }, [filters, addToast]);
+    }, [filters, loading, addToast]);
 
     const handleSort = (field) => {
         if (sortBy === field) {
@@ -161,12 +207,17 @@ export default function EODAnalysisPanel({ strategies }) {
                     <button
                         onClick={runAnalysis}
                         disabled={loading}
-                        className="px-4 sm:px-6 py-2 sm:py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white font-bold rounded-lg transition-colors flex items-center gap-2 text-sm sm:text-base"
+                        className={`px-4 sm:px-6 py-2 sm:py-3 font-bold rounded-lg transition-all flex items-center gap-2 text-sm sm:text-base ${
+                            loading
+                                ? 'bg-yellow-600 text-white cursor-wait'
+                                : 'bg-purple-600 hover:bg-purple-500 text-white'
+                        }`}
                     >
                         {loading ? (
                             <>
-                                <span className="animate-spin">⏳</span>
+                                <span className="animate-spin">🔄</span>
                                 <span className="hidden sm:inline">Taranıyor...</span>
+                                <span className="sm:hidden">...</span>
                             </>
                         ) : (
                             <>
