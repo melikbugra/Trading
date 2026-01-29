@@ -8,25 +8,41 @@ const API_BASE = import.meta.env.VITE_API_BASE || '';
 export default function EODAnalysisPanel({ strategies }) {
     const { addToast } = useToast();
     const { eodStatus } = useWebSocket();
-    const [results, setResults] = useState([]);
-    const [loading, setLoading] = useState(false);
-    const [lastRun, setLastRun] = useState(null);
-    const [stats, setStats] = useState({ count: 0, total_scanned: 0 });
-    const [sortBy, setSortBy] = useState('change_percent'); // change_percent, relative_volume, volume_tl
-    const [sortDir, setSortDir] = useState('desc');
-    const [chartModal, setChartModal] = useState(null);
-    const [addToStrategyModal, setAddToStrategyModal] = useState(null);
-    const [addingToStrategy, setAddingToStrategy] = useState(false);
-    const prevAnalyzingRef = useRef(false);
 
-    // Filters
-    const [filters, setFilters] = useState({
+    // Tab state
+    const [activeTab, setActiveTab] = useState('volume'); // 'volume' or 'trend'
+
+    // Volume analysis state
+    const [volumeResults, setVolumeResults] = useState([]);
+    const [volumeLoading, setVolumeLoading] = useState(false);
+    const [volumeStats, setVolumeStats] = useState({ count: 0, total_scanned: 0 });
+    const [volumeSortBy, setVolumeSortBy] = useState('change_percent');
+    const [volumeSortDir, setVolumeSortDir] = useState('desc');
+    const [volumeFilters, setVolumeFilters] = useState({
         min_change: 0,
         min_relative_volume: 1.5,
         min_volume: 50000000,
     });
 
-    // Load last results on mount
+    // Trend analysis state
+    const [trendResults, setTrendResults] = useState([]);
+    const [trendLoading, setTrendLoading] = useState(false);
+    const [trendStats, setTrendStats] = useState({ count: 0, total_scanned: 0 });
+    const [trendSortBy, setTrendSortBy] = useState('trend_score');
+    const [trendSortDir, setTrendSortDir] = useState('desc');
+    const [trendFilters, setTrendFilters] = useState({
+        min_trend_score: 60,
+        min_volume_tl: 50000000,
+    });
+
+    // Common state
+    const [lastRun, setLastRun] = useState(null);
+    const [chartModal, setChartModal] = useState(null);
+    const [addToStrategyModal, setAddToStrategyModal] = useState(null);
+    const [addingToStrategy, setAddingToStrategy] = useState(false);
+    const prevAnalyzingRef = useRef(false);
+
+    // Load initial status on mount
     useEffect(() => {
         const loadInitialStatus = async () => {
             try {
@@ -34,19 +50,26 @@ export default function EODAnalysisPanel({ strategies }) {
                 if (res.ok) {
                     const data = await res.json();
 
-                    // If analysis is running, set loading state
                     if (data.is_analyzing) {
-                        setLoading(true);
+                        setVolumeLoading(true);
+                        setTrendLoading(true);
                         prevAnalyzingRef.current = true;
                     }
 
-                    // Load previous results if available
+                    // Load volume results
                     if (data.last_results && data.last_results.length > 0) {
-                        setResults(data.last_results);
-                        setStats({ count: data.last_results_count, total_scanned: data.total_scanned });
-                        if (data.last_run_at) {
-                            setLastRun(new Date(data.last_run_at));
-                        }
+                        setVolumeResults(data.last_results);
+                        setVolumeStats({ count: data.last_results_count, total_scanned: data.total_scanned });
+                    }
+
+                    // Load trend results
+                    if (data.trend_results && data.trend_results.length > 0) {
+                        setTrendResults(data.trend_results);
+                        setTrendStats({ count: data.trend_results_count, total_scanned: data.total_scanned });
+                    }
+
+                    if (data.last_run_at) {
+                        setLastRun(new Date(data.last_run_at));
                     }
                 }
             } catch (err) {
@@ -56,47 +79,48 @@ export default function EODAnalysisPanel({ strategies }) {
         loadInitialStatus();
     }, []);
 
-    // Handle WebSocket updates for EOD status
+    // Handle WebSocket updates
     useEffect(() => {
         if (!eodStatus) return;
 
-        // Update loading state from WebSocket
-        setLoading(eodStatus.is_analyzing);
+        setVolumeLoading(eodStatus.is_analyzing);
+        setTrendLoading(eodStatus.is_analyzing);
 
-        // Check if analysis just completed (was analyzing, now not)
         if (prevAnalyzingRef.current && !eodStatus.is_analyzing) {
-            // Analysis just completed
+            // Volume results
             if (eodStatus.results && eodStatus.results.length > 0) {
-                setResults(eodStatus.results);
-                setStats({ count: eodStatus.results_count, total_scanned: eodStatus.total_scanned });
-                if (eodStatus.last_run_at) {
-                    setLastRun(new Date(eodStatus.last_run_at));
-                }
-                addToast(`Analiz tamamlandı: ${eodStatus.results_count} hisse bulundu`, 'success');
-            } else {
-                addToast('Analiz tamamlandı: Sonuç bulunamadı', 'info');
+                setVolumeResults(eodStatus.results);
+                setVolumeStats({ count: eodStatus.results_count, total_scanned: eodStatus.total_scanned });
             }
+            // Trend results
+            if (eodStatus.trend_results && eodStatus.trend_results.length > 0) {
+                setTrendResults(eodStatus.trend_results);
+                setTrendStats({ count: eodStatus.trend_results_count, total_scanned: eodStatus.total_scanned });
+            }
+            if (eodStatus.last_run_at) {
+                setLastRun(new Date(eodStatus.last_run_at));
+            }
+            addToast('Analiz tamamlandı', 'success');
         }
 
-        // Update ref for next comparison
         prevAnalyzingRef.current = eodStatus.is_analyzing;
     }, [eodStatus, addToast]);
 
-    const runAnalysis = useCallback(async () => {
-        if (loading) return; // Already running
+    // Run Volume Analysis
+    const runVolumeAnalysis = useCallback(async () => {
+        if (volumeLoading) return;
 
-        setLoading(true);
-        setResults([]);  // Clear old results
-        setStats({ count: 0, total_scanned: 0 });  // Reset stats
+        setVolumeLoading(true);
+        setVolumeResults([]);
+        setVolumeStats({ count: 0, total_scanned: 0 });
 
         try {
             const params = new URLSearchParams({
-                min_change: filters.min_change,
-                min_relative_volume: filters.min_relative_volume,
-                min_volume: filters.min_volume,
+                min_change: volumeFilters.min_change,
+                min_relative_volume: volumeFilters.min_relative_volume,
+                min_volume: volumeFilters.min_volume,
             });
 
-            // Start analysis asynchronously
             const res = await fetch(`${API_BASE}/strategies/eod-analysis/start?${params}`, {
                 method: 'POST',
             });
@@ -106,40 +130,90 @@ export default function EODAnalysisPanel({ strategies }) {
                 if (data.status === 'already_running') {
                     addToast('Analiz zaten çalışıyor...', 'info');
                 } else {
-                    addToast('Analiz başlatıldı...', 'info');
+                    addToast('Hacim analizi başlatıldı...', 'info');
                 }
-                // WebSocket will handle the rest
             } else {
                 addToast('Analiz başlatılamadı', 'error');
-                setLoading(false);
+                setVolumeLoading(false);
             }
         } catch (err) {
-            console.error('Failed to start EOD analysis:', err);
+            console.error('Failed to start volume analysis:', err);
             addToast('Bağlantı hatası', 'error');
-            setLoading(false);
+            setVolumeLoading(false);
         }
-    }, [filters, loading, addToast]);
+    }, [volumeFilters, volumeLoading, addToast]);
 
-    const handleSort = (field) => {
-        if (sortBy === field) {
-            setSortDir(sortDir === 'desc' ? 'asc' : 'desc');
+    // Run Trend Analysis
+    const runTrendAnalysis = useCallback(async () => {
+        if (trendLoading) return;
+
+        setTrendLoading(true);
+        setTrendResults([]);
+        setTrendStats({ count: 0, total_scanned: 0 });
+
+        try {
+            const params = new URLSearchParams({
+                min_trend_score: trendFilters.min_trend_score,
+                min_volume_tl: trendFilters.min_volume_tl,
+            });
+
+            const res = await fetch(`${API_BASE}/strategies/trend-analysis/start?${params}`, {
+                method: 'POST',
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.status === 'already_running') {
+                    addToast('Analiz zaten çalışıyor...', 'info');
+                } else {
+                    addToast('Trend analizi başlatıldı...', 'info');
+                }
+            } else {
+                addToast('Analiz başlatılamadı', 'error');
+                setTrendLoading(false);
+            }
+        } catch (err) {
+            console.error('Failed to start trend analysis:', err);
+            addToast('Bağlantı hatası', 'error');
+            setTrendLoading(false);
+        }
+    }, [trendFilters, trendLoading, addToast]);
+
+    // Sorting handlers
+    const handleVolumeSort = (field) => {
+        if (volumeSortBy === field) {
+            setVolumeSortDir(volumeSortDir === 'desc' ? 'asc' : 'desc');
         } else {
-            setSortBy(field);
-            setSortDir('desc');
+            setVolumeSortBy(field);
+            setVolumeSortDir('desc');
         }
     };
 
-    const sortedResults = [...results].sort((a, b) => {
-        const aVal = a[sortBy];
-        const bVal = b[sortBy];
-        return sortDir === 'desc' ? bVal - aVal : aVal - bVal;
+    const handleTrendSort = (field) => {
+        if (trendSortBy === field) {
+            setTrendSortDir(trendSortDir === 'desc' ? 'asc' : 'desc');
+        } else {
+            setTrendSortBy(field);
+            setTrendSortDir('desc');
+        }
+    };
+
+    // Sorted results
+    const sortedVolumeResults = [...volumeResults].sort((a, b) => {
+        const aVal = a[volumeSortBy];
+        const bVal = b[volumeSortBy];
+        return volumeSortDir === 'desc' ? bVal - aVal : aVal - bVal;
     });
 
+    const sortedTrendResults = [...trendResults].sort((a, b) => {
+        const aVal = a[trendSortBy];
+        const bVal = b[trendSortBy];
+        return trendSortDir === 'desc' ? bVal - aVal : aVal - bVal;
+    });
+
+    // Helpers
     const openChartModal = (result) => {
-        setChartModal({
-            ticker: result.ticker,
-            market: 'bist100',
-        });
+        setChartModal({ ticker: result.ticker, market: 'bist100' });
     };
 
     const openAddToStrategyModal = (result) => {
@@ -183,175 +257,414 @@ export default function EODAnalysisPanel({ strategies }) {
         return vol.toString();
     };
 
-    const SortIcon = ({ field }) => {
-        if (sortBy !== field) return <span className="text-gray-600">↕</span>;
-        return sortDir === 'desc' ? <span className="text-blue-400">↓</span> : <span className="text-blue-400">↑</span>;
+    const SortIcon = ({ field, currentSort, currentDir }) => {
+        if (currentSort !== field) return <span className="text-gray-600">↕</span>;
+        return currentDir === 'desc' ? <span className="text-blue-400">↓</span> : <span className="text-blue-400">↑</span>;
+    };
+
+    const getScoreColor = (score) => {
+        if (score >= 80) return 'text-green-400';
+        if (score >= 60) return 'text-blue-400';
+        if (score >= 40) return 'text-yellow-400';
+        return 'text-red-400';
+    };
+
+    const getDirectionEmoji = (direction) => {
+        if (direction === 'bullish') return '🟢';
+        if (direction === 'neutral') return '🟡';
+        return '🔴';
     };
 
     return (
         <div>
-            {/* Header with Run Button */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 sm:mb-6">
+            {/* Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
                 <div>
                     <h2 className="text-lg sm:text-xl font-bold text-white">Gün Sonu Analizi</h2>
                     <p className="text-gray-500 text-xs sm:text-sm">
-                        BIST hisselerini filtreleyin
+                        {lastRun ? `Son: ${lastRun.toLocaleTimeString('tr-TR')}` : 'BIST hisselerini analiz edin'}
                     </p>
                 </div>
-                <div className="flex items-center gap-2 sm:gap-4">
-                    {lastRun && (
-                        <span className="text-gray-500 text-xs sm:text-sm hidden sm:inline">
-                            Son: {lastRun.toLocaleTimeString('tr-TR')}
+            </div>
+
+            {/* Tab Buttons */}
+            <div className="flex gap-2 mb-4 border-b border-gray-800 pb-2">
+                <button
+                    onClick={() => setActiveTab('volume')}
+                    className={`px-4 py-2 rounded-t-lg font-medium transition-colors ${
+                        activeTab === 'volume'
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                    }`}
+                >
+                    📊 Hacim Analizi
+                    {volumeResults.length > 0 && (
+                        <span className="ml-2 text-xs bg-purple-800 px-2 py-0.5 rounded">
+                            {volumeResults.length}
                         </span>
                     )}
-                    <button
-                        onClick={runAnalysis}
-                        disabled={loading}
-                        className={`px-4 sm:px-6 py-2 sm:py-3 font-bold rounded-lg transition-all flex items-center gap-2 text-sm sm:text-base ${
-                            loading
-                                ? 'bg-yellow-600 text-white cursor-wait'
-                                : 'bg-purple-600 hover:bg-purple-500 text-white'
-                        }`}
-                    >
-                        {loading ? (
-                            <>
-                                <span className="animate-spin">🔄</span>
-                                <span className="hidden sm:inline">Taranıyor...</span>
-                                <span className="sm:hidden">...</span>
-                            </>
-                        ) : (
-                            <>
-                                🔍 <span className="hidden sm:inline">Analizi </span>Çalıştır
-                            </>
-                        )}
-                    </button>
-                </div>
+                </button>
+                <button
+                    onClick={() => setActiveTab('trend')}
+                    className={`px-4 py-2 rounded-t-lg font-medium transition-colors ${
+                        activeTab === 'trend'
+                            ? 'bg-green-600 text-white'
+                            : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                    }`}
+                >
+                    🎯 Trend Tahmini
+                    {trendResults.length > 0 && (
+                        <span className="ml-2 text-xs bg-green-800 px-2 py-0.5 rounded">
+                            {trendResults.length}
+                        </span>
+                    )}
+                </button>
             </div>
 
-            {/* Filters */}
-            <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-3 sm:p-4 mb-4 sm:mb-6">
-                <h3 className="text-xs sm:text-sm font-bold text-gray-400 mb-2 sm:mb-3">Filtreler</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
-                    <div>
-                        <label className="block text-gray-500 text-xs mb-1">Min. Değişim (%)</label>
-                        <input
-                            type="number"
-                            step="0.1"
-                            value={filters.min_change}
-                            onChange={(e) => setFilters({ ...filters, min_change: parseFloat(e.target.value) || 0 })}
-                            className="w-full px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-800 border border-gray-700 rounded text-white font-mono text-sm focus:border-purple-500 focus:outline-none"
-                        />
+            {/* Volume Analysis Tab */}
+            {activeTab === 'volume' && (
+                <div>
+                    {/* Filters */}
+                    <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-3 sm:p-4 mb-4">
+                        <div className="flex flex-col sm:flex-row sm:items-end gap-3 sm:gap-4">
+                            <div className="flex-1 grid grid-cols-3 gap-3">
+                                <div>
+                                    <label className="block text-gray-500 text-xs mb-1">Min. Değişim (%)</label>
+                                    <input
+                                        type="number"
+                                        step="0.1"
+                                        value={volumeFilters.min_change}
+                                        onChange={(e) => setVolumeFilters({ ...volumeFilters, min_change: parseFloat(e.target.value) || 0 })}
+                                        className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-white font-mono text-sm focus:border-purple-500 focus:outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-500 text-xs mb-1">Min. Bağıl Hacim</label>
+                                    <input
+                                        type="number"
+                                        step="0.1"
+                                        value={volumeFilters.min_relative_volume}
+                                        onChange={(e) => setVolumeFilters({ ...volumeFilters, min_relative_volume: parseFloat(e.target.value) || 0 })}
+                                        className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-white font-mono text-sm focus:border-purple-500 focus:outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-500 text-xs mb-1">Min. Hacim</label>
+                                    <input
+                                        type="number"
+                                        step="1000000"
+                                        value={volumeFilters.min_volume}
+                                        onChange={(e) => setVolumeFilters({ ...volumeFilters, min_volume: parseFloat(e.target.value) || 0 })}
+                                        className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-white font-mono text-sm focus:border-purple-500 focus:outline-none"
+                                    />
+                                </div>
+                            </div>
+                            <button
+                                onClick={runVolumeAnalysis}
+                                disabled={volumeLoading}
+                                className={`px-4 py-2 font-bold rounded-lg transition-all flex items-center gap-2 text-sm whitespace-nowrap ${
+                                    volumeLoading
+                                        ? 'bg-yellow-600 text-white cursor-wait'
+                                        : 'bg-purple-600 hover:bg-purple-500 text-white'
+                                }`}
+                            >
+                                {volumeLoading ? (
+                                    <><span className="animate-spin">🔄</span> Taranıyor...</>
+                                ) : (
+                                    <>🔍 Analiz Et</>
+                                )}
+                            </button>
+                        </div>
                     </div>
-                    <div>
-                        <label className="block text-gray-500 text-xs mb-1">Min. Bağıl Hacim</label>
-                        <input
-                            type="number"
-                            step="0.1"
-                            value={filters.min_relative_volume}
-                            onChange={(e) => setFilters({ ...filters, min_relative_volume: parseFloat(e.target.value) || 0 })}
-                            className="w-full px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-800 border border-gray-700 rounded text-white font-mono text-sm focus:border-purple-500 focus:outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-gray-500 text-xs mb-1">Min. Hacim ({formatVolume(filters.min_volume)})</label>
-                        <input
-                            type="number"
-                            step="1000000"
-                            value={filters.min_volume}
-                            onChange={(e) => setFilters({ ...filters, min_volume: parseFloat(e.target.value) || 0 })}
-                            className="w-full px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-800 border border-gray-700 rounded text-white font-mono text-sm focus:border-purple-500 focus:outline-none"
-                        />
-                    </div>
-                </div>
-            </div>
 
-            {/* Stats */}
-            {stats.count > 0 && (
-                <div className="flex gap-2 sm:gap-4 mb-3 sm:mb-4 text-xs sm:text-sm">
-                    <span className="text-green-400">{stats.count} hisse bulundu</span>
-                    <span className="text-gray-500">/ {stats.total_scanned} taranan</span>
+                    {/* Stats */}
+                    {volumeStats.count > 0 && (
+                        <div className="flex gap-2 mb-3 text-xs sm:text-sm">
+                            <span className="text-green-400">{volumeStats.count} hisse bulundu</span>
+                            <span className="text-gray-500">/ {volumeStats.total_scanned} taranan</span>
+                        </div>
+                    )}
+
+                    {/* Results Table */}
+                    {volumeResults.length === 0 ? (
+                        <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-8 text-center">
+                            <div className="text-3xl mb-3">📊</div>
+                            <div className="text-gray-400">Henüz analiz çalıştırılmadı</div>
+                        </div>
+                    ) : (
+                        <div className="bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden">
+                            <div className="overflow-x-auto">
+                                <table className="w-full min-w-[500px]">
+                                    <thead className="bg-gray-800/50">
+                                        <tr>
+                                            <th className="text-left px-3 py-2 text-gray-400 text-xs font-medium">Sembol</th>
+                                            <th className="text-right px-3 py-2 text-gray-400 text-xs font-medium">Kapanış</th>
+                                            <th
+                                                className="text-right px-3 py-2 text-gray-400 text-xs font-medium cursor-pointer hover:text-white"
+                                                onClick={() => handleVolumeSort('change_percent')}
+                                            >
+                                                Değişim <SortIcon field="change_percent" currentSort={volumeSortBy} currentDir={volumeSortDir} />
+                                            </th>
+                                            <th
+                                                className="text-right px-3 py-2 text-gray-400 text-xs font-medium cursor-pointer hover:text-white"
+                                                onClick={() => handleVolumeSort('relative_volume')}
+                                            >
+                                                Bağıl Hacim <SortIcon field="relative_volume" currentSort={volumeSortBy} currentDir={volumeSortDir} />
+                                            </th>
+                                            <th
+                                                className="text-right px-3 py-2 text-gray-400 text-xs font-medium cursor-pointer hover:text-white hidden sm:table-cell"
+                                                onClick={() => handleVolumeSort('volume_tl')}
+                                            >
+                                                Hacim (TL) <SortIcon field="volume_tl" currentSort={volumeSortBy} currentDir={volumeSortDir} />
+                                            </th>
+                                            <th className="text-center px-3 py-2 text-gray-400 text-xs font-medium">+</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {sortedVolumeResults.map((result) => (
+                                            <tr key={result.ticker} className="border-t border-gray-800 hover:bg-gray-800/30">
+                                                <td className="px-3 py-2">
+                                                    <button
+                                                        onClick={() => openChartModal(result)}
+                                                        className="text-white font-mono font-bold hover:text-purple-400 transition-colors flex items-center gap-1 text-sm"
+                                                    >
+                                                        {result.symbol}
+                                                        <span className="text-xs text-gray-500">📊</span>
+                                                    </button>
+                                                </td>
+                                                <td className="px-3 py-2 text-right text-white font-mono text-sm">
+                                                    {result.close.toFixed(2)}
+                                                </td>
+                                                <td className="px-3 py-2 text-right">
+                                                    <span className={`font-bold text-sm ${result.change_percent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                        {result.change_percent >= 0 ? '+' : ''}{result.change_percent.toFixed(2)}%
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2 text-right">
+                                                    <span className={`font-mono text-sm ${result.relative_volume >= 3 ? 'text-yellow-400 font-bold' : result.relative_volume >= 2 ? 'text-blue-400' : 'text-gray-400'}`}>
+                                                        {result.relative_volume.toFixed(1)}x
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2 text-right text-gray-300 font-mono text-sm hidden sm:table-cell">
+                                                    {formatVolume(result.volume_tl || result.volume)}
+                                                </td>
+                                                <td className="px-3 py-2 text-center">
+                                                    <button
+                                                        onClick={() => openAddToStrategyModal(result)}
+                                                        className="px-2 py-1 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded text-xs transition-colors"
+                                                    >
+                                                        + Ekle
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
-            {/* Results Table */}
-            {results.length === 0 ? (
-                <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-8 sm:p-12 text-center">
-                    <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">📊</div>
-                    <div className="text-gray-400 text-sm sm:text-base">Henüz analiz çalıştırılmadı</div>
-                    <div className="text-gray-600 text-xs sm:text-sm mt-2">
-                        Yukarıdaki butona tıklayarak analizi başlatın
+            {/* Trend Analysis Tab */}
+            {activeTab === 'trend' && (
+                <div>
+                    {/* Filters */}
+                    <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-3 sm:p-4 mb-4">
+                        <div className="flex flex-col sm:flex-row sm:items-end gap-3 sm:gap-4">
+                            <div className="flex-1 grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-gray-500 text-xs mb-1">Min. Trend Skoru (0-100)</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="100"
+                                        value={trendFilters.min_trend_score}
+                                        onChange={(e) => setTrendFilters({ ...trendFilters, min_trend_score: parseInt(e.target.value) || 0 })}
+                                        className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-white font-mono text-sm focus:border-green-500 focus:outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-500 text-xs mb-1">Min. Hacim (TL)</label>
+                                    <input
+                                        type="number"
+                                        step="1000000"
+                                        value={trendFilters.min_volume_tl}
+                                        onChange={(e) => setTrendFilters({ ...trendFilters, min_volume_tl: parseFloat(e.target.value) || 0 })}
+                                        className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-white font-mono text-sm focus:border-green-500 focus:outline-none"
+                                    />
+                                </div>
+                            </div>
+                            <button
+                                onClick={runTrendAnalysis}
+                                disabled={trendLoading}
+                                className={`px-4 py-2 font-bold rounded-lg transition-all flex items-center gap-2 text-sm whitespace-nowrap ${
+                                    trendLoading
+                                        ? 'bg-yellow-600 text-white cursor-wait'
+                                        : 'bg-green-600 hover:bg-green-500 text-white'
+                                }`}
+                            >
+                                {trendLoading ? (
+                                    <><span className="animate-spin">🔄</span> Taranıyor...</>
+                                ) : (
+                                    <>🎯 Trend Analizi</>
+                                )}
+                            </button>
+                        </div>
+                        <p className="text-gray-600 text-xs mt-2">
+                            💡 Günlük mumlarla ertesi günün trend potansiyelini tahmin eder (RSI, MACD, EMA, ADX, Hacim, BB, Stochastic)
+                        </p>
                     </div>
-                </div>
-            ) : (
-                <div className="bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden">
-                    <div className="overflow-x-auto">
-                        <table className="w-full min-w-[500px]">
-                            <thead className="bg-gray-800/50">
-                                <tr>
-                                    <th className="text-left px-2 sm:px-4 py-2 sm:py-3 text-gray-400 text-xs sm:text-sm font-medium">Sembol</th>
-                                    <th className="text-right px-2 sm:px-4 py-2 sm:py-3 text-gray-400 text-xs sm:text-sm font-medium">Kapanış</th>
-                                    <th
-                                        className="text-right px-2 sm:px-4 py-2 sm:py-3 text-gray-400 text-xs sm:text-sm font-medium cursor-pointer hover:text-white"
-                                        onClick={() => handleSort('change_percent')}
-                                    >
-                                        Değişim <SortIcon field="change_percent" />
-                                    </th>
-                                    <th
-                                        className="text-right px-2 sm:px-4 py-2 sm:py-3 text-gray-400 text-xs sm:text-sm font-medium cursor-pointer hover:text-white"
-                                        onClick={() => handleSort('relative_volume')}
-                                    >
-                                        <span className="hidden sm:inline">Bağıl </span>Hacim <SortIcon field="relative_volume" />
-                                    </th>
-                                    <th
-                                        className="text-right px-2 sm:px-4 py-2 sm:py-3 text-gray-400 text-xs sm:text-sm font-medium cursor-pointer hover:text-white hidden sm:table-cell"
-                                        onClick={() => handleSort('volume')}
-                                    >
-                                        Lot <SortIcon field="volume" />
-                                    </th>
-                                    <th className="text-center px-2 sm:px-4 py-2 sm:py-3 text-gray-400 text-xs sm:text-sm font-medium">+</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {sortedResults.map((result, idx) => (
-                                    <tr key={result.ticker} className="border-t border-gray-800 hover:bg-gray-800/30">
-                                        <td className="px-2 sm:px-4 py-2 sm:py-3">
-                                            <button
-                                                onClick={() => openChartModal(result)}
-                                                className="text-white font-mono font-bold hover:text-purple-400 transition-colors flex items-center gap-1 sm:gap-2 text-xs sm:text-sm"
+
+                    {/* Stats */}
+                    {trendStats.count > 0 && (
+                        <div className="flex gap-2 mb-3 text-xs sm:text-sm">
+                            <span className="text-green-400">{trendStats.count} aday bulundu</span>
+                            <span className="text-gray-500">/ {trendStats.total_scanned} taranan</span>
+                        </div>
+                    )}
+
+                    {/* Results Table */}
+                    {trendResults.length === 0 ? (
+                        <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-8 text-center">
+                            <div className="text-3xl mb-3">🎯</div>
+                            <div className="text-gray-400">Henüz trend analizi çalıştırılmadı</div>
+                            <div className="text-gray-600 text-xs mt-2">
+                                Yarın için yüksek potansiyelli hisseleri bulmak için analizi başlatın
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden">
+                            <div className="overflow-x-auto">
+                                <table className="w-full min-w-[700px]">
+                                    <thead className="bg-gray-800/50">
+                                        <tr>
+                                            <th className="text-left px-3 py-2 text-gray-400 text-xs font-medium">Sembol</th>
+                                            <th
+                                                className="text-center px-3 py-2 text-gray-400 text-xs font-medium cursor-pointer hover:text-white"
+                                                onClick={() => handleTrendSort('trend_score')}
                                             >
-                                                {result.symbol}
-                                                <span className="text-xs text-gray-500">📊</span>
-                                            </button>
-                                        </td>
-                                        <td className="px-2 sm:px-4 py-2 sm:py-3 text-right text-white font-mono text-xs sm:text-sm">
-                                            {result.close.toFixed(2)}
-                                        </td>
-                                        <td className="px-2 sm:px-4 py-2 sm:py-3 text-right">
-                                            <span className={`font-bold text-xs sm:text-sm ${result.change_percent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                                {result.change_percent >= 0 ? '+' : ''}{result.change_percent.toFixed(2)}%
-                                            </span>
-                                        </td>
-                                        <td className="px-2 sm:px-4 py-2 sm:py-3 text-right">
-                                            <span className={`font-mono text-xs sm:text-sm ${result.relative_volume >= 3 ? 'text-yellow-400 font-bold' : result.relative_volume >= 2 ? 'text-blue-400' : 'text-gray-400'}`}>
-                                                {result.relative_volume.toFixed(1)}x
-                                            </span>
-                                        </td>
-                                        <td className="px-2 sm:px-4 py-2 sm:py-3 text-right text-gray-300 font-mono text-xs sm:text-sm hidden sm:table-cell">
-                                            {formatVolume(result.volume)}
-                                        </td>
-                                        <td className="px-2 sm:px-4 py-2 sm:py-3 text-center">
-                                            <button
-                                                onClick={() => openAddToStrategyModal(result)}
-                                                className="px-2 sm:px-3 py-1 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded text-xs sm:text-sm transition-colors"
+                                                Trend Skoru <SortIcon field="trend_score" currentSort={trendSortBy} currentDir={trendSortDir} />
+                                            </th>
+                                            <th className="text-center px-3 py-2 text-gray-400 text-xs font-medium">Yön</th>
+                                            <th className="text-right px-3 py-2 text-gray-400 text-xs font-medium">Kapanış</th>
+                                            <th
+                                                className="text-right px-3 py-2 text-gray-400 text-xs font-medium cursor-pointer hover:text-white"
+                                                onClick={() => handleTrendSort('change_percent')}
                                             >
-                                                +<span className="hidden sm:inline"> Ekle</span>
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                                                Günlük <SortIcon field="change_percent" currentSort={trendSortBy} currentDir={trendSortDir} />
+                                            </th>
+                                            <th
+                                                className="text-right px-3 py-2 text-gray-400 text-xs font-medium cursor-pointer hover:text-white"
+                                                onClick={() => handleTrendSort('five_day_change')}
+                                            >
+                                                5 Gün <SortIcon field="five_day_change" currentSort={trendSortBy} currentDir={trendSortDir} />
+                                            </th>
+                                            <th
+                                                className="text-right px-3 py-2 text-gray-400 text-xs font-medium cursor-pointer hover:text-white hidden md:table-cell"
+                                                onClick={() => handleTrendSort('rsi')}
+                                            >
+                                                RSI <SortIcon field="rsi" currentSort={trendSortBy} currentDir={trendSortDir} />
+                                            </th>
+                                            <th
+                                                className="text-right px-3 py-2 text-gray-400 text-xs font-medium cursor-pointer hover:text-white hidden md:table-cell"
+                                                onClick={() => handleTrendSort('adx')}
+                                            >
+                                                ADX <SortIcon field="adx" currentSort={trendSortBy} currentDir={trendSortDir} />
+                                            </th>
+                                            <th
+                                                className="text-right px-3 py-2 text-gray-400 text-xs font-medium cursor-pointer hover:text-white hidden lg:table-cell"
+                                                onClick={() => handleTrendSort('bb_position')}
+                                            >
+                                                BB% <SortIcon field="bb_position" currentSort={trendSortBy} currentDir={trendSortDir} />
+                                            </th>
+                                            <th className="text-center px-3 py-2 text-gray-400 text-xs font-medium">+</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {sortedTrendResults.map((result) => (
+                                            <tr key={result.ticker} className="border-t border-gray-800 hover:bg-gray-800/30">
+                                                <td className="px-3 py-2">
+                                                    <button
+                                                        onClick={() => openChartModal(result)}
+                                                        className="text-white font-mono font-bold hover:text-green-400 transition-colors flex items-center gap-1 text-sm"
+                                                    >
+                                                        {result.symbol}
+                                                        <span className="text-xs text-gray-500">📊</span>
+                                                    </button>
+                                                </td>
+                                                <td className="px-3 py-2 text-center">
+                                                    <div className="flex items-center justify-center gap-2">
+                                                        <div className="w-16 bg-gray-700 rounded-full h-2">
+                                                            <div
+                                                                className={`h-2 rounded-full ${result.trend_score >= 80 ? 'bg-green-500' : result.trend_score >= 60 ? 'bg-blue-500' : result.trend_score >= 40 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                                                                style={{ width: `${result.trend_score}%` }}
+                                                            />
+                                                        </div>
+                                                        <span className={`font-bold text-sm ${getScoreColor(result.trend_score)}`}>
+                                                            {result.trend_score}
+                                                        </span>
+                                                    </div>
+                                                </td>
+                                                <td className="px-3 py-2 text-center text-lg">
+                                                    {getDirectionEmoji(result.direction)}
+                                                </td>
+                                                <td className="px-3 py-2 text-right text-white font-mono text-sm">
+                                                    {result.close.toFixed(2)}
+                                                </td>
+                                                <td className="px-3 py-2 text-right">
+                                                    <span className={`font-bold text-sm ${result.change_percent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                        {result.change_percent >= 0 ? '+' : ''}{result.change_percent.toFixed(2)}%
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2 text-right">
+                                                    <span className={`text-sm ${result.five_day_change >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                        {result.five_day_change >= 0 ? '+' : ''}{result.five_day_change.toFixed(1)}%
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2 text-right hidden md:table-cell">
+                                                    <span className={`font-mono text-sm ${result.rsi < 30 ? 'text-green-400' : result.rsi > 70 ? 'text-red-400' : 'text-gray-400'}`}>
+                                                        {result.rsi.toFixed(0)}
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2 text-right hidden md:table-cell">
+                                                    <span className={`font-mono text-sm ${result.adx > 25 ? 'text-yellow-400' : 'text-gray-400'}`}>
+                                                        {result.adx.toFixed(0)}
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2 text-right hidden lg:table-cell">
+                                                    <span className={`font-mono text-sm ${result.bb_position < 30 ? 'text-green-400' : result.bb_position > 70 ? 'text-red-400' : 'text-gray-400'}`}>
+                                                        {result.bb_position}%
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2 text-center">
+                                                    <button
+                                                        onClick={() => openAddToStrategyModal(result)}
+                                                        className="px-2 py-1 bg-green-600/20 hover:bg-green-600/40 text-green-400 rounded text-xs transition-colors"
+                                                    >
+                                                        + Ekle
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Legend */}
+                    {trendResults.length > 0 && (
+                        <div className="mt-4 p-3 bg-gray-900/30 border border-gray-800 rounded-lg">
+                            <h4 className="text-xs font-bold text-gray-400 mb-2">📖 Göstergeler</h4>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-gray-500">
+                                <div><span className="text-green-400">RSI &lt;30</span> = Aşırı satım</div>
+                                <div><span className="text-yellow-400">ADX &gt;25</span> = Güçlü trend</div>
+                                <div><span className="text-green-400">BB &lt;30%</span> = Alt banda yakın</div>
+                                <div><span className="text-green-400">🟢</span> Bullish / <span className="text-yellow-400">🟡</span> Neutral / <span className="text-red-400">🔴</span> Bearish</div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -377,6 +690,11 @@ export default function EODAnalysisPanel({ strategies }) {
                                 <span className="font-bold text-white">{addToStrategyModal.symbol}</span>
                                 {' '}hangi stratejiye eklensin?
                             </div>
+                            {addToStrategyModal.trend_score && (
+                                <div className="text-sm text-gray-500">
+                                    Trend Skoru: <span className={getScoreColor(addToStrategyModal.trend_score)}>{addToStrategyModal.trend_score}</span>
+                                </div>
+                            )}
                         </div>
 
                         <div className="space-y-2 max-h-60 overflow-y-auto mb-4">
