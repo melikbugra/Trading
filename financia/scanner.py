@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 import pandas as pd
+import yfinance as yf
 
 from sqlalchemy.orm import Session
 
@@ -288,6 +289,12 @@ class ScannerService:
         # Evaluate strategy
         result = strategy.evaluate(data)
 
+        # Get real-time current price (independent of strategy timeframe)
+        # This ensures all signals show the same current price regardless of horizon
+        real_current_price = await self._get_realtime_price(item.ticker, item.market)
+        if real_current_price is not None:
+            result.current_price = real_current_price
+
         # Check for existing signal (including entered positions to avoid duplicates)
         existing_signal = (
             db.query(Signal)
@@ -301,6 +308,47 @@ class ScannerService:
 
         # Process result
         await self._process_result(db, item, strategy_db, result, existing_signal)
+
+    async def _get_realtime_price(self, ticker: str, market: str) -> Optional[float]:
+        """Get real-time price for a ticker, independent of strategy timeframe."""
+        loop = asyncio.get_event_loop()
+
+        def fetch_price():
+            try:
+                if market == "bist100":
+                    # Use yfinance for BIST stocks
+                    yf_ticker = yf.Ticker(ticker)
+                    # Try fast_info first (faster), fallback to history
+                    try:
+                        price = yf_ticker.fast_info.last_price
+                        if price and price > 0:
+                            return float(price)
+                    except Exception:
+                        pass
+                    # Fallback: get last close from recent history
+                    hist = yf_ticker.history(period="1d", interval="1m")
+                    if not hist.empty:
+                        return float(hist["Close"].iloc[-1])
+                else:
+                    # Use ccxt for Binance
+                    import ccxt
+                    exchange = ccxt.binance()
+                    symbol = ticker.replace("TRY", "/TRY")
+                    ticker_data = exchange.fetch_ticker(symbol)
+                    if ticker_data and "last" in ticker_data:
+                        return float(ticker_data["last"])
+            except Exception as e:
+                print(f"[Scanner] Failed to get realtime price for {ticker}: {e}")
+            return None
+
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(_executor, fetch_price),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            print(f"[Scanner] Timeout getting realtime price for {ticker}")
+            return None
 
     async def _process_result(
         self,

@@ -957,5 +957,58 @@ async def get_eod_status():
         "total_scanned": eod_service.total_scanned,
         "last_results_count": len(eod_service.last_results),
         "last_results": eod_service.last_results,
+        # Trend prediction results
+        "trend_filters": eod_service.trend_filters,
+        "trend_results_count": len(eod_service.last_trend_results),
+        "trend_results": eod_service.last_trend_results,
+    }
+
+
+# ============= Trend Prediction Endpoints =============
+
+
+@router.post("/trend-analysis/start")
+async def start_trend_analysis(
+    min_trend_score: int = 60,
+    min_volume_tl: float = 50_000_000,
+):
+    """
+    Start trend prediction analysis asynchronously (non-blocking).
+    Analyzes daily candles to predict next day's trend potential.
+    Use GET /eod-analysis/status to check progress and results.
+
+    Parameters:
+    - min_trend_score: Minimum trend score (0-100) to include in results
+    - min_volume_tl: Minimum daily volume in TL
+    """
+    from financia.eod_service import eod_service
+
+    # Update trend filters
+    eod_service.trend_filters = {
+        "min_trend_score": min_trend_score,
+        "min_volume_tl": min_volume_tl,
+    }
+
+    # Start analysis in background
+    result = await eod_service.start_trend_analysis()
+
+    return {
+        "status": result["status"],
+        "filters": eod_service.trend_filters,
+    }
+
+
+@router.get("/trend-analysis/results")
+async def get_trend_results():
+    """Get trend prediction results."""
+    from financia.eod_service import eod_service
+
+    return {
+        "is_analyzing": eod_service.is_analyzing,
+        "last_run_at": eod_service.last_run_at.isoformat() if eod_service.last_run_at else None,
+        "filters": eod_service.trend_filters,
+        "total_scanned": eod_service.total_scanned,
+        "results_count": len(eod_service.last_trend_results),
+        "results": eod_service.last_trend_results,
     }
 
