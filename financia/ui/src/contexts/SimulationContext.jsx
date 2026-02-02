@@ -16,11 +16,21 @@ export const SimulationProvider = ({ children }) => {
         is_paused: false,
         day_completed: false,
         is_eod_running: false,
+        is_scanning: false,
         current_time: null,
         start_date: null,
         end_date: null,
         seconds_per_hour: 30,
         session_id: null,
+        // Balance fields
+        initial_balance: 100000,
+        current_balance: 100000,
+        total_profit: 0,
+        profit_percent: 0,
+        total_trades: 0,
+        winning_trades: 0,
+        losing_trades: 0,
+        win_rate: 0,
     });
     const [simSignals, setSimSignals] = useState([]);
     const [simEodResults, setSimEodResults] = useState(null); // EOD analysis results
@@ -76,7 +86,7 @@ export const SimulationProvider = ({ children }) => {
         }
     };
 
-    const startSimulation = async (startDate, endDate, secondsPerHour) => {
+    const startSimulation = async (startDate, endDate, secondsPerHour, initialBalance = 100000) => {
         setIsLoading(true);
         setError(null);
         try {
@@ -87,6 +97,7 @@ export const SimulationProvider = ({ children }) => {
                     start_date: startDate,
                     end_date: endDate,
                     seconds_per_hour: secondsPerHour,
+                    initial_balance: initialBalance,
                 }),
             });
             if (!res.ok) {

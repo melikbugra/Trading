@@ -33,6 +33,7 @@ class SimulationStartRequest(BaseModel):
     start_date: date
     end_date: date
     seconds_per_hour: int = 30  # How many real seconds = 1 simulation hour
+    initial_balance: float = 100000.0  # Starting balance in TL
 
 
 class SimulationStatusResponse(BaseModel):
@@ -44,6 +45,15 @@ class SimulationStatusResponse(BaseModel):
     end_date: Optional[str]
     seconds_per_hour: int
     session_id: Optional[int]
+    # Balance fields
+    initial_balance: Optional[float] = 100000.0
+    current_balance: Optional[float] = 100000.0
+    total_profit: Optional[float] = 0.0
+    profit_percent: Optional[float] = 0.0
+    total_trades: Optional[int] = 0
+    winning_trades: Optional[int] = 0
+    losing_trades: Optional[int] = 0
+    win_rate: Optional[float] = 0.0
 
 
 class SimSignalResponse(BaseModel):
@@ -216,6 +226,7 @@ async def start_simulation(
         start_date=request.start_date,
         end_date=request.end_date,
         seconds_per_hour=request.seconds_per_hour,
+        initial_balance=request.initial_balance,
     )
     simulation_time_manager.session_id = session.id
 
@@ -225,7 +236,7 @@ async def start_simulation(
     await simulation_scanner.start()
 
     print(
-        f"[Simulation] Started: {request.start_date} to {request.end_date}, {request.seconds_per_hour}s/hour"
+        f"[Simulation] Started: {request.start_date} to {request.end_date}, {request.seconds_per_hour}s/hour, Balance: {request.initial_balance:,.0f} TL"
     )
 
     return get_simulation_status()
@@ -480,6 +491,22 @@ async def confirm_sim_entry(
             f"Signal must be in triggered or pending state (current: {signal.status})",
         )
 
+    # Calculate position cost
+    position_cost = request.actual_entry_price * request.lots
+
+    # Check if enough balance
+    if position_cost > simulation_time_manager.current_balance:
+        raise HTTPException(
+            400,
+            f"Yetersiz bakiye. Gerekli: {position_cost:,.2f} TL, Mevcut: {simulation_time_manager.current_balance:,.2f} TL",
+        )
+
+    # Deduct from balance
+    simulation_time_manager.current_balance -= position_cost
+    print(
+        f"[Simulation] Position opened: {signal.ticker} @ {request.actual_entry_price} x {request.lots} = {position_cost:,.0f} TL | Balance: {simulation_time_manager.current_balance:,.0f} TL"
+    )
+
     signal.status = "entered"
     signal.entered_at = now_turkey()
     signal.actual_entry_price = request.actual_entry_price
@@ -497,12 +524,15 @@ async def confirm_sim_entry(
     from financia.simulation_scanner import simulation_scanner
 
     await simulation_scanner._broadcast_signals(db)
+    await simulation_scanner._broadcast_status()  # Broadcast updated balance
 
     return {
         "message": "Entry confirmed",
         "signal_id": signal_id,
         "actual_entry_price": request.actual_entry_price,
         "lots": request.lots,
+        "position_cost": position_cost,
+        "new_balance": simulation_time_manager.current_balance,
     }
 
 
@@ -567,6 +597,22 @@ async def close_sim_position(
     )
     db.add(trade)
 
+    # Add position value back to balance
+    position_value = exit_price * lots_to_sell
+    simulation_time_manager.current_balance += position_value
+
+    # Update trade statistics
+    simulation_time_manager.total_profit += profit_tl
+    simulation_time_manager.total_trades += 1
+    if result == "win":
+        simulation_time_manager.winning_trades += 1
+    else:
+        simulation_time_manager.losing_trades += 1
+
+    print(
+        f"[Simulation] Position closed: {signal.ticker} {result} {profit_percent:+.2f}% ({profit_tl:+,.0f} TL) | Balance: {simulation_time_manager.current_balance:,.0f} TL"
+    )
+
     signal.remaining_lots -= lots_to_sell
     is_fully_closed = signal.remaining_lots <= 0
 
@@ -582,12 +628,14 @@ async def close_sim_position(
     from financia.simulation_scanner import simulation_scanner
 
     await simulation_scanner._broadcast_signals(db)
+    await simulation_scanner._broadcast_status()  # Broadcast updated balance
 
     return {
         "message": "Position closed" if is_fully_closed else "Partial exit",
         "profit_percent": round(profit_percent, 2),
         "profit_tl": round(profit_tl, 2),
         "result": result,
+        "new_balance": simulation_time_manager.current_balance,
     }
 
 

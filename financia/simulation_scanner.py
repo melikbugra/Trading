@@ -6,7 +6,7 @@ Iterates through hourly bars and evaluates strategies as if in real-time.
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple
 import pandas as pd
 import yfinance as yf
 
@@ -26,6 +26,13 @@ from financia.web_api.database import (
 
 # Thread pool for running blocking operations
 _executor = ThreadPoolExecutor(max_workers=4)
+
+# Larger thread pool for EOD parallel fetching
+_eod_executor = ThreadPoolExecutor(max_workers=15)
+
+# Concurrency settings for EOD
+EOD_BATCH_SIZE = 15  # Number of tickers to fetch in parallel
+EOD_RATE_LIMIT_DELAY = 0.1  # Short delay between individual requests in batch
 
 
 class SimulationScanner:
@@ -245,6 +252,10 @@ class SimulationScanner:
             if not watchlist:
                 return
 
+            # Mark scanning started
+            simulation_time_manager.is_scanning = True
+            await self._broadcast_status()
+
             print(
                 f"[SimScanner] Scanning {len(watchlist)} items at {sim_time.strftime('%Y-%m-%d %H:%M')}"
             )
@@ -259,6 +270,10 @@ class SimulationScanner:
                     print(f"[SimScanner] Error scanning {item.ticker}: {e}")
                     continue
 
+            # Mark scanning completed
+            simulation_time_manager.is_scanning = False
+            await self._broadcast_status()
+
             # Update last scan time
             config = db.query(SimScannerConfig).first()
             if not config:
@@ -269,6 +284,7 @@ class SimulationScanner:
 
         except Exception as e:
             print(f"[SimScanner] Error in scan_all: {e}")
+            simulation_time_manager.is_scanning = False
         finally:
             db.close()
 
@@ -340,15 +356,15 @@ class SimulationScanner:
                 if not filtered.empty:
                     return filtered
 
-        # Fetch fresh data (with rate limiting)
+        # Fetch fresh data (with minimal rate limiting since we have cache)
         loop = asyncio.get_event_loop()
 
         def fetch_data():
             try:
-                # Add delay for rate limiting
+                # Minimal delay - cache handles most requests
                 import time
 
-                time.sleep(0.5)
+                time.sleep(0.15)
 
                 # Calculate start date (need enough data for indicators)
                 start_date = end_time - timedelta(days=365)  # 1 year of history
@@ -578,6 +594,8 @@ class SimulationScanner:
             rr_achieved = reward / risk if risk > 0 else 0
             result = "win" if profit_percent > 0 else "loss"
             profit_tl = (exit_price - entry_price) * (signal.lots or 0)
+            if signal.direction == "short":
+                profit_tl = (entry_price - exit_price) * (signal.lots or 0)
 
             trade = SimTradeHistory(
                 signal_id=signal.id,
@@ -599,19 +617,97 @@ class SimulationScanner:
                 notes=f"Auto-closed: {reason}",
             )
             db.add(trade)
+
+            # Add position value back to balance (exit_price * lots)
+            position_value = exit_price * (signal.lots or 0)
+            simulation_time_manager.current_balance += position_value
+
+            # Update trade statistics
+            simulation_time_manager.total_profit += profit_tl
+            simulation_time_manager.total_trades += 1
+            if result == "win":
+                simulation_time_manager.winning_trades += 1
+            else:
+                simulation_time_manager.losing_trades += 1
+
             print(
-                f"[SimScanner] Trade recorded: {signal.ticker} {result} {profit_percent:+.2f}%"
+                f"[SimScanner] Trade closed: {signal.ticker} {result} {profit_percent:+.2f}% ({profit_tl:+,.0f} TL) | Balance: {simulation_time_manager.current_balance:,.0f} TL"
             )
 
         signal.notes = f"Closed by {reason} @ {exit_price}"
         db.commit()
         await self._broadcast_signals(db)
+        await self._broadcast_status()  # Broadcast updated balance
+
+    def _fetch_eod_data_sync(
+        self, ticker: str, sim_time: datetime
+    ) -> Tuple[str, Optional[pd.DataFrame]]:
+        """Synchronous function to fetch EOD data for a single ticker."""
+        try:
+            import time
+
+            time.sleep(EOD_RATE_LIMIT_DELAY)  # Small delay to avoid rate limiting
+
+            start_date = sim_time - timedelta(days=30)  # Only need ~10 days for EOD
+
+            stock = yf.Ticker(ticker)
+            data = stock.history(
+                start=start_date,
+                end=sim_time + timedelta(days=1),
+                interval="1d",  # Daily data for EOD analysis
+            )
+
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+
+            return (ticker, data)
+        except Exception as e:
+            print(f"[SimScanner] EOD fetch error for {ticker}: {e}")
+            return (ticker, None)
+
+    async def _fetch_eod_batch(
+        self, tickers: List[str], sim_time: datetime
+    ) -> List[Tuple[str, Optional[pd.DataFrame]]]:
+        """Fetch EOD data for a batch of tickers in parallel."""
+        loop = asyncio.get_event_loop()
+
+        # Create futures for all tickers in the batch
+        futures = [
+            loop.run_in_executor(
+                _eod_executor, self._fetch_eod_data_sync, ticker, sim_time
+            )
+            for ticker in tickers
+        ]
+
+        # Wait for all with timeout
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*futures, return_exceptions=True),
+                timeout=60.0,  # 60 second timeout for batch
+            )
+
+            # Filter out exceptions
+            valid_results = []
+            for r in results:
+                if isinstance(r, tuple):
+                    valid_results.append(r)
+                else:
+                    # Exception occurred
+                    pass
+            return valid_results
+        except asyncio.TimeoutError:
+            print(f"[SimScanner] Batch timeout for {len(tickers)} tickers")
+            return []
 
     async def _run_sim_eod_analysis(self, filters=None):
-        """Run end-of-day analysis for simulation mode - analyzes all BIST stocks like live mode."""
+        """Run end-of-day analysis for simulation mode - PARALLELIZED VERSION."""
         sim_time = simulation_time_manager.current_time
         if not sim_time:
             return
+
+        # Set EOD running flag at the start
+        simulation_time_manager.is_eod_running = True
+        await self._broadcast_status()
 
         # Default filters (same as live EOD)
         if filters is None:
@@ -622,12 +718,14 @@ class SimulationScanner:
             }
 
         sim_date = sim_time.date()
-        print(f"[SimScanner] Running EOD Analysis for {sim_date}")
+        print(f"[SimScanner] Running PARALLEL EOD Analysis for {sim_date}")
 
         # Get BIST tickers dynamically - same as live EOD service
         tickers = await self._get_dynamic_tickers()
         total_tickers = len(tickers)
-        print(f"[SimScanner] Analyzing {total_tickers} BIST stocks for EOD")
+        print(
+            f"[SimScanner] Analyzing {total_tickers} BIST stocks in batches of {EOD_BATCH_SIZE}"
+        )
 
         # Broadcast EOD started
         if self._ws_manager:
@@ -643,21 +741,23 @@ class SimulationScanner:
                 }
             )
 
-        all_results = []  # All results before filtering
+        all_results = []
         errors = 0
+        processed = 0
+        start_time = datetime.now()
 
-        for idx, ticker in enumerate(tickers):
+        # Process tickers in batches
+        for batch_start in range(0, total_tickers, EOD_BATCH_SIZE):
             # Check if EOD was cancelled
             if not simulation_time_manager.is_eod_running:
                 print("[SimScanner] EOD Analysis cancelled")
-                # Broadcast cancellation
                 if self._ws_manager:
                     await self._ws_manager.broadcast(
                         {
                             "type": "sim_eod_progress",
                             "data": {
                                 "status": "cancelled",
-                                "current": idx,
+                                "current": processed,
                                 "total": total_tickers,
                                 "ticker": None,
                             },
@@ -666,81 +766,87 @@ class SimulationScanner:
                     await self._broadcast_status()
                 return
 
-            try:
-                # Broadcast progress every 10 tickers
-                if idx % 10 == 0 and self._ws_manager:
-                    await self._ws_manager.broadcast(
-                        {
-                            "type": "sim_eod_progress",
-                            "data": {
-                                "status": "running",
-                                "current": idx + 1,
-                                "total": total_tickers,
-                                "ticker": ticker.replace(".IS", ""),
-                            },
-                        }
-                    )
+            batch_end = min(batch_start + EOD_BATCH_SIZE, total_tickers)
+            batch_tickers = tickers[batch_start:batch_end]
+            batch_num = (batch_start // EOD_BATCH_SIZE) + 1
+            total_batches = (total_tickers + EOD_BATCH_SIZE - 1) // EOD_BATCH_SIZE
 
-                # Get historical data up to sim_time
-                data = await self._get_historical_data(
-                    ticker=ticker,
-                    market="bist100",
-                    horizon="short",
-                    end_time=sim_time,
-                )
-
-                if data.empty or len(data) < 2:
-                    errors += 1
-                    continue
-
-                today = data.iloc[-1]
-                prev = data.iloc[-2]
-
-                today_close = float(today["Close"])
-                today_open = float(today["Open"])
-                today_high = float(today["High"])
-                today_low = float(today["Low"])
-                today_volume = float(today["Volume"])
-                prev_close = float(prev["Close"])
-
-                # Calculate change
-                if prev_close > 0:
-                    daily_change = ((today_close - prev_close) / prev_close) * 100
-                else:
-                    daily_change = 0
-
-                # Calculate average volume (last 10 days)
-                vol_data = (
-                    data["Volume"].iloc[-11:-1]
-                    if len(data) > 10
-                    else data["Volume"].iloc[:-1]
-                )
-                avg_volume = (
-                    float(vol_data.mean()) if len(vol_data) > 0 else today_volume
-                )
-                relative_volume = today_volume / avg_volume if avg_volume > 0 else 0
-                volume_tl = today_volume * today_close
-
-                all_results.append(
+            # Broadcast progress
+            if self._ws_manager:
+                await self._ws_manager.broadcast(
                     {
-                        "ticker": ticker,
-                        "symbol": ticker.replace(".IS", ""),
-                        "close": round(today_close, 2),
-                        "open": round(today_open, 2),
-                        "high": round(today_high, 2),
-                        "low": round(today_low, 2),
-                        "prev_close": round(prev_close, 2),
-                        "change_percent": round(daily_change, 2),
-                        "volume": int(today_volume),
-                        "avg_volume": int(avg_volume),
-                        "relative_volume": round(relative_volume, 2),
-                        "volume_tl": round(volume_tl, 0),
+                        "type": "sim_eod_progress",
+                        "data": {
+                            "status": "running",
+                            "current": processed,
+                            "total": total_tickers,
+                            "ticker": f"Batch {batch_num}/{total_batches}",
+                        },
                     }
                 )
 
-            except Exception:
-                errors += 1
-                continue
+            # Fetch batch in parallel
+            batch_results = await self._fetch_eod_batch(batch_tickers, sim_time)
+
+            # Process results
+            for ticker, data in batch_results:
+                processed += 1
+
+                if data is None or data.empty or len(data) < 2:
+                    errors += 1
+                    continue
+
+                try:
+                    today = data.iloc[-1]
+                    prev = data.iloc[-2]
+
+                    today_close = float(today["Close"])
+                    today_open = float(today["Open"])
+                    today_high = float(today["High"])
+                    today_low = float(today["Low"])
+                    today_volume = float(today["Volume"])
+                    prev_close = float(prev["Close"])
+
+                    # Calculate change
+                    if prev_close > 0:
+                        daily_change = ((today_close - prev_close) / prev_close) * 100
+                    else:
+                        daily_change = 0
+
+                    # Calculate average volume (last 10 days)
+                    vol_data = (
+                        data["Volume"].iloc[-11:-1]
+                        if len(data) > 10
+                        else data["Volume"].iloc[:-1]
+                    )
+                    avg_volume = (
+                        float(vol_data.mean()) if len(vol_data) > 0 else today_volume
+                    )
+                    relative_volume = today_volume / avg_volume if avg_volume > 0 else 0
+                    volume_tl = today_volume * today_close
+
+                    all_results.append(
+                        {
+                            "ticker": ticker,
+                            "symbol": ticker.replace(".IS", ""),
+                            "close": round(today_close, 2),
+                            "open": round(today_open, 2),
+                            "high": round(today_high, 2),
+                            "low": round(today_low, 2),
+                            "prev_close": round(prev_close, 2),
+                            "change_percent": round(daily_change, 2),
+                            "volume": int(today_volume),
+                            "avg_volume": int(avg_volume),
+                            "relative_volume": round(relative_volume, 2),
+                            "volume_tl": round(volume_tl, 0),
+                        }
+                    )
+                except Exception:
+                    errors += 1
+                    continue
+
+            # Small delay between batches to be nice to the API
+            await asyncio.sleep(0.3)
 
         # Apply filters
         filtered_results = [
@@ -754,8 +860,9 @@ class SimulationScanner:
         # Sort by change percent descending
         filtered_results.sort(key=lambda x: x["change_percent"], reverse=True)
 
+        elapsed = (datetime.now() - start_time).total_seconds()
         print(
-            f"[SimScanner] EOD Analysis complete: {len(all_results)} scanned, {len(filtered_results)} matched filters, {errors} errors"
+            f"[SimScanner] EOD Analysis complete in {elapsed:.1f}s: {len(all_results)} scanned, {len(filtered_results)} matched filters, {errors} errors"
         )
 
         # Broadcast EOD completion with results

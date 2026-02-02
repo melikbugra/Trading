@@ -104,7 +104,14 @@ export default function EODAnalysisPanel({ strategies }) {
         if (!isSimulationMode) return;
 
         if (simEodProgress) {
-            setVolumeLoading(true);
+            // Set loading based on status
+            if (simEodProgress.status === 'running' || simEodProgress.status === 'started') {
+                setVolumeLoading(true);
+                setTrendLoading(true);
+            } else if (simEodProgress.status === 'completed' || simEodProgress.status === 'cancelled') {
+                setVolumeLoading(false);
+                setTrendLoading(false);
+            }
         }
     }, [isSimulationMode, simEodProgress]);
 
@@ -593,7 +600,33 @@ export default function EODAnalysisPanel({ strategies }) {
                                     <>🎯 Trend Analizi</>
                                 )}
                             </button>
+                            {/* Cancel button for simulation */}
+                            {isSimulationMode && simEodProgress && (
+                                <button
+                                    onClick={cancelEodAnalysis}
+                                    className="px-3 py-2 font-bold rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm whitespace-nowrap"
+                                >
+                                    ❌ İptal
+                                </button>
+                            )}
                         </div>
+
+                        {/* Simulation Progress Bar */}
+                        {isSimulationMode && simEodProgress && (
+                            <div className="mt-3">
+                                <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
+                                    <span>{simEodProgress.ticker || '...'} taranıyor...</span>
+                                    <span>{simEodProgress.current} / {simEodProgress.total} ({Math.round((simEodProgress.current / simEodProgress.total) * 100)}%)</span>
+                                </div>
+                                <div className="w-full bg-gray-800 rounded-full h-2.5">
+                                    <div
+                                        className="bg-green-600 h-2.5 rounded-full transition-all duration-300"
+                                        style={{ width: `${(simEodProgress.current / simEodProgress.total) * 100}%` }}
+                                    ></div>
+                                </div>
+                            </div>
+                        )}
+
                         <p className="text-gray-600 text-xs mt-2">
                             💡 Günlük mumlarla ertesi günün trend potansiyelini tahmin eder (RSI, MACD, EMA, ADX, Hacim, BB, Stochastic)
                         </p>

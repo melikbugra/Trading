@@ -19,8 +19,8 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
             return;
         }
 
-        // If paused, day completed, or EOD running - don't count down
-        if (simStatus.is_paused || simStatus.day_completed || simStatus.is_eod_running) {
+        // If paused, day completed, EOD running, or scanning - don't count down
+        if (simStatus.is_paused || simStatus.day_completed || simStatus.is_eod_running || simStatus.is_scanning) {
             setCountdown(null);
             return;
         }
@@ -39,7 +39,7 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
         }, 1000);
 
         return () => clearInterval(interval);
-    }, [isSimulationMode, simStatus.is_active, simStatus.is_paused, simStatus.day_completed, simStatus.is_eod_running, simStatus.seconds_per_hour]);
+    }, [isSimulationMode, simStatus.is_active, simStatus.is_paused, simStatus.day_completed, simStatus.is_eod_running, simStatus.is_scanning, simStatus.seconds_per_hour]);
 
     // Manual scan for simulation mode
     const handleSimScanNow = async () => {
@@ -65,6 +65,7 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
     if (isSimulationMode) {
         const isPaused = simStatus.is_paused || simStatus.day_completed;
         const isEodRunning = simStatus.is_eod_running;
+        const isScanning = simStatus.is_scanning;
 
         return (
             <div className="bg-purple-900/30 border border-purple-700/50 rounded-lg p-3 sm:p-4">
@@ -75,10 +76,15 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                             Simülasyon Modu Aktif
                         </span>
                         {/* Countdown timer */}
-                        {countdown !== null && !isPaused && !isEodRunning && (
+                        {countdown !== null && !isPaused && !isEodRunning && !isScanning && (
                             <span className="bg-purple-800/50 px-2 py-1 rounded text-purple-200 text-xs sm:text-sm font-mono flex items-center gap-1">
                                 ⏱️ <span className="font-bold">{countdown}s</span>
                                 <span className="text-purple-400/70 hidden sm:inline">/ sonraki saat</span>
+                            </span>
+                        )}
+                        {isScanning && !isEodRunning && (
+                            <span className="bg-orange-800/50 px-2 py-1 rounded text-orange-200 text-xs sm:text-sm flex items-center gap-1">
+                                <span className="animate-spin">🔄</span> Taranıyor...
                             </span>
                         )}
                         {isEodRunning && (
@@ -86,7 +92,7 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                                 <span className="animate-spin">📊</span> Gün Sonu Analizi...
                             </span>
                         )}
-                        {isPaused && !isEodRunning && (
+                        {isPaused && !isEodRunning && !isScanning && (
                             <span className="bg-yellow-800/50 px-2 py-1 rounded text-yellow-200 text-xs sm:text-sm">
                                 ⏸️ {simStatus.day_completed ? 'Gün Tamamlandı' : 'Duraklatıldı'}
                             </span>
@@ -97,7 +103,7 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                     </div>
                     <button
                         onClick={handleSimScanNow}
-                        disabled={simScanning}
+                        disabled={simScanning || isScanning}
                         className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded font-bold text-xs sm:text-sm transition-all flex items-center gap-1 sm:gap-2 ${simScanning
                             ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
                             : 'bg-purple-600 hover:bg-purple-700 text-white'

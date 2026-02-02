@@ -18,6 +18,7 @@ const SimulationPanel = ({ onClose }) => {
         return date.toISOString().split('T')[0];
     });
     const [secondsPerHour, setSecondsPerHour] = useState(30);
+    const [initialBalance, setInitialBalance] = useState(100000);
     const [localError, setLocalError] = useState(null);
 
     const handleStart = async () => {
@@ -36,9 +37,13 @@ const SimulationPanel = ({ onClose }) => {
             setLocalError('Bitiş tarihi bugünden sonra olamaz');
             return;
         }
+        if (initialBalance < 1000) {
+            setLocalError('Minimum bakiye 1.000 TL olmalı');
+            return;
+        }
 
         try {
-            await startSimulation(startDate, endDate, secondsPerHour);
+            await startSimulation(startDate, endDate, secondsPerHour, initialBalance);
             onClose?.();
         } catch (err) {
             setLocalError(err.message);
@@ -120,8 +125,8 @@ const SimulationPanel = ({ onClose }) => {
                                     key={option.value}
                                     onClick={() => setSecondsPerHour(option.value)}
                                     className={`p-3 rounded-lg border transition text-left ${secondsPerHour === option.value
-                                            ? 'border-blue-500 bg-blue-500/20 text-blue-400'
-                                            : 'border-gray-600 bg-gray-700 text-gray-300 hover:border-gray-500'
+                                        ? 'border-blue-500 bg-blue-500/20 text-blue-400'
+                                        : 'border-gray-600 bg-gray-700 text-gray-300 hover:border-gray-500'
                                         }`}
                                 >
                                     <div className="font-medium">{option.label}</div>
@@ -132,6 +137,35 @@ const SimulationPanel = ({ onClose }) => {
                         <p className="mt-2 text-xs text-gray-500">
                             Tahmini süre: 1 işlem günü ≈ {estimatedDayTime.toFixed(1)} dakika
                         </p>
+                    </div>
+
+                    {/* Initial Balance */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                            💰 Başlangıç Bakiyesi (TL)
+                        </label>
+                        <input
+                            type="number"
+                            value={initialBalance}
+                            onChange={(e) => setInitialBalance(Number(e.target.value))}
+                            min={1000}
+                            step={10000}
+                            className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <div className="flex gap-2 mt-2">
+                            {[50000, 100000, 250000, 500000].map((amount) => (
+                                <button
+                                    key={amount}
+                                    onClick={() => setInitialBalance(amount)}
+                                    className={`flex-1 px-2 py-1 text-xs rounded border transition ${initialBalance === amount
+                                        ? 'border-blue-500 bg-blue-500/20 text-blue-400'
+                                        : 'border-gray-600 bg-gray-700 text-gray-400 hover:border-gray-500'
+                                        }`}
+                                >
+                                    {(amount / 1000).toFixed(0)}K
+                                </button>
+                            ))}
+                        </div>
                     </div>
 
                     {/* Error Message */}

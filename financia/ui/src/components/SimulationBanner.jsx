@@ -64,6 +64,28 @@ const SimulationBanner = () => {
                     <span>{simStatus.seconds_per_hour}sn/saat</span>
                 </div>
 
+                <div className="h-6 w-px bg-white/30" />
+
+                {/* Balance */}
+                <div className="flex items-center gap-3 text-white/90">
+                    <div className="flex items-center gap-1">
+                        <span className="text-lg">💰</span>
+                        <span className="font-mono font-medium">
+                            {(simStatus.current_balance || 0).toLocaleString('tr-TR')} ₺
+                        </span>
+                    </div>
+                    {simStatus.total_profit !== 0 && (
+                        <span className={`font-mono text-sm ${simStatus.total_profit >= 0 ? 'text-green-300' : 'text-red-300'}`}>
+                            ({simStatus.total_profit >= 0 ? '+' : ''}{simStatus.total_profit?.toLocaleString('tr-TR')} ₺ / {simStatus.profit_percent >= 0 ? '+' : ''}{simStatus.profit_percent?.toFixed(1)}%)
+                        </span>
+                    )}
+                    {simStatus.total_trades > 0 && (
+                        <span className="text-xs text-white/70">
+                            {simStatus.winning_trades}W/{simStatus.losing_trades}L ({simStatus.win_rate?.toFixed(0)}%)
+                        </span>
+                    )}
+                </div>
+
                 {/* Status Badge */}
                 {simStatus.is_eod_running && (
                     <>
@@ -99,8 +121,8 @@ const SimulationBanner = () => {
                         onClick={nextDay}
                         disabled={isLoading || simStatus.is_eod_running}
                         className={`px-4 py-1.5 text-white rounded-lg transition flex items-center gap-2 font-medium ${simStatus.is_eod_running
-                                ? 'bg-gray-500/30 cursor-not-allowed opacity-50'
-                                : 'bg-white/20 hover:bg-white/30 disabled:opacity-50'
+                            ? 'bg-gray-500/30 cursor-not-allowed opacity-50'
+                            : 'bg-white/20 hover:bg-white/30 disabled:opacity-50'
                             }`}
                     >
                         ▶️ Sonraki Gün

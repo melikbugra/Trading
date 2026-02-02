@@ -46,6 +46,7 @@ class SimulationTimeManager:
         self.is_paused: bool = False
         self.day_completed: bool = False
         self.is_eod_running: bool = False  # Track if EOD analysis is in progress
+        self.is_scanning: bool = False  # Track if scan is in progress
 
         # Simulation time settings
         self.current_time: Optional[datetime] = None
@@ -56,7 +57,21 @@ class SimulationTimeManager:
         # Session tracking
         self.session_id: Optional[int] = None
 
-    def start(self, start_date: date, end_date: date, seconds_per_hour: int = 30):
+        # Balance tracking
+        self.initial_balance: float = 100000.0  # Default 100,000 TL
+        self.current_balance: float = 100000.0
+        self.total_profit: float = 0.0
+        self.total_trades: int = 0
+        self.winning_trades: int = 0
+        self.losing_trades: int = 0
+
+    def start(
+        self,
+        start_date: date,
+        end_date: date,
+        seconds_per_hour: int = 30,
+        initial_balance: float = 100000.0,
+    ):
         """Start a new simulation session."""
         self.is_active = True
         self.is_paused = False
@@ -65,6 +80,13 @@ class SimulationTimeManager:
         self.start_date = start_date
         self.end_date = end_date
         self.seconds_per_hour = seconds_per_hour
+        # Balance initialization
+        self.initial_balance = initial_balance
+        self.current_balance = initial_balance
+        self.total_profit = 0.0
+        self.total_trades = 0
+        self.winning_trades = 0
+        self.losing_trades = 0
         # Start at 09:30 on the first trading day (timezone-aware)
         naive_time = datetime.combine(start_date, time(9, 30))
         self.current_time = TZ_TURKEY.localize(naive_time)
@@ -77,10 +99,18 @@ class SimulationTimeManager:
         self.is_paused = False
         self.day_completed = False
         self.is_eod_running = False
+        self.is_scanning = False
         self.current_time = None
         self.start_date = None
         self.end_date = None
         self.session_id = None
+        # Reset balance tracking
+        self.initial_balance = 100000.0
+        self.current_balance = 100000.0
+        self.total_profit = 0.0
+        self.total_trades = 0
+        self.winning_trades = 0
+        self.losing_trades = 0
 
     def pause(self):
         """Pause the simulation."""
@@ -147,13 +177,47 @@ class SimulationTimeManager:
             return self.current_time
         return datetime.utcnow() + timedelta(hours=3)  # Real Turkey time
 
+    def record_trade(self, profit_tl: float, is_winner: bool):
+        """Record a completed trade and update balance."""
+        self.current_balance += profit_tl
+        self.total_profit += profit_tl
+        self.total_trades += 1
+        if is_winner:
+            self.winning_trades += 1
+        else:
+            self.losing_trades += 1
+
+    def get_balance_stats(self) -> dict:
+        """Get current balance statistics."""
+        profit_percent = (
+            ((self.current_balance - self.initial_balance) / self.initial_balance * 100)
+            if self.initial_balance > 0
+            else 0
+        )
+        win_rate = (
+            (self.winning_trades / self.total_trades * 100)
+            if self.total_trades > 0
+            else 0
+        )
+        return {
+            "initial_balance": self.initial_balance,
+            "current_balance": round(self.current_balance, 2),
+            "total_profit": round(self.total_profit, 2),
+            "profit_percent": round(profit_percent, 2),
+            "total_trades": self.total_trades,
+            "winning_trades": self.winning_trades,
+            "losing_trades": self.losing_trades,
+            "win_rate": round(win_rate, 1),
+        }
+
     def get_status(self) -> dict:
         """Get current simulation status."""
-        return {
+        status = {
             "is_active": self.is_active,
             "is_paused": self.is_paused,
             "day_completed": self.day_completed,
             "is_eod_running": self.is_eod_running,
+            "is_scanning": self.is_scanning,
             "current_time": self.current_time.isoformat()
             if self.current_time
             else None,
@@ -162,6 +226,9 @@ class SimulationTimeManager:
             "seconds_per_hour": self.seconds_per_hour,
             "session_id": self.session_id,
         }
+        # Add balance stats
+        status.update(self.get_balance_stats())
+        return status
 
 
 # Global simulation time manager instance
