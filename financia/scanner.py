@@ -28,8 +28,11 @@ from financia.web_api.database import (
 )
 from financia.notification_service import EmailService
 
-# Thread pool for running blocking operations
-_executor = ThreadPoolExecutor(max_workers=4)
+# Thread pool for running blocking operations - increased for parallel scanning
+_executor = ThreadPoolExecutor(max_workers=10)
+
+# Concurrency settings for parallel scanning
+SCAN_BATCH_SIZE = 10  # Number of tickers to scan in parallel
 
 
 class ScannerService:
@@ -44,6 +47,10 @@ class ScannerService:
         self._task: Optional[asyncio.Task] = None
         self._ws_manager = None  # WebSocket manager reference
         self.last_scan_at: Optional[datetime] = None
+        # Progress tracking
+        self.scan_progress = 0
+        self.scan_total = 0
+        self.current_ticker = ""
         # Email notification settings (in-memory, configurable via API)
         self.email_notifications = {
             "triggered": True,  # Send email when signal is triggered
@@ -53,6 +60,24 @@ class ScannerService:
     def set_ws_manager(self, manager):
         """Set WebSocket manager for broadcasting updates."""
         self._ws_manager = manager
+
+    async def _broadcast_scan_progress(self):
+        """Broadcast scan progress to all connected clients."""
+        if self._ws_manager:
+            try:
+                await self._ws_manager.broadcast(
+                    {
+                        "type": "scan_progress",
+                        "data": {
+                            "status": "scanning" if self.is_scanning else "idle",
+                            "current": self.scan_progress,
+                            "total": self.scan_total,
+                            "ticker": self.current_ticker,
+                        },
+                    }
+                )
+            except Exception as e:
+                print(f"[Scanner] Failed to broadcast progress: {e}")
 
     async def _broadcast_status(self):
         """Broadcast current scanner status to all connected clients."""
@@ -84,6 +109,8 @@ class ScannerService:
                     .order_by(Signal.created_at.desc())
                     .all()
                 )
+                price_updated_at = now_turkey().isoformat()
+
                 signals_data = [
                     {
                         "id": s.id,
@@ -96,6 +123,7 @@ class ScannerService:
                         "stop_loss": s.stop_loss,
                         "take_profit": s.take_profit,
                         "current_price": s.current_price,
+                        "price_updated_at": price_updated_at,
                         "last_peak": s.last_peak,
                         "last_trough": s.last_trough,
                         "entry_reached": s.entry_reached or False,
@@ -173,7 +201,9 @@ class ScannerService:
                 # Check if BIST market is open
                 if not self._is_bist_market_open():
                     now = now_turkey()
-                    print(f"[Scanner] Market closed ({now.strftime('%H:%M')}), skipping scan...")
+                    print(
+                        f"[Scanner] Market closed ({now.strftime('%H:%M')}), skipping scan..."
+                    )
                     await asyncio.sleep(self.scan_interval * 60)
                     continue
 
@@ -186,13 +216,16 @@ class ScannerService:
                 await asyncio.sleep(60)  # Wait before retry
 
     async def scan_all(self):
-        """Scan all active watchlist items."""
+        """Scan all active watchlist items in parallel."""
         # Prevent concurrent scans
         if self.is_scanning:
             print("[Scanner] Scan already in progress, skipping...")
             return
 
         self.is_scanning = True
+        self.scan_progress = 0
+        self.scan_total = 0
+        self.current_ticker = ""
         await self._broadcast_status()  # Notify clients scan started
 
         db = SessionLocal()
@@ -210,17 +243,74 @@ class ScannerService:
             if not watchlist:
                 return
 
-            print(f"[Scanner] Scanning {len(watchlist)} items...")
+            self.scan_total = len(watchlist)
+            print(
+                f"[Scanner] Scanning {len(watchlist)} items in parallel (batch size: {SCAN_BATCH_SIZE})..."
+            )
+            await self._broadcast_scan_progress()
 
-            for i, item in enumerate(watchlist):
-                try:
-                    await self.scan_ticker(db, item)
-                    # Rate limiting: small delay between tickers to avoid API throttling
-                    if i < len(watchlist) - 1:
-                        await asyncio.sleep(0.5)
-                except Exception as e:
-                    print(f"[Scanner] Error scanning {item.ticker}: {e}")
-                    continue  # Continue with next ticker on error
+            # Process in batches for parallel execution
+            for batch_start in range(0, len(watchlist), SCAN_BATCH_SIZE):
+                batch = watchlist[batch_start : batch_start + SCAN_BATCH_SIZE]
+
+                # Create tasks for this batch
+                tasks = []
+                for item in batch:
+                    tasks.append(self._scan_ticker_async(item))
+
+                # Execute batch in parallel
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # Process results
+                for i, (item, result) in enumerate(zip(batch, results)):
+                    self.scan_progress = batch_start + i + 1
+                    self.current_ticker = item.ticker.replace(".IS", "")
+
+                    if isinstance(result, Exception):
+                        print(f"[Scanner] Error scanning {item.ticker}: {result}")
+                    elif result is not None:
+                        # result is (item_id, strategy_id, strategy_result, existing_signal_id)
+                        item_id, strategy_id, strategy_result, existing_signal_id = (
+                            result
+                        )
+                        # Re-fetch all objects from main db session to avoid detached instance
+                        item_data = (
+                            db.query(WatchlistItem)
+                            .filter(WatchlistItem.id == item_id)
+                            .first()
+                        )
+                        strategy_db = (
+                            db.query(Strategy)
+                            .filter(Strategy.id == strategy_id)
+                            .first()
+                        )
+                        existing_signal = None
+                        if existing_signal_id:
+                            existing_signal = (
+                                db.query(Signal)
+                                .filter(Signal.id == existing_signal_id)
+                                .first()
+                            )
+
+                        if item_data and strategy_db:
+                            await self._process_result(
+                                db,
+                                item_data,
+                                strategy_db,
+                                strategy_result,
+                                existing_signal,
+                            )
+
+                    # Broadcast progress every few tickers
+                    if (
+                        self.scan_progress % 5 == 0
+                        or self.scan_progress == self.scan_total
+                    ):
+                        await self._broadcast_scan_progress()
+
+                # Small delay between batches to avoid API throttling
+                if batch_start + SCAN_BATCH_SIZE < len(watchlist):
+                    await asyncio.sleep(0.3)
 
             # Update last scan time
             self.last_scan_at = now_turkey()
@@ -234,7 +324,90 @@ class ScannerService:
             print(f"[Scanner] Error in scan_all: {e}")
         finally:
             self.is_scanning = False
+            self.scan_progress = 0
+            self.scan_total = 0
+            self.current_ticker = ""
+            await self._broadcast_scan_progress()
             await self._broadcast_status()  # Notify clients scan finished
+            db.close()
+
+    async def _scan_ticker_async(self, item: WatchlistItem):
+        """Async wrapper to scan a ticker and return result for batch processing."""
+        db = SessionLocal()
+        try:
+            # Get strategy
+            strategy_db = (
+                db.query(Strategy).filter(Strategy.id == item.strategy_id).first()
+            )
+            if not strategy_db or not strategy_db.is_active:
+                return None
+
+            # Get strategy class
+            strategy_class = get_strategy_class(strategy_db.strategy_type)
+            if not strategy_class:
+                print(f"[Scanner] Unknown strategy type: {strategy_db.strategy_type}")
+                return None
+
+            # Initialize strategy
+            strategy = strategy_class(
+                params=strategy_db.params or {},
+                risk_reward_ratio=strategy_db.risk_reward_ratio,
+            )
+
+            # Fetch data in a thread pool to avoid blocking the event loop
+            def fetch_data():
+                try:
+                    analyzer = StockAnalyzer(
+                        ticker=item.ticker,
+                        market=item.market,
+                        horizon=strategy_db.horizon or "short",
+                    )
+                    return analyzer.data
+                except Exception as e:
+                    print(f"[Scanner] Failed to fetch data for {item.ticker}: {e}")
+                    return pd.DataFrame()
+
+            loop = asyncio.get_event_loop()
+            try:
+                data = await asyncio.wait_for(
+                    loop.run_in_executor(_executor, fetch_data),
+                    timeout=30.0,
+                )
+            except asyncio.TimeoutError:
+                print(f"[Scanner] Timeout fetching data for {item.ticker}")
+                return None
+            except Exception as e:
+                print(f"[Scanner] Error fetching data for {item.ticker}: {e}")
+                return None
+
+            if data.empty:
+                return None
+
+            # Evaluate strategy
+            result = strategy.evaluate(data)
+
+            # Get real-time current price
+            real_current_price = await self._get_realtime_price(
+                item.ticker, item.market
+            )
+            if real_current_price is not None:
+                result.current_price = real_current_price
+
+            # Check for existing signal - return only ID for main session to re-fetch
+            existing_signal = (
+                db.query(Signal)
+                .filter(
+                    Signal.ticker == item.ticker,
+                    Signal.strategy_id == item.strategy_id,
+                    Signal.status.in_(["pending", "triggered", "entered"]),
+                )
+                .first()
+            )
+            existing_signal_id = existing_signal.id if existing_signal else None
+
+            # Return IDs and result for processing (avoid detached instances)
+            return (item.id, strategy_db.id, result, existing_signal_id)
+        finally:
             db.close()
 
     async def scan_ticker(self, db: Session, item: WatchlistItem):
@@ -332,6 +505,7 @@ class ScannerService:
                 else:
                     # Use ccxt for Binance
                     import ccxt
+
                     exchange = ccxt.binance()
                     symbol = ticker.replace("TRY", "/TRY")
                     ticker_data = exchange.fetch_ticker(symbol)
@@ -409,7 +583,9 @@ class ScannerService:
                 # Send email notification for new triggered signal (if enabled)
                 if self.email_notifications.get("triggered", True):
                     strategy = (
-                        db.query(Strategy).filter(Strategy.id == item.strategy_id).first()
+                        db.query(Strategy)
+                        .filter(Strategy.id == item.strategy_id)
+                        .first()
                     )
                     strategy_name = strategy.name if strategy else ""
                     EmailService.send_signal_triggered(
@@ -428,6 +604,10 @@ class ScannerService:
             # Skip if already in position
             if existing_signal and existing_signal.status == "entered":
                 existing_signal.current_price = current_price
+            elif existing_signal and existing_signal.status == "triggered":
+                # Update current price for triggered signals even when main condition not met
+                existing_signal.current_price = current_price
+                await self._check_entry_exit(db, existing_signal, result)
             elif not existing_signal:
                 new_signal = Signal(
                     ticker=item.ticker,
@@ -455,6 +635,10 @@ class ScannerService:
                 existing_signal.status = "cancelled"
                 existing_signal.closed_at = now_turkey()
                 existing_signal.notes = "Ön koşul artık sağlanmıyor"
+            elif existing_signal and existing_signal.status == "triggered":
+                # Update current price for triggered signals
+                existing_signal.current_price = current_price
+                await self._check_entry_exit(db, existing_signal, result)
             elif existing_signal and existing_signal.status == "entered":
                 # Just update current price for entered positions
                 existing_signal.current_price = current_price

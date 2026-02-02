@@ -383,9 +383,10 @@ async def next_simulation_day(db: Session = Depends(get_db)):
             session.current_date = simulation_time_manager.current_time.date()
             db.commit()
 
-    # Resume scanner for new day
+    # Clear data cache for new day and resume scanner
     from financia.simulation_scanner import simulation_scanner
 
+    simulation_scanner.clear_cache()  # Clear cached data for fresh fetch
     await simulation_scanner.resume()
 
     print(f"[Simulation] Started new day: {simulation_time_manager.current_time}")

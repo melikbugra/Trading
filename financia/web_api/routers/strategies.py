@@ -145,7 +145,9 @@ class TradeHistoryResponse(BaseModel):
 class ScannerConfigUpdate(BaseModel):
     scan_interval_minutes: Optional[int] = None
     is_running: Optional[bool] = None
-    email_notifications: Optional[Dict[str, bool]] = None  # {"triggered": bool, "entryReached": bool}
+    email_notifications: Optional[Dict[str, bool]] = (
+        None  # {"triggered": bool, "entryReached": bool}
+    )
 
 
 class ScannerConfigResponse(BaseModel):
@@ -406,7 +408,8 @@ async def confirm_entry(
 
     if signal.status not in ["triggered", "pending"]:
         raise HTTPException(
-            400, f"Signal must be in triggered or pending state (current: {signal.status})"
+            400,
+            f"Signal must be in triggered or pending state (current: {signal.status})",
         )
 
     # Update signal
@@ -458,7 +461,8 @@ async def close_position(
         raise HTTPException(400, "Lots must be greater than 0")
     if lots_to_sell > signal.remaining_lots:
         raise HTTPException(
-            400, f"Cannot sell {lots_to_sell} lots. Only {signal.remaining_lots} lots remaining."
+            400,
+            f"Cannot sell {lots_to_sell} lots. Only {signal.remaining_lots} lots remaining.",
         )
 
     # Calculate profit/loss
@@ -523,7 +527,9 @@ async def close_position(
     await scanner._broadcast_signals(db)
 
     return {
-        "message": "Position fully closed" if is_fully_closed else "Partial exit completed",
+        "message": "Position fully closed"
+        if is_fully_closed
+        else "Partial exit completed",
         "signal_id": signal_id,
         "exit_price": exit_price,
         "lots_sold": lots_to_sell,
@@ -832,7 +838,9 @@ async def get_chart_data(
                 d = stoch_d.loc[idx]
                 if not (np.isnan(k) or np.isnan(d)):
                     timestamp = (
-                        int(idx.timestamp() * 1000) if hasattr(idx, "timestamp") else None
+                        int(idx.timestamp() * 1000)
+                        if hasattr(idx, "timestamp")
+                        else None
                     )
                     stoch_rsi_data.append(
                         {
@@ -861,7 +869,9 @@ async def get_chart_data(
                 h = macd_hist.loc[idx]
                 if not (np.isnan(m) or np.isnan(s)):
                     timestamp = (
-                        int(idx.timestamp() * 1000) if hasattr(idx, "timestamp") else None
+                        int(idx.timestamp() * 1000)
+                        if hasattr(idx, "timestamp")
+                        else None
                     )
                     macd_data.append(
                         {
@@ -898,7 +908,9 @@ async def get_chart_data(
                 "stop_loss": to_python_native(signal.stop_loss),
                 "take_profit": to_python_native(signal.take_profit),
                 "notes": signal.notes,
-                "triggered_at": signal.triggered_at.isoformat() if signal.triggered_at else None,
+                "triggered_at": signal.triggered_at.isoformat()
+                if signal.triggered_at
+                else None,
             }
 
     return {
@@ -943,6 +955,18 @@ async def start_eod_analysis(
     }
 
 
+@router.post("/eod-analysis/cancel")
+async def cancel_eod_analysis():
+    """Cancel ongoing EOD analysis."""
+    from financia.eod_service import eod_service
+
+    if not eod_service.is_analyzing:
+        return {"status": "not_running", "message": "No analysis is currently running"}
+
+    eod_service.cancel_analysis()
+    return {"status": "cancelled", "message": "Analysis cancellation requested"}
+
+
 @router.get("/eod-analysis/status")
 async def get_eod_status():
     """Get EOD analysis scheduler status, progress, and last results."""
@@ -951,10 +975,16 @@ async def get_eod_status():
     return {
         "is_running": eod_service.is_running,
         "is_analyzing": eod_service.is_analyzing,
-        "last_run_at": eod_service.last_run_at.isoformat() if eod_service.last_run_at else None,
+        "last_run_at": eod_service.last_run_at.isoformat()
+        if eod_service.last_run_at
+        else None,
         "schedule_time": f"{eod_service.run_hour:02d}:{eod_service.run_minute:02d}",
         "filters": eod_service.filters,
         "total_scanned": eod_service.total_scanned,
+        "current_progress": eod_service.current_progress,
+        "current_ticker": eod_service.current_ticker.replace(".IS", "")
+        if eod_service.current_ticker
+        else None,
         "last_results_count": len(eod_service.last_results),
         "last_results": eod_service.last_results,
         # Trend prediction results
@@ -1005,10 +1035,11 @@ async def get_trend_results():
 
     return {
         "is_analyzing": eod_service.is_analyzing,
-        "last_run_at": eod_service.last_run_at.isoformat() if eod_service.last_run_at else None,
+        "last_run_at": eod_service.last_run_at.isoformat()
+        if eod_service.last_run_at
+        else None,
         "filters": eod_service.trend_filters,
         "total_scanned": eod_service.total_scanned,
         "results_count": len(eod_service.last_trend_results),
         "results": eod_service.last_trend_results,
     }
-

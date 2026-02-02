@@ -24,10 +24,13 @@ class EODAnalysisService:
     def __init__(self):
         self.is_running = False
         self.is_analyzing = False  # True while analysis is in progress
+        self.is_cancelled = False  # Flag to cancel ongoing analysis
         self.last_run_at: Optional[datetime] = None
         self.last_results: List[Dict] = []
         self.last_trend_results: List[Dict] = []  # Trend prediction results
         self.total_scanned: int = 0
+        self.current_progress: int = 0  # Current ticker being processed
+        self.current_ticker: str = ""  # Current ticker name
         self._task: Optional[asyncio.Task] = None
         self._analysis_task: Optional[asyncio.Task] = None
         self._ws_manager = None  # WebSocket manager reference
@@ -50,24 +53,54 @@ class EODAnalysisService:
         """Set WebSocket manager for broadcasting updates."""
         self._ws_manager = manager
 
+    def cancel_analysis(self):
+        """Cancel ongoing analysis."""
+        if self.is_analyzing:
+            self.is_cancelled = True
+            print("[EOD] Analysis cancellation requested")
+
+    async def _broadcast_progress(
+        self, current: int, total: int, ticker: str, status: str = "running"
+    ):
+        """Broadcast analysis progress to all connected clients."""
+        if self._ws_manager:
+            try:
+                await self._ws_manager.broadcast(
+                    {
+                        "type": "eod_progress",
+                        "data": {
+                            "status": status,
+                            "current": current,
+                            "total": total,
+                            "ticker": ticker.replace(".IS", "") if ticker else None,
+                        },
+                    }
+                )
+            except Exception as e:
+                print(f"[EOD] Failed to broadcast progress: {e}")
+
     async def _broadcast_status(self):
         """Broadcast current EOD status to all connected clients."""
         if self._ws_manager:
             try:
-                await self._ws_manager.broadcast({
-                    "type": "eod_status",
-                    "data": {
-                        "is_analyzing": self.is_analyzing,
-                        "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
-                        "total_scanned": self.total_scanned,
-                        "results_count": len(self.last_results),
-                        "results": self.last_results,
-                        "filters": self.filters,
-                        "trend_results_count": len(self.last_trend_results),
-                        "trend_results": self.last_trend_results,
-                        "trend_filters": self.trend_filters,
+                await self._ws_manager.broadcast(
+                    {
+                        "type": "eod_status",
+                        "data": {
+                            "is_analyzing": self.is_analyzing,
+                            "last_run_at": self.last_run_at.isoformat()
+                            if self.last_run_at
+                            else None,
+                            "total_scanned": self.total_scanned,
+                            "results_count": len(self.last_results),
+                            "results": self.last_results,
+                            "filters": self.filters,
+                            "trend_results_count": len(self.last_trend_results),
+                            "trend_results": self.last_trend_results,
+                            "trend_filters": self.trend_filters,
+                        },
                     }
-                })
+                )
             except Exception as e:
                 print(f"[EOD] Failed to broadcast status: {e}")
 
@@ -95,27 +128,31 @@ class EODAnalysisService:
         while self.is_running:
             try:
                 now = now_turkey()
-                
+
                 # Calculate next run time
-                next_run = now.replace(hour=self.run_hour, minute=self.run_minute, second=0, microsecond=0)
-                
+                next_run = now.replace(
+                    hour=self.run_hour, minute=self.run_minute, second=0, microsecond=0
+                )
+
                 # If we've passed today's run time, schedule for tomorrow
                 if now >= next_run:
                     next_run += timedelta(days=1)
-                
+
                 # Skip weekends (Saturday=5, Sunday=6)
                 while next_run.weekday() >= 5:
                     next_run += timedelta(days=1)
-                
+
                 wait_seconds = (next_run - now).total_seconds()
-                print(f"[EOD] Next analysis scheduled at {next_run.strftime('%Y-%m-%d %H:%M')} (in {wait_seconds/3600:.1f} hours)")
-                
+                print(
+                    f"[EOD] Next analysis scheduled at {next_run.strftime('%Y-%m-%d %H:%M')} (in {wait_seconds / 3600:.1f} hours)"
+                )
+
                 # Wait until scheduled time
                 await asyncio.sleep(wait_seconds)
-                
+
                 # Run the analysis
                 await self.run_analysis()
-                
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -131,34 +168,45 @@ class EODAnalysisService:
         if self._analysis_task and not self._analysis_task.done():
             self._analysis_task.cancel()
 
-        self._analysis_task = asyncio.create_task(self.run_analysis(send_email=send_email))
+        self._analysis_task = asyncio.create_task(
+            self.run_analysis(send_email=send_email)
+        )
         return {"status": "started"}
 
     async def run_analysis(self, send_email: bool = True) -> Dict:
         """Run the EOD analysis and optionally send email summary."""
         import yfinance as yf
+        import time
 
         if self.is_analyzing:
             return {
                 "count": len(self.last_results),
                 "total_scanned": self.total_scanned,
                 "results": self.last_results,
-                "status": "already_running"
+                "status": "already_running",
             }
 
         self.is_analyzing = True
+        self.is_cancelled = False
+        self.current_progress = 0
+        self.current_ticker = ""
         await self._broadcast_status()  # Notify clients analysis started
+        await self._broadcast_progress(0, 0, None, "started")
+
         try:
             print(f"[EOD] Starting analysis at {now_turkey().strftime('%H:%M:%S')}")
 
             # Dynamically fetch BIST tickers from yfinance
             tickers = await self._get_dynamic_tickers()
+            total_tickers = len(tickers)
 
             results = []
             errors = []
+            processed = 0
 
             def analyze_ticker(ticker: str) -> Optional[Dict]:
                 try:
+                    time.sleep(0.1)  # Small delay for rate limiting
                     stock = yf.Ticker(ticker)
                     hist = stock.history(period="30d", interval="1d")
 
@@ -182,7 +230,11 @@ class EODAnalysisService:
                         daily_change = 0
 
                     # Calculate average volume (last 10 days, excluding today)
-                    vol_data = hist["Volume"].iloc[-11:-1] if len(hist) > 10 else hist["Volume"].iloc[:-1]
+                    vol_data = (
+                        hist["Volume"].iloc[-11:-1]
+                        if len(hist) > 10
+                        else hist["Volume"].iloc[:-1]
+                    )
                     avg_volume = vol_data.mean() if len(vol_data) > 0 else today_volume
                     relative_volume = today_volume / avg_volume if avg_volume > 0 else 0
 
@@ -206,21 +258,46 @@ class EODAnalysisService:
                 except Exception as e:
                     return {"ticker": ticker, "error": str(e)}
 
-            # Run analysis in parallel
+            # Run analysis in parallel with progress tracking
             loop = asyncio.get_event_loop()
-            with ThreadPoolExecutor(max_workers=10) as executor:
+            with ThreadPoolExecutor(max_workers=15) as executor:
                 futures = {executor.submit(analyze_ticker, t): t for t in tickers}
 
                 for future in as_completed(futures):
+                    # Check for cancellation
+                    if self.is_cancelled:
+                        print("[EOD] Analysis cancelled")
+                        await self._broadcast_progress(
+                            processed, total_tickers, None, "cancelled"
+                        )
+                        return {
+                            "count": len(results),
+                            "total_scanned": processed,
+                            "results": results,
+                            "status": "cancelled",
+                        }
+
+                    ticker = futures[future]
+                    processed += 1
+                    self.current_progress = processed
+                    self.current_ticker = ticker
+
+                    # Broadcast progress every 10 tickers
+                    if processed % 10 == 0 or processed == total_tickers:
+                        await self._broadcast_progress(processed, total_tickers, ticker)
+
                     result = future.result()
                     if result:
                         if "error" in result:
                             errors.append(result)
                         else:
                             # Apply filters
-                            if (result["change_percent"] >= self.filters["min_change"] and
-                                result["relative_volume"] >= self.filters["min_relative_volume"] and
-                                result["volume"] >= self.filters["min_volume"]):
+                            if (
+                                result["change_percent"] >= self.filters["min_change"]
+                                and result["relative_volume"]
+                                >= self.filters["min_relative_volume"]
+                                and result["volume"] >= self.filters["min_volume"]
+                            ):
                                 results.append(result)
 
             # Sort by change_percent descending
@@ -230,7 +307,12 @@ class EODAnalysisService:
             self.last_results = results
             self.total_scanned = len(tickers)
 
-            print(f"[EOD] Analysis complete: {len(results)} stocks found from {len(tickers)} scanned")
+            print(
+                f"[EOD] Analysis complete: {len(results)} stocks found from {len(tickers)} scanned"
+            )
+            await self._broadcast_progress(
+                total_tickers, total_tickers, None, "completed"
+            )
 
             # Send email summary (only if enabled)
             if send_email:
@@ -240,7 +322,7 @@ class EODAnalysisService:
                 "count": len(results),
                 "total_scanned": len(tickers),
                 "results": results,
-                "status": "completed"
+                "status": "completed",
             }
         except Exception as e:
             print(f"[EOD] Analysis error: {e}")
@@ -249,7 +331,7 @@ class EODAnalysisService:
                 "total_scanned": 0,
                 "results": [],
                 "status": "error",
-                "error": str(e)
+                "error": str(e),
             }
         finally:
             self.is_analyzing = False
@@ -263,98 +345,106 @@ class EODAnalysisService:
         try:
             import requests
             from bs4 import BeautifulSoup
-            
+
             # Try to fetch from Borsa Istanbul
             url = "https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/Temel-Degerler-Ve-Oranlar.aspx"
             headers = {"User-Agent": "Mozilla/5.0"}
-            
+
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
-                None, 
-                lambda: requests.get(url, headers=headers, timeout=10)
+                None, lambda: requests.get(url, headers=headers, timeout=10)
             )
-            
+
             if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
+                soup = BeautifulSoup(response.text, "html.parser")
                 # Find ticker symbols in the table
                 tickers = set()  # Use set to prevent duplicates
-                
+
                 # Look for table rows with ticker data
-                for row in soup.select('table tbody tr'):
-                    cells = row.select('td')
+                for row in soup.select("table tbody tr"):
+                    cells = row.select("td")
                     if cells and len(cells) > 0:
                         ticker_text = cells[0].get_text(strip=True)
-                        if ticker_text and len(ticker_text) >= 3 and ticker_text.isalpha():
+                        if (
+                            ticker_text
+                            and len(ticker_text) >= 3
+                            and ticker_text.isalpha()
+                        ):
                             tickers.add(f"{ticker_text}.IS")
-                
+
                 if len(tickers) > 50:
                     print(f"[EOD] Fetched {len(tickers)} unique tickers dynamically")
                     return list(tickers)
-            
+
         except Exception as e:
             print(f"[EOD] Dynamic fetch failed: {e}, using static list")
-        
+
         # Fallback to static list - also deduplicate
         from financia.bist100_tickers import get_bist_tickers
+
         return list(set(get_bist_tickers("all")))
 
-    async def _send_email_summary(self, results: List[Dict], total_scanned: int, error_count: int):
+    async def _send_email_summary(
+        self, results: List[Dict], total_scanned: int, error_count: int
+    ):
         """Send email summary of EOD analysis."""
         if not results:
             return
-        
+
         now = now_turkey()
         date_str = now.strftime("%d.%m.%Y")
-        
+
         # Build email body
         subject = f"📊 BIST Gün Sonu Raporu - {date_str} ({len(results)} hisse)"
-        
+
         body = f"""
 BIST GÜN SONU ANALİZ RAPORU
-{'=' * 50}
+{"=" * 50}
 Tarih: {date_str}
-Saat: {now.strftime('%H:%M')}
+Saat: {now.strftime("%H:%M")}
 Taranan: {total_scanned} hisse
 Bulunan: {len(results)} hisse (filtrelere uyan)
 
 FİLTRELER:
-- Min. Değişim: %{self.filters['min_change']}
-- Min. Bağıl Hacim: {self.filters['min_relative_volume']}x
-- Min. Hacim: {self.filters['min_volume']:,} lot
+- Min. Değişim: %{self.filters["min_change"]}
+- Min. Bağıl Hacim: {self.filters["min_relative_volume"]}x
+- Min. Hacim: {self.filters["min_volume"]:,} lot
 
-{'=' * 50}
+{"=" * 50}
 EN ÇOK YÜKSELENLER
-{'=' * 50}
+{"=" * 50}
 """
-        
+
         # Top 10 gainers
         top_gainers = results[:10]
         for i, stock in enumerate(top_gainers, 1):
             body += f"""
-{i}. {stock['symbol']}
-   Kapanış: ₺{stock['close']:.2f} ({stock['change_percent']:+.2f}%)
-   Bağıl Hacim: {stock['relative_volume']:.1f}x
-   Hacim: {self._format_volume(stock.get('volume_tl', stock['volume']))}
+{i}. {stock["symbol"]}
+   Kapanış: ₺{stock["close"]:.2f} ({stock["change_percent"]:+.2f}%)
+   Bağıl Hacim: {stock["relative_volume"]:.1f}x
+   Hacim: {self._format_volume(stock.get("volume_tl", stock["volume"]))}
 """
-        
+
         # High volume stocks (sorted by relative volume)
-        high_volume = sorted(results, key=lambda x: x['relative_volume'], reverse=True)[:5]
-        
+        high_volume = sorted(results, key=lambda x: x["relative_volume"], reverse=True)[
+            :5
+        ]
+
         body += f"""
-{'=' * 50}
+{"=" * 50}
 EN YÜKSEK BAĞIL HACİM
-{'=' * 50}
+{"=" * 50}
 """
         for i, stock in enumerate(high_volume, 1):
             body += f"{i}. {stock['symbol']}: {stock['relative_volume']:.1f}x hacim, {stock['change_percent']:+.2f}%\n"
-        
+
         body += f"""
-{'=' * 50}
+{"=" * 50}
 Dashboard: http://localhost:5173
 
 Bu rapor otomatik olarak oluşturulmuştur.
 """
-        
+
         EmailService.send_email(subject, body)
         print(f"[EOD] Email summary sent")
 
@@ -367,7 +457,6 @@ Bu rapor otomatik olarak oluşturulmuştur.
         if vol >= 1_000:
             return f"{vol / 1_000:.1f}K TL"
         return f"{vol:.0f} TL"
-
 
     async def start_trend_analysis(self):
         """Start trend prediction analysis in background (non-blocking)."""
@@ -394,14 +483,16 @@ Bu rapor otomatik olarak oluşturulmuştur.
                 "count": len(self.last_trend_results),
                 "total_scanned": self.total_scanned,
                 "results": self.last_trend_results,
-                "status": "already_running"
+                "status": "already_running",
             }
 
         self.is_analyzing = True
         await self._broadcast_status()
 
         try:
-            print(f"[EOD-Trend] Starting trend prediction at {now_turkey().strftime('%H:%M:%S')}")
+            print(
+                f"[EOD-Trend] Starting trend prediction at {now_turkey().strftime('%H:%M:%S')}"
+            )
 
             tickers = await self._get_dynamic_tickers()
             results = []
@@ -449,9 +540,9 @@ Bu rapor otomatik olarak oluşturulmuştur.
                     elif 50 < current_rsi <= 70:
                         scores["rsi"] = 10  # Still bullish
                     elif current_rsi < 30:
-                        scores["rsi"] = 5   # Oversold, risky reversal
+                        scores["rsi"] = 5  # Oversold, risky reversal
                     else:
-                        scores["rsi"] = 0   # Overbought
+                        scores["rsi"] = 0  # Overbought
 
                     # === 2. MACD - Trend Direction ===
                     ema12 = close.ewm(span=12, adjust=False).mean()
@@ -471,7 +562,7 @@ Bu rapor otomatik olarak oluşturulmuştur.
                     elif macd_current > macd_prev:
                         scores["macd"] = 10  # MACD rising
                     elif hist_current > hist_prev:
-                        scores["macd"] = 5   # Histogram improving
+                        scores["macd"] = 5  # Histogram improving
                     else:
                         scores["macd"] = 0
 
@@ -497,14 +588,21 @@ Bu rapor otomatik olarak oluşturulmuştur.
                     tr = np.maximum(
                         high - low,
                         np.maximum(
-                            abs(high - close.shift(1)),
-                            abs(low - close.shift(1))
-                        )
+                            abs(high - close.shift(1)), abs(low - close.shift(1))
+                        ),
                     )
                     atr = tr.rolling(14).mean()
 
-                    plus_dm = np.where((high.diff() > low.diff().abs()) & (high.diff() > 0), high.diff(), 0)
-                    minus_dm = np.where((low.diff().abs() > high.diff()) & (low.diff() < 0), low.diff().abs(), 0)
+                    plus_dm = np.where(
+                        (high.diff() > low.diff().abs()) & (high.diff() > 0),
+                        high.diff(),
+                        0,
+                    )
+                    minus_dm = np.where(
+                        (low.diff().abs() > high.diff()) & (low.diff() < 0),
+                        low.diff().abs(),
+                        0,
+                    )
 
                     plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / atr)
                     minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / atr)
@@ -513,14 +611,18 @@ Bu rapor otomatik olarak oluşturulmuştur.
                     adx = dx.rolling(14).mean()
 
                     adx_current = adx.iloc[-1] if not np.isnan(adx.iloc[-1]) else 0
-                    plus_di_current = plus_di.iloc[-1] if not np.isnan(plus_di.iloc[-1]) else 0
-                    minus_di_current = minus_di.iloc[-1] if not np.isnan(minus_di.iloc[-1]) else 0
+                    plus_di_current = (
+                        plus_di.iloc[-1] if not np.isnan(plus_di.iloc[-1]) else 0
+                    )
+                    minus_di_current = (
+                        minus_di.iloc[-1] if not np.isnan(minus_di.iloc[-1]) else 0
+                    )
 
                     # ADX score: Strong trend + bullish DI
                     if adx_current > 25 and plus_di_current > minus_di_current:
                         scores["adx"] = 10  # Strong bullish trend
                     elif adx_current > 20:
-                        scores["adx"] = 5   # Developing trend
+                        scores["adx"] = 5  # Developing trend
                     else:
                         scores["adx"] = 0
 
@@ -528,7 +630,11 @@ Bu rapor otomatik olarak oluşturulmuştur.
                     vol_sma5 = volume.rolling(5).mean()
                     vol_sma20 = volume.rolling(20).mean()
 
-                    vol_ratio = vol_sma5.iloc[-1] / vol_sma20.iloc[-1] if vol_sma20.iloc[-1] > 0 else 1
+                    vol_ratio = (
+                        vol_sma5.iloc[-1] / vol_sma20.iloc[-1]
+                        if vol_sma20.iloc[-1] > 0
+                        else 1
+                    )
 
                     # Volume increasing with price = bullish
                     price_up = close.iloc[-1] > close.iloc[-5]
@@ -547,17 +653,19 @@ Bu rapor otomatik olarak oluşturulmuştur.
                     upper_band = sma20 + (2 * std20)
                     lower_band = sma20 - (2 * std20)
 
-                    bb_position = (current_close - lower_band.iloc[-1]) / (upper_band.iloc[-1] - lower_band.iloc[-1])
+                    bb_position = (current_close - lower_band.iloc[-1]) / (
+                        upper_band.iloc[-1] - lower_band.iloc[-1]
+                    )
 
                     # Near lower band = potential bounce
                     if bb_position < 0.2:
                         scores["bb"] = 10  # Near lower band, potential bounce
                     elif 0.2 <= bb_position < 0.5:
-                        scores["bb"] = 8   # Below middle, room to grow
+                        scores["bb"] = 8  # Below middle, room to grow
                     elif 0.5 <= bb_position < 0.8:
-                        scores["bb"] = 5   # Above middle
+                        scores["bb"] = 5  # Above middle
                     else:
-                        scores["bb"] = 0   # Near upper band, limited upside
+                        scores["bb"] = 0  # Near upper band, limited upside
 
                     # === 7. Stochastic (14,3,3) ===
                     lowest_low = low.rolling(14).min()
@@ -572,22 +680,28 @@ Bu rapor otomatik olarak oluşturulmuştur.
                     if stoch_k_current < 30:
                         scores["stoch"] = 10  # Oversold, ready to bounce
                     elif stoch_k_current > stoch_k_prev and stoch_k_current < 50:
-                        scores["stoch"] = 8   # Rising from low
+                        scores["stoch"] = 8  # Rising from low
                     elif stoch_k_current < 80:
                         scores["stoch"] = 5
                     else:
-                        scores["stoch"] = 0   # Overbought
+                        scores["stoch"] = 0  # Overbought
 
                     # === 8. Price vs EMA200 ===
-                    ema200 = close.ewm(span=200, adjust=False).mean() if len(close) >= 200 else close.ewm(span=len(close), adjust=False).mean()
+                    ema200 = (
+                        close.ewm(span=200, adjust=False).mean()
+                        if len(close) >= 200
+                        else close.ewm(span=len(close), adjust=False).mean()
+                    )
 
-                    price_vs_ema200 = (current_close - ema200.iloc[-1]) / ema200.iloc[-1] * 100
+                    price_vs_ema200 = (
+                        (current_close - ema200.iloc[-1]) / ema200.iloc[-1] * 100
+                    )
 
                     if current_close > ema200.iloc[-1]:
                         if price_vs_ema200 < 5:
                             scores["ema200"] = 10  # Just above EMA200, good support
                         else:
-                            scores["ema200"] = 5   # Above EMA200
+                            scores["ema200"] = 5  # Above EMA200
                     else:
                         scores["ema200"] = 0  # Below EMA200
 
@@ -601,7 +715,11 @@ Bu rapor otomatik olarak oluşturulmuştur.
                     daily_change = ((current_close - prev_close) / prev_close) * 100
 
                     # Calculate 5-day momentum
-                    five_day_change = ((current_close - close.iloc[-6]) / close.iloc[-6]) * 100 if len(close) > 5 else 0
+                    five_day_change = (
+                        ((current_close - close.iloc[-6]) / close.iloc[-6]) * 100
+                        if len(close) > 5
+                        else 0
+                    )
 
                     return {
                         "ticker": ticker,
@@ -615,21 +733,29 @@ Bu rapor otomatik olarak oluşturulmuştur.
                         "adx": round(adx_current, 1),
                         "bb_position": round(bb_position * 100, 0),
                         "scores": scores,
-                        "direction": "bullish" if trend_score >= 60 else "neutral" if trend_score >= 40 else "bearish",
+                        "direction": "bullish"
+                        if trend_score >= 60
+                        else "neutral"
+                        if trend_score >= 40
+                        else "bearish",
                     }
                 except Exception as e:
                     return {"ticker": ticker, "error": str(e)}
 
             # Run analysis in parallel
             with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = {executor.submit(calculate_trend_score, t): t for t in tickers}
+                futures = {
+                    executor.submit(calculate_trend_score, t): t for t in tickers
+                }
 
                 for future in as_completed(futures):
                     result = future.result()
                     if result:
                         if "error" in result:
                             errors.append(result)
-                        elif result.get("trend_score", 0) >= self.trend_filters.get("min_trend_score", 0):
+                        elif result.get("trend_score", 0) >= self.trend_filters.get(
+                            "min_trend_score", 0
+                        ):
                             results.append(result)
 
             # Sort by trend score descending
@@ -639,7 +765,9 @@ Bu rapor otomatik olarak oluşturulmuştur.
             self.last_trend_results = results
             self.total_scanned = len(tickers)
 
-            print(f"[EOD-Trend] Analysis complete: {len(results)} stocks with score >= {self.trend_filters.get('min_trend_score', 0)} from {len(tickers)} scanned")
+            print(
+                f"[EOD-Trend] Analysis complete: {len(results)} stocks with score >= {self.trend_filters.get('min_trend_score', 0)} from {len(tickers)} scanned"
+            )
 
             # Send email summary if enabled
             if send_email and results:
@@ -649,18 +777,19 @@ Bu rapor otomatik olarak oluşturulmuştur.
                 "count": len(results),
                 "total_scanned": len(tickers),
                 "results": results,
-                "status": "completed"
+                "status": "completed",
             }
         except Exception as e:
             print(f"[EOD-Trend] Analysis error: {e}")
             import traceback
+
             traceback.print_exc()
             return {
                 "count": 0,
                 "total_scanned": 0,
                 "results": [],
                 "status": "error",
-                "error": str(e)
+                "error": str(e),
             }
         finally:
             self.is_analyzing = False
@@ -678,31 +807,37 @@ Bu rapor otomatik olarak oluşturulmuştur.
 
         body = f"""
 BIST TREND TAHMİN RAPORU - YARIN İÇİN ADAYLAR
-{'=' * 50}
+{"=" * 50}
 Tarih: {date_str}
-Saat: {now.strftime('%H:%M')}
+Saat: {now.strftime("%H:%M")}
 Taranan: {total_scanned} hisse
-Bulunan: {len(results)} aday (skor >= {self.trend_filters.get('min_trend_score', 60)})
+Bulunan: {len(results)} aday (skor >= {self.trend_filters.get("min_trend_score", 60)})
 
-{'=' * 50}
+{"=" * 50}
 EN YÜKSEK TREND SKORLU HİSSELER
-{'=' * 50}
+{"=" * 50}
 """
 
         # Top 15 by trend score
         for i, stock in enumerate(results[:15], 1):
-            direction_emoji = "🟢" if stock["direction"] == "bullish" else "🟡" if stock["direction"] == "neutral" else "🔴"
+            direction_emoji = (
+                "🟢"
+                if stock["direction"] == "bullish"
+                else "🟡"
+                if stock["direction"] == "neutral"
+                else "🔴"
+            )
             body += f"""
-{i}. {stock['symbol']} - {direction_emoji} Skor: {stock['trend_score']}/100
-   Kapanış: ₺{stock['close']:.2f} ({stock['change_percent']:+.2f}%)
-   5 Günlük: {stock['five_day_change']:+.2f}%
-   RSI: {stock['rsi']:.0f} | ADX: {stock['adx']:.0f} | BB: %{stock['bb_position']:.0f}
+{i}. {stock["symbol"]} - {direction_emoji} Skor: {stock["trend_score"]}/100
+   Kapanış: ₺{stock["close"]:.2f} ({stock["change_percent"]:+.2f}%)
+   5 Günlük: {stock["five_day_change"]:+.2f}%
+   RSI: {stock["rsi"]:.0f} | ADX: {stock["adx"]:.0f} | BB: %{stock["bb_position"]:.0f}
 """
 
         body += f"""
-{'=' * 50}
+{"=" * 50}
 SKOR BİLEŞENLERİ
-{'=' * 50}
+{"=" * 50}
 - RSI (30-50 ideal): Momentum göstergesi
 - MACD: Trend yönü ve gücü
 - EMA 20/50 Cross: Kısa vadeli trend
@@ -712,7 +847,7 @@ SKOR BİLEŞENLERİ
 - Stochastic: Aşırı alım/satım
 - EMA200: Uzun vadeli trend
 
-{'=' * 50}
+{"=" * 50}
 NOT: Bu tahminler sadece teknik analize dayanmaktadır.
 Yatırım kararı vermeden önce kendi araştırmanızı yapın.
 

@@ -44,6 +44,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
     const [addingCrypto, setAddingCrypto] = useState(false); // Crypto bulk add loading
     const [deletingAllTickers, setDeletingAllTickers] = useState(null); // strategy id being cleared
     const [chartModal, setChartModal] = useState(null); // { ticker, market, strategyId }
+    const [confirmModal, setConfirmModal] = useState(null); // { title, message, onConfirm }
 
     // Strategy form state
     const [formType, setFormType] = useState('');
@@ -185,8 +186,18 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         }
     };
 
-    const deleteStrategy = async (strategyId) => {
-        if (!confirm('Stratejiyi silmek istediğinize emin misiniz? İlgili ticker\'lar ve sinyaller de silinecek.')) return;
+    const deleteStrategy = async (strategyId, confirmed = false) => {
+        if (!confirmed) {
+            setConfirmModal({
+                title: '⚠️ Strateji Sil',
+                message: 'Stratejiyi silmek istediğinize emin misiniz? İlgili ticker\'lar ve sinyaller de silinecek.',
+                onConfirm: () => {
+                    setConfirmModal(null);
+                    deleteStrategy(strategyId, true);
+                }
+            });
+            return;
+        }
 
         try {
             await fetch(`${getStrategiesApi()}/${strategyId}`, { method: 'DELETE' });
@@ -401,11 +412,21 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         addToast(`✅ Top 10 Crypto: ${added} sembol eklendi${skipped > 0 ? `, ${skipped} atlandı` : ''}`, 'success', 5000);
     };
 
-    const deleteAllTickers = async (strategyId) => {
+    const deleteAllTickers = async (strategyId, confirmed = false) => {
         const tickers = getWatchlistForStrategy(strategyId);
         if (tickers.length === 0) return;
 
-        if (!confirm(`Bu stratejideki tüm sembolleri (${tickers.length} adet) silmek istediğinize emin misiniz?`)) return;
+        if (!confirmed) {
+            setConfirmModal({
+                title: 'Tüm Sembolleri Sil',
+                message: `Bu stratejideki tüm sembolleri (${tickers.length} adet) silmek istediğinize emin misiniz?`,
+                onConfirm: () => {
+                    setConfirmModal(null);
+                    deleteAllTickers(strategyId, true);
+                }
+            });
+            return;
+        }
 
         setDeletingAllTickers(strategyId);
 
@@ -912,6 +933,39 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                     strategyId={chartModal.strategyId}
                     onClose={() => setChartModal(null)}
                 />
+            )}
+
+            {/* Custom Confirm Modal */}
+            {confirmModal && (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md shadow-2xl">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="w-12 h-12 rounded-full bg-red-500/20 flex items-center justify-center">
+                                <span className="text-2xl">⚠️</span>
+                            </div>
+                            <h3 className="text-xl font-bold text-white">{confirmModal.title}</h3>
+                        </div>
+
+                        <p className="text-gray-300 mb-6 leading-relaxed">
+                            {confirmModal.message}
+                        </p>
+
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setConfirmModal(null)}
+                                className="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-bold transition-colors"
+                            >
+                                İptal
+                            </button>
+                            <button
+                                onClick={confirmModal.onConfirm}
+                                className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold transition-colors"
+                            >
+                                Sil
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

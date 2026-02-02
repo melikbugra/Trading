@@ -8,7 +8,7 @@ const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export default function EODAnalysisPanel({ strategies }) {
     const { addToast } = useToast();
-    const { eodStatus } = useWebSocket();
+    const { eodStatus, eodProgress } = useWebSocket();
     const { isSimulationMode, simEodResults, simEodProgress, cancelEodAnalysis } = useSimulation();
 
     // Tab state
@@ -42,11 +42,75 @@ export default function EODAnalysisPanel({ strategies }) {
     const [chartModal, setChartModal] = useState(null);
     const [addToStrategyModal, setAddToStrategyModal] = useState(null);
     const [addingToStrategy, setAddingToStrategy] = useState(false);
+    const [selectedStrategies, setSelectedStrategies] = useState([]); // For multi-select
     const prevAnalyzingRef = useRef(false);
+
+    // Simulation strategies (loaded separately when in sim mode)
+    const [simStrategies, setSimStrategies] = useState([]);
+
+    // Reset selected strategies when modal opens
+    useEffect(() => {
+        if (addToStrategyModal) {
+            setSelectedStrategies([]);
+        }
+    }, [addToStrategyModal]);
+
+    // Load simulation strategies when modal opens in sim mode
+    useEffect(() => {
+        if (isSimulationMode && addToStrategyModal) {
+            const loadSimStrategies = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/simulation/strategies`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        setSimStrategies(data);
+                    }
+                } catch (err) {
+                    console.error('Failed to load sim strategies:', err);
+                }
+            };
+            loadSimStrategies();
+        }
+    }, [isSimulationMode, addToStrategyModal]);
+
+    // Get the right strategies list based on mode
+    const activeStrategies = isSimulationMode ? simStrategies : strategies;
 
     // Load initial status on mount
     useEffect(() => {
         const loadInitialStatus = async () => {
+            // First check localStorage for simulation results
+            if (isSimulationMode) {
+                const savedVolume = localStorage.getItem('sim_eod_volume_results');
+                const savedTrend = localStorage.getItem('sim_eod_trend_results');
+
+                if (savedVolume) {
+                    try {
+                        const data = JSON.parse(savedVolume);
+                        const results = Array.isArray(data.results) ? data.results : [];
+                        setVolumeResults(results);
+                        setVolumeStats({ count: data.count || results.length, total_scanned: data.total_scanned || 0 });
+                    } catch (e) {
+                        console.error('Failed to parse saved volume results:', e);
+                        localStorage.removeItem('sim_eod_volume_results');
+                    }
+                }
+
+                if (savedTrend) {
+                    try {
+                        const data = JSON.parse(savedTrend);
+                        // Ensure trend_score exists on each result
+                        const results = Array.isArray(data.results) ? data.results.filter(r => r && typeof r.trend_score === 'number') : [];
+                        setTrendResults(results);
+                        setTrendStats({ count: data.count || results.length, total_scanned: data.total_scanned || 0 });
+                    } catch (e) {
+                        console.error('Failed to parse saved trend results:', e);
+                        localStorage.removeItem('sim_eod_trend_results');
+                    }
+                }
+                return;
+            }
+
             try {
                 const res = await fetch(`${API_BASE}/strategies/eod-analysis/status`);
                 if (res.ok) {
@@ -79,7 +143,7 @@ export default function EODAnalysisPanel({ strategies }) {
             }
         };
         loadInitialStatus();
-    }, []);
+    }, [isSimulationMode]);
 
     // Handle simulation EOD results
     useEffect(() => {
@@ -87,14 +151,61 @@ export default function EODAnalysisPanel({ strategies }) {
 
         console.log('[EODPanel] Simulation EOD results:', simEodResults);
 
-        if (simEodResults.results && simEodResults.results.length > 0) {
-            setVolumeResults(simEodResults.results);
-            setVolumeStats({
-                count: simEodResults.results_count,
-                total_scanned: simEodResults.total_scanned
-            });
-            setLastRun(new Date());
-            setVolumeLoading(false); // Stop loading when results arrive
+        const results = Array.isArray(simEodResults.results) ? simEodResults.results : [];
+
+        // Set volume results
+        setVolumeResults(results);
+        setVolumeStats({
+            count: simEodResults.results_count || results.length,
+            total_scanned: simEodResults.total_scanned || 0
+        });
+
+        // For simulation, use the same results for trend (filtered differently)
+        // In real implementation, trend would have different data
+        // For now, simulate trend by adding trend_score based on change_percent
+        const trendData = results
+            .filter(r => r && typeof r.change_percent === 'number' && typeof r.relative_volume === 'number')
+            .map(r => {
+                const trendScore = Math.round(Math.min(100, Math.max(0, 50 + (r.change_percent || 0) * 5 + ((r.relative_volume || 1) - 1) * 10)));
+                return {
+                    ...r,
+                    trend_score: trendScore,
+                    direction: (r.change_percent || 0) > 0 ? 'bullish' : 'bearish',
+                    five_day_change: (r.change_percent || 0) * 2.5, // Simulated
+                    // Add simulated indicator values for display
+                    rsi: Math.round(30 + Math.random() * 40), // 30-70 range
+                    adx: Math.round(15 + Math.random() * 25), // 15-40 range
+                    bb_position: Math.round(20 + Math.random() * 60), // 20-80 range
+                };
+            })
+            .filter(r => r.trend_score >= 60);
+
+        setTrendResults(trendData);
+        setTrendStats({
+            count: trendData.length,
+            total_scanned: simEodResults.total_scanned || 0
+        });
+
+        setLastRun(new Date());
+        setVolumeLoading(false);
+        setTrendLoading(false);
+
+        // Save to localStorage for persistence
+        localStorage.setItem('sim_eod_volume_results', JSON.stringify({
+            results: results,
+            count: simEodResults.results_count || results.length,
+            total_scanned: simEodResults.total_scanned || 0,
+            date: simEodResults.date
+        }));
+
+        localStorage.setItem('sim_eod_trend_results', JSON.stringify({
+            results: trendData,
+            count: trendData.length,
+            total_scanned: simEodResults.total_scanned || 0,
+            date: simEodResults.date
+        }));
+
+        if (simEodResults.date) {
             addToast(`Simülasyon gün sonu analizi: ${simEodResults.date}`, 'success');
         }
     }, [isSimulationMode, simEodResults, addToast]);
@@ -141,7 +252,23 @@ export default function EODAnalysisPanel({ strategies }) {
         }
 
         prevAnalyzingRef.current = eodStatus.is_analyzing;
-    }, [eodStatus, addToast]);
+    }, [eodStatus, addToast, isSimulationMode]);
+
+    // Cancel live EOD analysis
+    const cancelLiveEodAnalysis = async () => {
+        try {
+            const res = await fetch(`${API_BASE}/strategies/eod-analysis/cancel`, { method: 'POST' });
+            if (res.ok) {
+                addToast('Analiz iptal edildi', 'info');
+            }
+        } catch (err) {
+            console.error('Failed to cancel EOD analysis:', err);
+        }
+    };
+
+    // Get current progress data based on mode
+    const currentProgress = isSimulationMode ? simEodProgress : eodProgress;
+    const handleCancelAnalysis = isSimulationMode ? cancelEodAnalysis : cancelLiveEodAnalysis;
 
     // Run Volume Analysis
     const runVolumeAnalysis = useCallback(async () => {
@@ -160,11 +287,12 @@ export default function EODAnalysisPanel({ strategies }) {
 
                 if (res.ok) {
                     addToast('Simülasyon EOD analizi başlatıldı...', 'info');
+                    // Don't set loading to false here - WebSocket progress will handle it
                 } else {
                     const err = await res.json();
                     addToast(err.detail || 'Analiz başlatılamadı', 'error');
+                    setVolumeLoading(false);
                 }
-                setVolumeLoading(false);
                 return;
             }
 
@@ -213,11 +341,12 @@ export default function EODAnalysisPanel({ strategies }) {
 
                 if (res.ok) {
                     addToast('Simülasyon EOD analizi başlatıldı...', 'info');
+                    // Don't set loading to false here - WebSocket progress will handle it
                 } else {
                     const err = await res.json();
                     addToast(err.detail || 'Analiz başlatılamadı', 'error');
+                    setTrendLoading(false);
                 }
-                setTrendLoading(false);
                 return;
             }
 
@@ -289,30 +418,67 @@ export default function EODAnalysisPanel({ strategies }) {
         setAddToStrategyModal(result);
     };
 
-    const addToStrategy = async (strategyId) => {
-        if (!addToStrategyModal) return;
+    const toggleStrategySelection = (strategyId) => {
+        setSelectedStrategies(prev =>
+            prev.includes(strategyId)
+                ? prev.filter(id => id !== strategyId)
+                : [...prev, strategyId]
+        );
+    };
+
+    const toggleAllStrategies = () => {
+        const activeStrategyIds = activeStrategies.filter(s => s.is_active).map(s => s.id);
+        if (selectedStrategies.length === activeStrategyIds.length) {
+            setSelectedStrategies([]);
+        } else {
+            setSelectedStrategies(activeStrategyIds);
+        }
+    };
+
+    const addToSelectedStrategies = async () => {
+        if (!addToStrategyModal || selectedStrategies.length === 0) return;
 
         setAddingToStrategy(true);
-        try {
-            const res = await fetch(`${API_BASE}/strategies/watchlist`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    ticker: addToStrategyModal.ticker,
-                    market: 'bist100',
-                    strategy_id: strategyId,
-                }),
-            });
+        let successCount = 0;
+        let errorCount = 0;
 
-            if (res.ok) {
-                addToast(`${addToStrategyModal.symbol} stratejiye eklendi`, 'success');
-                setAddToStrategyModal(null);
-            } else {
-                const err = await res.json();
-                addToast(err.detail || 'Ekleme başarısız', 'error');
+        try {
+            // Use simulation endpoint if in simulation mode
+            const endpoint = isSimulationMode
+                ? `${API_BASE}/simulation/watchlist`
+                : `${API_BASE}/strategies/watchlist`;
+
+            for (const strategyId of selectedStrategies) {
+                try {
+                    const res = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            ticker: addToStrategyModal.ticker,
+                            market: 'bist100',
+                            strategy_id: strategyId,
+                        }),
+                    });
+
+                    if (res.ok) {
+                        successCount++;
+                    } else {
+                        errorCount++;
+                    }
+                } catch {
+                    errorCount++;
+                }
             }
+
+            if (successCount > 0) {
+                addToast(`${addToStrategyModal.symbol} ${successCount} stratejiye eklendi`, 'success');
+            }
+            if (errorCount > 0) {
+                addToast(`${errorCount} strateji eklenemedi`, 'error');
+            }
+            setAddToStrategyModal(null);
         } catch (err) {
-            console.error('Failed to add to strategy:', err);
+            console.error('Failed to add to strategies:', err);
             addToast('Bağlantı hatası', 'error');
         } finally {
             setAddingToStrategy(false);
@@ -440,10 +606,10 @@ export default function EODAnalysisPanel({ strategies }) {
                                     <>🔍 Analiz Et</>
                                 )}
                             </button>
-                            {/* Cancel button for simulation */}
-                            {isSimulationMode && simEodProgress && (
+                            {/* Cancel button */}
+                            {volumeLoading && currentProgress && currentProgress.status === 'running' && (
                                 <button
-                                    onClick={cancelEodAnalysis}
+                                    onClick={handleCancelAnalysis}
                                     className="px-3 py-2 font-bold rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm whitespace-nowrap"
                                 >
                                     ❌ İptal
@@ -451,17 +617,17 @@ export default function EODAnalysisPanel({ strategies }) {
                             )}
                         </div>
 
-                        {/* Simulation Progress Bar */}
-                        {isSimulationMode && simEodProgress && (
+                        {/* Progress Bar */}
+                        {volumeLoading && currentProgress && currentProgress.total > 0 && (
                             <div className="mt-3">
                                 <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-                                    <span>{simEodProgress.ticker || '...'} taranıyor...</span>
-                                    <span>{simEodProgress.current} / {simEodProgress.total} ({Math.round((simEodProgress.current / simEodProgress.total) * 100)}%)</span>
+                                    <span>{currentProgress.ticker || '...'} taranıyor...</span>
+                                    <span>{currentProgress.current} / {currentProgress.total} ({Math.round((currentProgress.current / currentProgress.total) * 100)}%)</span>
                                 </div>
                                 <div className="w-full bg-gray-800 rounded-full h-2.5">
                                     <div
                                         className="bg-purple-600 h-2.5 rounded-full transition-all duration-300"
-                                        style={{ width: `${(simEodProgress.current / simEodProgress.total) * 100}%` }}
+                                        style={{ width: `${(currentProgress.current / currentProgress.total) * 100}%` }}
                                     ></div>
                                 </div>
                             </div>
@@ -600,10 +766,10 @@ export default function EODAnalysisPanel({ strategies }) {
                                     <>🎯 Trend Analizi</>
                                 )}
                             </button>
-                            {/* Cancel button for simulation */}
-                            {isSimulationMode && simEodProgress && (
+                            {/* Cancel button */}
+                            {trendLoading && currentProgress && currentProgress.status === 'running' && (
                                 <button
-                                    onClick={cancelEodAnalysis}
+                                    onClick={handleCancelAnalysis}
                                     className="px-3 py-2 font-bold rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm whitespace-nowrap"
                                 >
                                     ❌ İptal
@@ -611,17 +777,17 @@ export default function EODAnalysisPanel({ strategies }) {
                             )}
                         </div>
 
-                        {/* Simulation Progress Bar */}
-                        {isSimulationMode && simEodProgress && (
+                        {/* Progress Bar */}
+                        {trendLoading && currentProgress && currentProgress.total > 0 && (
                             <div className="mt-3">
                                 <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-                                    <span>{simEodProgress.ticker || '...'} taranıyor...</span>
-                                    <span>{simEodProgress.current} / {simEodProgress.total} ({Math.round((simEodProgress.current / simEodProgress.total) * 100)}%)</span>
+                                    <span>{currentProgress.ticker || '...'} taranıyor...</span>
+                                    <span>{currentProgress.current} / {currentProgress.total} ({Math.round((currentProgress.current / currentProgress.total) * 100)}%)</span>
                                 </div>
                                 <div className="w-full bg-gray-800 rounded-full h-2.5">
                                     <div
                                         className="bg-green-600 h-2.5 rounded-full transition-all duration-300"
-                                        style={{ width: `${(simEodProgress.current / simEodProgress.total) * 100}%` }}
+                                        style={{ width: `${(currentProgress.current / currentProgress.total) * 100}%` }}
                                     ></div>
                                 </div>
                             </div>
@@ -713,12 +879,12 @@ export default function EODAnalysisPanel({ strategies }) {
                                                     <div className="flex items-center justify-center gap-2">
                                                         <div className="w-16 bg-gray-700 rounded-full h-2">
                                                             <div
-                                                                className={`h-2 rounded-full ${result.trend_score >= 80 ? 'bg-green-500' : result.trend_score >= 60 ? 'bg-blue-500' : result.trend_score >= 40 ? 'bg-yellow-500' : 'bg-red-500'}`}
-                                                                style={{ width: `${result.trend_score}%` }}
+                                                                className={`h-2 rounded-full ${(result.trend_score || 0) >= 80 ? 'bg-green-500' : (result.trend_score || 0) >= 60 ? 'bg-blue-500' : (result.trend_score || 0) >= 40 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                                                                style={{ width: `${result.trend_score || 0}%` }}
                                                             />
                                                         </div>
-                                                        <span className={`font-bold text-sm ${getScoreColor(result.trend_score)}`}>
-                                                            {result.trend_score}
+                                                        <span className={`font-bold text-sm ${getScoreColor(result.trend_score || 0)}`}>
+                                                            {result.trend_score || 0}
                                                         </span>
                                                     </div>
                                                 </td>
@@ -726,31 +892,31 @@ export default function EODAnalysisPanel({ strategies }) {
                                                     {getDirectionEmoji(result.direction)}
                                                 </td>
                                                 <td className="px-3 py-2 text-right text-white font-mono text-sm">
-                                                    {result.close.toFixed(2)}
+                                                    {(result.close || 0).toFixed(2)}
                                                 </td>
                                                 <td className="px-3 py-2 text-right">
-                                                    <span className={`font-bold text-sm ${result.change_percent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                                        {result.change_percent >= 0 ? '+' : ''}{result.change_percent.toFixed(2)}%
+                                                    <span className={`font-bold text-sm ${(result.change_percent || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                        {(result.change_percent || 0) >= 0 ? '+' : ''}{(result.change_percent || 0).toFixed(2)}%
                                                     </span>
                                                 </td>
                                                 <td className="px-3 py-2 text-right">
-                                                    <span className={`text-sm ${result.five_day_change >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                                        {result.five_day_change >= 0 ? '+' : ''}{result.five_day_change.toFixed(1)}%
+                                                    <span className={`text-sm ${(result.five_day_change || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                        {(result.five_day_change || 0) >= 0 ? '+' : ''}{(result.five_day_change || 0).toFixed(1)}%
                                                     </span>
                                                 </td>
                                                 <td className="px-3 py-2 text-right hidden md:table-cell">
-                                                    <span className={`font-mono text-sm ${result.rsi < 30 ? 'text-green-400' : result.rsi > 70 ? 'text-red-400' : 'text-gray-400'}`}>
-                                                        {result.rsi.toFixed(0)}
+                                                    <span className={`font-mono text-sm ${(result.rsi || 50) < 30 ? 'text-green-400' : (result.rsi || 50) > 70 ? 'text-red-400' : 'text-gray-400'}`}>
+                                                        {(result.rsi || 50).toFixed(0)}
                                                     </span>
                                                 </td>
                                                 <td className="px-3 py-2 text-right hidden md:table-cell">
-                                                    <span className={`font-mono text-sm ${result.adx > 25 ? 'text-yellow-400' : 'text-gray-400'}`}>
-                                                        {result.adx.toFixed(0)}
+                                                    <span className={`font-mono text-sm ${(result.adx || 0) > 25 ? 'text-yellow-400' : 'text-gray-400'}`}>
+                                                        {(result.adx || 0).toFixed(0)}
                                                     </span>
                                                 </td>
                                                 <td className="px-3 py-2 text-right hidden lg:table-cell">
-                                                    <span className={`font-mono text-sm ${result.bb_position < 30 ? 'text-green-400' : result.bb_position > 70 ? 'text-red-400' : 'text-gray-400'}`}>
-                                                        {result.bb_position}%
+                                                    <span className={`font-mono text-sm ${(result.bb_position || 50) < 30 ? 'text-green-400' : (result.bb_position || 50) > 70 ? 'text-red-400' : 'text-gray-400'}`}>
+                                                        {result.bb_position || 50}%
                                                     </span>
                                                 </td>
                                                 <td className="px-3 py-2 text-center">
@@ -798,13 +964,13 @@ export default function EODAnalysisPanel({ strategies }) {
                 <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
                     <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
                         <h3 className="text-xl font-bold text-white mb-4">
-                            Stratejiye Ekle
+                            Stratejilere Ekle
                         </h3>
 
                         <div className="mb-4">
                             <div className="text-gray-400 mb-2">
                                 <span className="font-bold text-white">{addToStrategyModal.symbol}</span>
-                                {' '}hangi stratejiye eklensin?
+                                {' '}hangi stratejilere eklensin?
                             </div>
                             {addToStrategyModal.trend_score && (
                                 <div className="text-sm text-gray-500">
@@ -813,35 +979,76 @@ export default function EODAnalysisPanel({ strategies }) {
                             )}
                         </div>
 
+                        {/* Select All Checkbox */}
+                        {activeStrategies.filter(s => s.is_active).length > 0 && (
+                            <label className="flex items-center gap-3 px-4 py-2 bg-gray-800/50 rounded-lg mb-2 cursor-pointer hover:bg-gray-700/50 transition-colors border border-gray-600">
+                                <input
+                                    type="checkbox"
+                                    checked={selectedStrategies.length === activeStrategies.filter(s => s.is_active).length}
+                                    onChange={toggleAllStrategies}
+                                    className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500 focus:ring-offset-gray-900"
+                                />
+                                <span className="text-white font-medium">Tümünü Seç</span>
+                                <span className="text-gray-400 text-sm ml-auto">
+                                    ({selectedStrategies.length}/{activeStrategies.filter(s => s.is_active).length})
+                                </span>
+                            </label>
+                        )}
+
                         <div className="space-y-2 max-h-60 overflow-y-auto mb-4">
-                            {strategies.filter(s => s.is_active).length === 0 ? (
+                            {activeStrategies.filter(s => s.is_active).length === 0 ? (
                                 <div className="text-gray-500 text-center py-4">
                                     Aktif strateji bulunamadı
                                 </div>
                             ) : (
-                                strategies.filter(s => s.is_active).map(strategy => (
-                                    <button
+                                activeStrategies.filter(s => s.is_active).map(strategy => (
+                                    <label
                                         key={strategy.id}
-                                        onClick={() => addToStrategy(strategy.id)}
-                                        disabled={addingToStrategy}
-                                        className="w-full px-4 py-3 bg-gray-800 hover:bg-gray-700 disabled:bg-gray-800 text-left rounded-lg transition-colors flex items-center justify-between"
+                                        className={`flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-colors ${selectedStrategies.includes(strategy.id)
+                                                ? 'bg-blue-900/30 border border-blue-500/50'
+                                                : 'bg-gray-800 hover:bg-gray-700 border border-transparent'
+                                            }`}
                                     >
-                                        <div>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedStrategies.includes(strategy.id)}
+                                            onChange={() => toggleStrategySelection(strategy.id)}
+                                            className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500 focus:ring-offset-gray-900"
+                                        />
+                                        <div className="flex-1">
                                             <div className="text-white font-medium">{strategy.name}</div>
                                             <div className="text-gray-500 text-sm">{strategy.strategy_type}</div>
                                         </div>
-                                        <span className="text-blue-400">→</span>
-                                    </button>
+                                    </label>
                                 ))
                             )}
                         </div>
 
-                        <button
-                            onClick={() => setAddToStrategyModal(null)}
-                            className="w-full px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
-                        >
-                            İptal
-                        </button>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setAddToStrategyModal(null)}
+                                className="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+                            >
+                                İptal
+                            </button>
+                            <button
+                                onClick={addToSelectedStrategies}
+                                disabled={addingToStrategy || selectedStrategies.length === 0}
+                                className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded transition-colors font-medium"
+                            >
+                                {addingToStrategy ? (
+                                    <span className="flex items-center justify-center gap-2">
+                                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                        </svg>
+                                        Ekleniyor...
+                                    </span>
+                                ) : (
+                                    `Ekle (${selectedStrategies.length})`
+                                )}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

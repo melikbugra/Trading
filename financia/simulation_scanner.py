@@ -24,8 +24,8 @@ from financia.web_api.database import (
     simulation_time_manager,
 )
 
-# Thread pool for running blocking operations
-_executor = ThreadPoolExecutor(max_workers=4)
+# Thread pool for running blocking operations - increased for parallel scanning
+_executor = ThreadPoolExecutor(max_workers=10)
 
 # Larger thread pool for EOD parallel fetching
 _eod_executor = ThreadPoolExecutor(max_workers=15)
@@ -33,6 +33,9 @@ _eod_executor = ThreadPoolExecutor(max_workers=15)
 # Concurrency settings for EOD
 EOD_BATCH_SIZE = 15  # Number of tickers to fetch in parallel
 EOD_RATE_LIMIT_DELAY = 0.1  # Short delay between individual requests in batch
+
+# Concurrency settings for scan
+SCAN_BATCH_SIZE = 10  # Number of tickers to scan in parallel
 
 
 class SimulationScanner:
@@ -49,6 +52,11 @@ class SimulationScanner:
 
         # Data cache to avoid repeated API calls
         self._data_cache: Dict[str, pd.DataFrame] = {}
+
+        # Progress tracking for scans
+        self.scan_progress = 0
+        self.scan_total = 0
+        self.current_ticker = ""
 
     def set_ws_manager(self, manager):
         """Set WebSocket manager for broadcasting updates."""
@@ -68,6 +76,26 @@ class SimulationScanner:
             except Exception as e:
                 print(f"[SimScanner] Failed to broadcast status: {e}")
 
+    async def _broadcast_scan_progress(self):
+        """Broadcast scan progress to all connected clients."""
+        if self._ws_manager:
+            try:
+                await self._ws_manager.broadcast(
+                    {
+                        "type": "sim_scan_progress",
+                        "data": {
+                            "status": "scanning"
+                            if simulation_time_manager.is_scanning
+                            else "idle",
+                            "current": self.scan_progress,
+                            "total": self.scan_total,
+                            "ticker": self.current_ticker,
+                        },
+                    }
+                )
+            except Exception as e:
+                print(f"[SimScanner] Failed to broadcast scan progress: {e}")
+
     async def _broadcast_signals(self, db: Session):
         """Broadcast active simulation signals to all connected clients."""
         if self._ws_manager:
@@ -78,6 +106,9 @@ class SimulationScanner:
                     .order_by(SimSignal.created_at.desc())
                     .all()
                 )
+                sim_time = simulation_time_manager.current_time
+                price_updated_at = sim_time.isoformat() if sim_time else None
+
                 signals_data = [
                     {
                         "id": s.id,
@@ -90,6 +121,7 @@ class SimulationScanner:
                         "stop_loss": s.stop_loss,
                         "take_profit": s.take_profit,
                         "current_price": s.current_price,
+                        "price_updated_at": price_updated_at,
                         "last_peak": s.last_peak,
                         "last_trough": s.last_trough,
                         "entry_reached": s.entry_reached or False,
@@ -117,6 +149,38 @@ class SimulationScanner:
                 )
             except Exception as e:
                 print(f"[SimScanner] Failed to broadcast signals: {e}")
+
+    async def _cleanup_day_end_signals(self):
+        """Clean up non-entered signals at end of day (keep only 'entered' positions)."""
+        db = SessionLocal()
+        try:
+            sim_time = simulation_time_manager.current_time
+
+            # Find all pending and triggered signals (not entered)
+            signals_to_cancel = (
+                db.query(SimSignal)
+                .filter(SimSignal.status.in_(["pending", "triggered"]))
+                .all()
+            )
+
+            cancelled_count = 0
+            for signal in signals_to_cancel:
+                signal.status = "cancelled"
+                signal.closed_at = sim_time
+                signal.notes = f"Gün sonu temizliği - {sim_time.strftime('%d.%m.%Y')}"
+                cancelled_count += 1
+
+            if cancelled_count > 0:
+                db.commit()
+                print(
+                    f"[SimScanner] Day end cleanup: cancelled {cancelled_count} non-entered signals"
+                )
+                await self._broadcast_signals(db)
+
+        except Exception as e:
+            print(f"[SimScanner] Error in day end cleanup: {e}")
+        finally:
+            db.close()
 
     async def start(self):
         """Start the simulation scanner loop."""
@@ -151,6 +215,11 @@ class SimulationScanner:
         """Pause the simulation."""
         self.is_paused = True
         print("[SimScanner] Paused")
+
+    def clear_cache(self):
+        """Clear data cache - should be called when moving to next day."""
+        self._data_cache = {}
+        print("[SimScanner] Data cache cleared")
 
     async def resume(self):
         """Resume the simulation."""
@@ -214,6 +283,9 @@ class SimulationScanner:
                     simulation_time_manager.pause()
                     await self._broadcast_status()
 
+                    # Clean up non-entered signals at end of day
+                    await self._cleanup_day_end_signals()
+
                     # Set EOD running flag and broadcast
                     simulation_time_manager.is_eod_running = True
                     await self._broadcast_status()
@@ -235,7 +307,7 @@ class SimulationScanner:
                 await asyncio.sleep(1)
 
     async def _scan_all(self):
-        """Scan all active watchlist items at current simulation time."""
+        """Scan all active watchlist items at current simulation time in parallel."""
         db = SessionLocal()
         try:
             sim_time = simulation_time_manager.current_time
@@ -254,24 +326,85 @@ class SimulationScanner:
 
             # Mark scanning started
             simulation_time_manager.is_scanning = True
+            self.scan_progress = 0
+            self.scan_total = len(watchlist)
+            self.current_ticker = ""
             await self._broadcast_status()
+            await self._broadcast_scan_progress()
 
             print(
-                f"[SimScanner] Scanning {len(watchlist)} items at {sim_time.strftime('%Y-%m-%d %H:%M')}"
+                f"[SimScanner] Scanning {len(watchlist)} items in parallel at {sim_time.strftime('%Y-%m-%d %H:%M')}"
             )
 
-            for i, item in enumerate(watchlist):
-                try:
-                    await self._scan_ticker(db, item, sim_time)
-                    # Small delay between tickers
-                    if i < len(watchlist) - 1:
-                        await asyncio.sleep(0.1)
-                except Exception as e:
-                    print(f"[SimScanner] Error scanning {item.ticker}: {e}")
-                    continue
+            # Process in batches for parallel execution
+            for batch_start in range(0, len(watchlist), SCAN_BATCH_SIZE):
+                batch = watchlist[batch_start : batch_start + SCAN_BATCH_SIZE]
+
+                # Create tasks for this batch
+                tasks = []
+                for item in batch:
+                    tasks.append(self._scan_ticker_async(item, sim_time))
+
+                # Execute batch in parallel
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # Process results
+                for i, (item, result) in enumerate(zip(batch, results)):
+                    self.scan_progress = batch_start + i + 1
+                    self.current_ticker = item.ticker.replace(".IS", "")
+
+                    if isinstance(result, Exception):
+                        print(f"[SimScanner] Error scanning {item.ticker}: {result}")
+                    elif result is not None:
+                        # result is (item_id, strategy_id, strategy_result, existing_signal_id)
+                        item_id, strategy_id, strategy_result, existing_signal_id = (
+                            result
+                        )
+                        # Re-fetch all objects from main db session to avoid detached instance
+                        item_data = (
+                            db.query(SimWatchlistItem)
+                            .filter(SimWatchlistItem.id == item_id)
+                            .first()
+                        )
+                        strategy_db = (
+                            db.query(SimStrategy)
+                            .filter(SimStrategy.id == strategy_id)
+                            .first()
+                        )
+                        existing_signal = None
+                        if existing_signal_id:
+                            existing_signal = (
+                                db.query(SimSignal)
+                                .filter(SimSignal.id == existing_signal_id)
+                                .first()
+                            )
+
+                        if item_data and strategy_db:
+                            await self._process_result(
+                                db,
+                                item_data,
+                                strategy_db,
+                                strategy_result,
+                                existing_signal,
+                            )
+
+                    # Broadcast progress every few tickers
+                    if (
+                        self.scan_progress % 5 == 0
+                        or self.scan_progress == self.scan_total
+                    ):
+                        await self._broadcast_scan_progress()
+
+                # Small delay between batches
+                if batch_start + SCAN_BATCH_SIZE < len(watchlist):
+                    await asyncio.sleep(0.1)
 
             # Mark scanning completed
             simulation_time_manager.is_scanning = False
+            self.scan_progress = 0
+            self.scan_total = 0
+            self.current_ticker = ""
+            await self._broadcast_scan_progress()
             await self._broadcast_status()
 
             # Update last scan time
@@ -285,6 +418,62 @@ class SimulationScanner:
         except Exception as e:
             print(f"[SimScanner] Error in scan_all: {e}")
             simulation_time_manager.is_scanning = False
+        finally:
+            db.close()
+
+    async def _scan_ticker_async(self, item: SimWatchlistItem, sim_time: datetime):
+        """Async wrapper to scan a ticker and return result for batch processing."""
+        db = SessionLocal()
+        try:
+            # Get simulation strategy
+            strategy_db = (
+                db.query(SimStrategy).filter(SimStrategy.id == item.strategy_id).first()
+            )
+            if not strategy_db or not strategy_db.is_active:
+                return None
+
+            # Get strategy class
+            strategy_class = get_strategy_class(strategy_db.strategy_type)
+            if not strategy_class:
+                print(
+                    f"[SimScanner] Unknown strategy type: {strategy_db.strategy_type}"
+                )
+                return None
+
+            # Initialize strategy
+            strategy = strategy_class(
+                params=strategy_db.params or {},
+                risk_reward_ratio=strategy_db.risk_reward_ratio,
+            )
+
+            # Fetch historical data up to simulation time
+            data = await self._get_historical_data(
+                ticker=item.ticker,
+                market=item.market,
+                horizon=strategy_db.horizon or "short",
+                end_time=sim_time,
+            )
+
+            if data.empty:
+                return None
+
+            # Evaluate strategy
+            result = strategy.evaluate(data)
+
+            # Check for existing signal - return only ID for main session to re-fetch
+            existing_signal = (
+                db.query(SimSignal)
+                .filter(
+                    SimSignal.ticker == item.ticker,
+                    SimSignal.strategy_id == item.strategy_id,
+                    SimSignal.status.in_(["pending", "triggered", "entered"]),
+                )
+                .first()
+            )
+            existing_signal_id = existing_signal.id if existing_signal else None
+
+            # Return IDs and result for processing (avoid detached instances)
+            return (item.id, strategy_db.id, result, existing_signal_id)
         finally:
             db.close()
 
@@ -471,6 +660,10 @@ class SimulationScanner:
         elif result.precondition_met:
             if existing_signal and existing_signal.status == "entered":
                 existing_signal.current_price = current_price
+            elif existing_signal and existing_signal.status == "triggered":
+                # Update current price for triggered signals even when main condition not met
+                existing_signal.current_price = current_price
+                await self._check_entry_exit(db, existing_signal, result)
             elif not existing_signal:
                 new_signal = SimSignal(
                     ticker=item.ticker,
@@ -498,6 +691,10 @@ class SimulationScanner:
                 existing_signal.status = "cancelled"
                 existing_signal.closed_at = sim_time
                 existing_signal.notes = "Ön koşul artık sağlanmıyor"
+            elif existing_signal and existing_signal.status == "triggered":
+                # Update current price for triggered signals
+                existing_signal.current_price = current_price
+                await self._check_entry_exit(db, existing_signal, result)
             elif existing_signal and existing_signal.status == "entered":
                 existing_signal.current_price = current_price
 

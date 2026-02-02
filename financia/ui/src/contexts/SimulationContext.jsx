@@ -173,6 +173,9 @@ export const SimulationProvider = ({ children }) => {
                 setSimStatus(data);
                 setIsSimulationMode(false);
                 setSimSignals([]);
+                // Clear simulation EOD results from localStorage
+                localStorage.removeItem('sim_eod_volume_results');
+                localStorage.removeItem('sim_eod_trend_results');
             }
         } catch (err) {
             console.error('[Simulation] Stop failed:', err);

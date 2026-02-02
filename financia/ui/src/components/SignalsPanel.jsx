@@ -378,7 +378,19 @@ export default function SignalsPanel({ strategies }) {
                                             </div>
                                             <div>
                                                 <div className="text-gray-500 text-xs">Güncel</div>
-                                                <div className="text-white font-mono text-sm sm:text-base">{signal.current_price?.toFixed(2) || '-'}</div>
+                                                <div className="text-white font-mono text-sm sm:text-base">
+                                                    {signal.current_price?.toFixed(2) || '-'}
+                                                    {signal.price_updated_at && (
+                                                        <span className="text-gray-600 text-xs ml-1">
+                                                            ({new Date(signal.price_updated_at).toLocaleString('tr-TR', {
+                                                                day: '2-digit',
+                                                                month: '2-digit',
+                                                                hour: '2-digit',
+                                                                minute: '2-digit'
+                                                            })})
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </div>
                                             <div>
                                                 <div className="text-gray-500 text-xs">SL</div>

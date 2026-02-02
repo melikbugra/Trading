@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useSimulation } from '../contexts/SimulationContext';
 import { useToast } from '../contexts/ToastContext';
+import { useWebSocket } from '../contexts/WebSocketContext';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export default function ScannerControl({ config, onUpdate, onScanNow, isScanning }) {
     const { isSimulationMode, simStatus } = useSimulation();
     const { addToast } = useToast();
+    const { scanProgress, simScanProgress } = useWebSocket();
     const [editingInterval, setEditingInterval] = useState(false);
     const [tempInterval, setTempInterval] = useState(config.scan_interval_minutes);
     const [simScanning, setSimScanning] = useState(false);
@@ -65,7 +67,12 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
     if (isSimulationMode) {
         const isPaused = simStatus.is_paused || simStatus.day_completed;
         const isEodRunning = simStatus.is_eod_running;
-        const isScanning = simStatus.is_scanning;
+        const isScanningNow = simStatus.is_scanning;
+
+        // Calculate progress percentage for simulation
+        const simProgressPercent = simScanProgress && simScanProgress.total > 0
+            ? Math.round((simScanProgress.current / simScanProgress.total) * 100)
+            : 0;
 
         return (
             <div className="bg-purple-900/30 border border-purple-700/50 rounded-lg p-3 sm:p-4">
@@ -76,23 +83,42 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                             Simülasyon Modu Aktif
                         </span>
                         {/* Countdown timer */}
-                        {countdown !== null && !isPaused && !isEodRunning && !isScanning && (
+                        {countdown !== null && !isPaused && !isEodRunning && !isScanningNow && (
                             <span className="bg-purple-800/50 px-2 py-1 rounded text-purple-200 text-xs sm:text-sm font-mono flex items-center gap-1">
                                 ⏱️ <span className="font-bold">{countdown}s</span>
                                 <span className="text-purple-400/70 hidden sm:inline">/ sonraki saat</span>
                             </span>
                         )}
-                        {isScanning && !isEodRunning && (
-                            <span className="bg-orange-800/50 px-2 py-1 rounded text-orange-200 text-xs sm:text-sm flex items-center gap-1">
-                                <span className="animate-spin">🔄</span> Taranıyor...
-                            </span>
+                        {isScanningNow && !isEodRunning && (
+                            <div className="flex items-center gap-2">
+                                <span className="bg-orange-800/50 px-2 py-1 rounded text-orange-200 text-xs sm:text-sm flex items-center gap-1">
+                                    <span className="animate-spin">🔄</span> Taranıyor...
+                                </span>
+                                {/* Progress bar for simulation scan */}
+                                {simScanProgress && simScanProgress.total > 0 && (
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-24 sm:w-32 bg-gray-700 rounded-full h-2">
+                                            <div
+                                                className="bg-orange-500 h-2 rounded-full transition-all duration-300"
+                                                style={{ width: `${simProgressPercent}%` }}
+                                            />
+                                        </div>
+                                        <span className="text-orange-200 text-xs font-mono">
+                                            {simScanProgress.current}/{simScanProgress.total}
+                                        </span>
+                                        <span className="text-orange-300/70 text-xs hidden sm:inline">
+                                            {simScanProgress.ticker}
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
                         )}
                         {isEodRunning && (
                             <span className="bg-blue-800/50 px-2 py-1 rounded text-blue-200 text-xs sm:text-sm flex items-center gap-1">
                                 <span className="animate-spin">📊</span> Gün Sonu Analizi...
                             </span>
                         )}
-                        {isPaused && !isEodRunning && !isScanning && (
+                        {isPaused && !isEodRunning && !isScanningNow && (
                             <span className="bg-yellow-800/50 px-2 py-1 rounded text-yellow-200 text-xs sm:text-sm">
                                 ⏸️ {simStatus.day_completed ? 'Gün Tamamlandı' : 'Duraklatıldı'}
                             </span>
@@ -103,7 +129,7 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                     </div>
                     <button
                         onClick={handleSimScanNow}
-                        disabled={simScanning || isScanning}
+                        disabled={simScanning || isScanningNow}
                         className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded font-bold text-xs sm:text-sm transition-all flex items-center gap-1 sm:gap-2 ${simScanning
                             ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
                             : 'bg-purple-600 hover:bg-purple-700 text-white'
@@ -148,6 +174,11 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
             timeZone: 'Europe/Istanbul'
         });
     };
+
+    // Calculate progress percentage for live mode
+    const liveProgressPercent = scanProgress && scanProgress.total > 0
+        ? Math.round((scanProgress.current / scanProgress.total) * 100)
+        : 0;
 
     return (
         <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-3 sm:p-4">
@@ -230,6 +261,23 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                         <span className={isScanning ? 'animate-spin' : ''}>🔄</span>
                         <span className="hidden sm:inline">{isScanning ? 'Taranıyor...' : 'Şimdi Tara'}</span>
                     </button>
+                    {/* Progress bar for live scan */}
+                    {isScanning && scanProgress && scanProgress.total > 0 && (
+                        <div className="flex items-center gap-2">
+                            <div className="w-20 sm:w-28 bg-gray-700 rounded-full h-2">
+                                <div
+                                    className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                                    style={{ width: `${liveProgressPercent}%` }}
+                                />
+                            </div>
+                            <span className="text-blue-200 text-xs font-mono">
+                                {scanProgress.current}/{scanProgress.total}
+                            </span>
+                            <span className="text-blue-300/70 text-xs hidden lg:inline">
+                                {scanProgress.ticker}
+                            </span>
+                        </div>
+                    )}
                 </div>
 
                 {/* Email Notification Settings */}

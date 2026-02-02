@@ -21,6 +21,9 @@ export const WebSocketProvider = ({ children }) => {
         results: [],
         total_scanned: 0
     });
+    const [eodProgress, setEodProgress] = useState(null); // { status, current, total, ticker }
+    const [scanProgress, setScanProgress] = useState(null); // { status, current, total, ticker } - live mode
+    const [simScanProgress, setSimScanProgress] = useState(null); // { status, current, total, ticker } - simulation mode
     // Simulation-related state (managed by SimulationContext, but we pass raw messages)
     const [simStatus, setSimStatus] = useState(null);
     const [simSignals, setSimSignals] = useState([]);
@@ -59,6 +62,12 @@ export const WebSocketProvider = ({ children }) => {
                     setActiveSignals(updatedData.data);
                 } else if (updatedData.type === 'eod_status') {
                     setEodStatus(updatedData.data);
+                } else if (updatedData.type === 'eod_progress') {
+                    setEodProgress(updatedData.data);
+                } else if (updatedData.type === 'scan_progress') {
+                    setScanProgress(updatedData.data);
+                } else if (updatedData.type === 'sim_scan_progress') {
+                    setSimScanProgress(updatedData.data);
                 } else if (updatedData.type === 'SCAN_STARTED') {
                     const m = updatedData.data.market;
                     if (m) setActiveScans(prev => [...new Set([...prev, m])]);
@@ -93,7 +102,7 @@ export const WebSocketProvider = ({ children }) => {
     }, []);
 
     return (
-        <WebSocketContext.Provider value={{ lastMessage, isConnected, activeScans, scannerStatus, setScannerStatus, activeSignals, eodStatus, setEodStatus }}>
+        <WebSocketContext.Provider value={{ lastMessage, isConnected, activeScans, scannerStatus, setScannerStatus, activeSignals, eodStatus, setEodStatus, eodProgress, setEodProgress, scanProgress, setScanProgress, simScanProgress, setSimScanProgress }}>
             {children}
         </WebSocketContext.Provider>
     );
