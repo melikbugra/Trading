@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { createChart, CandlestickSeries, LineSeries, HistogramSeries, AreaSeries } from 'lightweight-charts';
+import { useSimulation } from '../contexts/SimulationContext';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export default function ChartModal({ ticker, market, strategyId, onClose }) {
+    const { isSimulationMode } = useSimulation();
     const chartContainerRef = useRef(null);
     const indicatorContainerRef = useRef(null);
     const chartAreaRef = useRef(null);
@@ -29,7 +31,12 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
         const fetchData = async () => {
             try {
                 setLoading(true);
-                const url = `${API_BASE}/strategies/chart-data/${ticker}?market=${market}${strategyId ? `&strategy_id=${strategyId}` : ''}`;
+                // Use simulation endpoint when in simulation mode
+                const baseEndpoint = isSimulationMode
+                    ? `${API_BASE}/simulation/chart-data`
+                    : `${API_BASE}/strategies/chart-data`;
+
+                const url = `${baseEndpoint}/${ticker}?market=${market}${strategyId ? `&strategy_id=${strategyId}` : ''}`;
                 const res = await fetch(url);
                 if (!res.ok) throw new Error('Veri alınamadı');
                 const json = await res.json();
@@ -44,7 +51,7 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
         if (ticker) {
             fetchData();
         }
-    }, [ticker, market, strategyId]);
+    }, [ticker, market, strategyId, isSimulationMode]);
 
     useEffect(() => {
         if (!data || !chartContainerRef.current) return;

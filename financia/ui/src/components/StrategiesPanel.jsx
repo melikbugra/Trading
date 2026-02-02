@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useToast } from '../contexts/ToastContext';
+import { useSimulation } from '../contexts/SimulationContext';
 import ChartModal from './ChartModal';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
@@ -32,6 +33,7 @@ const TOP_CRYPTO_TICKERS = [
 
 export default function StrategiesPanel({ strategies, onRefresh }) {
     const { addToast } = useToast();
+    const { isSimulationMode, isStatusLoaded } = useSimulation();
     const [availableTypes, setAvailableTypes] = useState([]);
     const [watchlist, setWatchlist] = useState([]);
     const [showAddModal, setShowAddModal] = useState(false);
@@ -55,13 +57,19 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
     const [newMarket, setNewMarket] = useState('bist100');
     const [addTickerError, setAddTickerError] = useState('');
 
+    // API prefixes based on mode - use functions to get fresh values
+    const getStrategiesApi = () => isSimulationMode ? `${API_BASE}/simulation/strategies` : `${API_BASE}/strategies`;
+    const getWatchlistApi = () => isSimulationMode ? `${API_BASE}/simulation/watchlist` : `${API_BASE}/strategies/watchlist`;
+    const getTypesApi = () => isSimulationMode ? `${API_BASE}/simulation/strategies/available-types` : `${API_BASE}/strategies/available-types`;
+
     // Fetch available strategy types
-    const fetchTypes = useCallback(async () => {
+    const fetchTypes = async () => {
+        const endpoint = getTypesApi();
+        console.log('[StrategiesPanel] fetchTypes, endpoint:', endpoint);
         try {
-            const res = await fetch(`${API_BASE}/strategies/available-types`);
+            const res = await fetch(endpoint);
             if (res.ok) {
                 const data = await res.json();
-                console.log('Fetched strategy types:', data);
                 setAvailableTypes(data);
             } else {
                 console.error('Failed to fetch types, status:', res.status);
@@ -69,16 +77,14 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         } catch (err) {
             console.error('Failed to fetch strategy types:', err);
         }
-    }, []);
-
-    useEffect(() => {
-        fetchTypes();
-    }, [fetchTypes]);
+    };
 
     // Fetch watchlist
-    const fetchWatchlist = useCallback(async () => {
+    const fetchWatchlist = async () => {
+        const endpoint = getWatchlistApi();
+        console.log('[StrategiesPanel] fetchWatchlist, endpoint:', endpoint);
         try {
-            const res = await fetch(`${API_BASE}/strategies/watchlist`);
+            const res = await fetch(endpoint);
             if (res.ok) {
                 const data = await res.json();
                 setWatchlist(data);
@@ -86,11 +92,16 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         } catch (err) {
             console.error('Failed to fetch watchlist:', err);
         }
-    }, []);
+    };
 
+    // Fetch data when simulation status is loaded or mode changes
     useEffect(() => {
-        fetchWatchlist();
-    }, [fetchWatchlist]);
+        if (isStatusLoaded) {
+            console.log('[StrategiesPanel] Mode changed, isSimulationMode:', isSimulationMode);
+            fetchTypes();
+            fetchWatchlist();
+        }
+    }, [isStatusLoaded, isSimulationMode]);
 
     // Get watchlist items for a specific strategy
     const getWatchlistForStrategy = (strategyId) => {
@@ -149,13 +160,13 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         try {
             let res;
             if (editingStrategy) {
-                res = await fetch(`${API_BASE}/strategies/${editingStrategy.id}`, {
+                res = await fetch(`${getStrategiesApi()}/${editingStrategy.id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
             } else {
-                res = await fetch(`${API_BASE}/strategies`, {
+                res = await fetch(getStrategiesApi(), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -178,7 +189,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         if (!confirm('Stratejiyi silmek istediğinize emin misiniz? İlgili ticker\'lar ve sinyaller de silinecek.')) return;
 
         try {
-            await fetch(`${API_BASE}/strategies/${strategyId}`, { method: 'DELETE' });
+            await fetch(`${getStrategiesApi()}/${strategyId}`, { method: 'DELETE' });
             onRefresh();
             fetchWatchlist();
         } catch (err) {
@@ -188,8 +199,8 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
 
     const toggleStrategy = async (strategy) => {
         try {
-            await fetch(`${API_BASE}/strategies/${strategy.id}`, {
-                method: 'PUT',
+            await fetch(`${getStrategiesApi()}/${strategy.id}/toggle`, {
+                method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ is_active: !strategy.is_active })
             });
@@ -224,7 +235,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         }
 
         try {
-            const res = await fetch(`${API_BASE}/strategies/watchlist`, {
+            const res = await fetch(getWatchlistApi(), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -248,7 +259,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
 
     const removeTicker = async (itemId) => {
         try {
-            await fetch(`${API_BASE}/strategies/watchlist/${itemId}`, { method: 'DELETE' });
+            await fetch(`${getWatchlistApi()}/${itemId}`, { method: 'DELETE' });
             fetchWatchlist();
         } catch (err) {
             console.error('Failed to remove ticker:', err);
@@ -276,7 +287,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
             const promises = batch.map(async (ticker) => {
                 const formattedTicker = ticker + '.IS';
                 try {
-                    const res = await fetch(`${API_BASE}/strategies/watchlist`, {
+                    const res = await fetch(getWatchlistApi(), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -326,7 +337,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         for (const ticker of BIST30_TICKERS) {
             const formattedTicker = ticker + '.IS';
             try {
-                const res = await fetch(`${API_BASE}/strategies/watchlist`, {
+                const res = await fetch(getWatchlistApi(), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -364,7 +375,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         for (const ticker of TOP_CRYPTO_TICKERS) {
             const formattedTicker = ticker + 'TRY';
             try {
-                const res = await fetch(`${API_BASE}/strategies/watchlist`, {
+                const res = await fetch(getWatchlistApi(), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -401,7 +412,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         let deleted = 0;
         for (const item of tickers) {
             try {
-                await fetch(`${API_BASE}/strategies/watchlist/${item.id}`, { method: 'DELETE' });
+                await fetch(`${getWatchlistApi()}/${item.id}`, { method: 'DELETE' });
                 deleted++;
             } catch (err) {
                 console.error('Failed to delete ticker:', err);
@@ -415,7 +426,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
 
     const toggleTicker = async (itemId) => {
         try {
-            await fetch(`${API_BASE}/strategies/watchlist/${itemId}/toggle`, { method: 'PUT' });
+            await fetch(`${getWatchlistApi()}/${itemId}/toggle`, { method: 'PATCH' });
             fetchWatchlist();
         } catch (err) {
             console.error('Failed to toggle ticker:', err);
@@ -430,7 +441,11 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
     const scanSingleTicker = async (ticker, market) => {
         try {
             addToast(`🔍 ${ticker} taranıyor...`, 'info', 2000);
-            const res = await fetch(`${API_BASE}/strategies/scanner/scan-ticker/${encodeURIComponent(ticker)}?market=${market}`, {
+            // Use simulation endpoint if in simulation mode
+            const endpoint = isSimulationMode
+                ? `${API_BASE}/simulation/scan-ticker/${encodeURIComponent(ticker)}?market=${market}`
+                : `${API_BASE}/strategies/scanner/scan-ticker/${encodeURIComponent(ticker)}?market=${market}`;
+            const res = await fetch(endpoint, {
                 method: 'POST'
             });
             if (res.ok) {

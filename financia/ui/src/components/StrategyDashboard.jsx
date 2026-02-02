@@ -1,19 +1,23 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import SignalsPanel from './SignalsPanel';
 import StrategiesPanel from './StrategiesPanel';
 import EODAnalysisPanel from './EODAnalysisPanel';
 import TradeHistoryPanel from './TradeHistoryPanel';
 import ScannerControl from './ScannerControl';
 import { useWebSocket } from '../contexts/WebSocketContext';
+import { useSimulation } from '../contexts/SimulationContext';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export default function StrategyDashboard({ activeTab }) {
     const { scannerStatus, setScannerStatus } = useWebSocket();
+    const { isSimulationMode, isStatusLoaded } = useSimulation();
     const [strategies, setStrategies] = useState([]);
 
     // Fetch initial scanner config (only once on mount)
-    const fetchScannerConfig = useCallback(async () => {
+    const fetchScannerConfig = async () => {
+        // Scanner config is not used in simulation mode
+        if (isSimulationMode) return;
         try {
             const res = await fetch(`${API_BASE}/strategies/scanner/config`);
             if (res.ok) {
@@ -23,12 +27,14 @@ export default function StrategyDashboard({ activeTab }) {
         } catch (err) {
             console.error('Failed to fetch scanner config:', err);
         }
-    }, [setScannerStatus]);
+    };
 
-    // Fetch strategies
-    const fetchStrategies = useCallback(async () => {
+    // Fetch strategies - use function to get fresh endpoint
+    const fetchStrategies = async () => {
+        const endpoint = isSimulationMode ? `${API_BASE}/simulation/strategies` : `${API_BASE}/strategies`;
+        console.log('[StrategyDashboard] fetchStrategies, endpoint:', endpoint);
         try {
-            const res = await fetch(`${API_BASE}/strategies`);
+            const res = await fetch(endpoint);
             if (res.ok) {
                 const data = await res.json();
                 setStrategies(data);
@@ -36,13 +42,16 @@ export default function StrategyDashboard({ activeTab }) {
         } catch (err) {
             console.error('Failed to fetch strategies:', err);
         }
-    }, []);
+    };
 
+    // Fetch data when simulation status is loaded or mode changes
     useEffect(() => {
-        fetchScannerConfig();
-        fetchStrategies();
-        // No more polling - updates come via WebSocket
-    }, [fetchScannerConfig, fetchStrategies]);
+        if (isStatusLoaded) {
+            console.log('[StrategyDashboard] Mode changed, isSimulationMode:', isSimulationMode);
+            fetchScannerConfig();
+            fetchStrategies();
+        }
+    }, [isStatusLoaded, isSimulationMode]);
 
     const updateScannerConfig = async (updates) => {
         try {

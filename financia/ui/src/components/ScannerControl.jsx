@@ -1,8 +1,115 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSimulation } from '../contexts/SimulationContext';
+import { useToast } from '../contexts/ToastContext';
+
+const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export default function ScannerControl({ config, onUpdate, onScanNow, isScanning }) {
+    const { isSimulationMode, simStatus } = useSimulation();
+    const { addToast } = useToast();
     const [editingInterval, setEditingInterval] = useState(false);
     const [tempInterval, setTempInterval] = useState(config.scan_interval_minutes);
+    const [simScanning, setSimScanning] = useState(false);
+    const [countdown, setCountdown] = useState(null);
+
+    // Countdown timer for simulation mode
+    useEffect(() => {
+        if (!isSimulationMode || !simStatus.is_active) {
+            setCountdown(null);
+            return;
+        }
+
+        // If paused, day completed, or EOD running - don't count down
+        if (simStatus.is_paused || simStatus.day_completed || simStatus.is_eod_running) {
+            setCountdown(null);
+            return;
+        }
+
+        // Start countdown from seconds_per_hour
+        const totalSeconds = simStatus.seconds_per_hour || 30;
+        setCountdown(totalSeconds);
+
+        const interval = setInterval(() => {
+            setCountdown(prev => {
+                if (prev === null || prev <= 1) {
+                    return totalSeconds; // Reset when reaching 0
+                }
+                return prev - 1;
+            });
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, [isSimulationMode, simStatus.is_active, simStatus.is_paused, simStatus.day_completed, simStatus.is_eod_running, simStatus.seconds_per_hour]);
+
+    // Manual scan for simulation mode
+    const handleSimScanNow = async () => {
+        setSimScanning(true);
+        try {
+            const res = await fetch(`${API_BASE}/simulation/scan-now`, {
+                method: 'POST'
+            });
+            if (res.ok) {
+                addToast('Simülasyon taraması tamamlandı', 'success');
+            } else {
+                const err = await res.json();
+                addToast(err.detail || 'Tarama başarısız', 'error');
+            }
+        } catch (err) {
+            addToast('Tarama hatası: ' + err.message, 'error');
+        } finally {
+            setSimScanning(false);
+        }
+    };
+
+    // In simulation mode, show a minimal info bar with countdown and manual scan button
+    if (isSimulationMode) {
+        const isPaused = simStatus.is_paused || simStatus.day_completed;
+        const isEodRunning = simStatus.is_eod_running;
+
+        return (
+            <div className="bg-purple-900/30 border border-purple-700/50 rounded-lg p-3 sm:p-4">
+                <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
+                        <span className="text-xl">🧪</span>
+                        <span className="text-purple-300 font-medium text-sm sm:text-base">
+                            Simülasyon Modu Aktif
+                        </span>
+                        {/* Countdown timer */}
+                        {countdown !== null && !isPaused && !isEodRunning && (
+                            <span className="bg-purple-800/50 px-2 py-1 rounded text-purple-200 text-xs sm:text-sm font-mono flex items-center gap-1">
+                                ⏱️ <span className="font-bold">{countdown}s</span>
+                                <span className="text-purple-400/70 hidden sm:inline">/ sonraki saat</span>
+                            </span>
+                        )}
+                        {isEodRunning && (
+                            <span className="bg-blue-800/50 px-2 py-1 rounded text-blue-200 text-xs sm:text-sm flex items-center gap-1">
+                                <span className="animate-spin">📊</span> Gün Sonu Analizi...
+                            </span>
+                        )}
+                        {isPaused && !isEodRunning && (
+                            <span className="bg-yellow-800/50 px-2 py-1 rounded text-yellow-200 text-xs sm:text-sm">
+                                ⏸️ {simStatus.day_completed ? 'Gün Tamamlandı' : 'Duraklatıldı'}
+                            </span>
+                        )}
+                        <span className="text-purple-400/70 text-xs hidden lg:inline">
+                            — {simStatus.seconds_per_hour}sn/saat hızında
+                        </span>
+                    </div>
+                    <button
+                        onClick={handleSimScanNow}
+                        disabled={simScanning}
+                        className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded font-bold text-xs sm:text-sm transition-all flex items-center gap-1 sm:gap-2 ${simScanning
+                            ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                            : 'bg-purple-600 hover:bg-purple-700 text-white'
+                            }`}
+                    >
+                        <span className={simScanning ? 'animate-spin' : ''}>🔄</span>
+                        <span className="hidden sm:inline">{simScanning ? 'Taranıyor...' : 'Manuel Tara'}</span>
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     // Email notification settings (synced with backend via config prop)
     const emailNotifications = config.email_notifications || {

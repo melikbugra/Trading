@@ -1,11 +1,17 @@
 import { useState, useEffect } from 'react';
 import PinLogin from './components/PinLogin';
 import StrategyDashboard from './components/StrategyDashboard';
+import SimulationBanner from './components/SimulationBanner';
+import SimulationPanel from './components/SimulationPanel';
+import { SimulationProvider, useSimulation } from './contexts/SimulationContext';
 
-function App() {
+function AppContent() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('signals');
+  const [showSimPanel, setShowSimPanel] = useState(false);
+
+  const { isSimulationMode } = useSimulation();
 
   useEffect(() => {
     // Check localStorage for existing session
@@ -33,7 +39,10 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-terminal-dark">
+    <div className="min-h-screen bg-terminal-dark flex flex-col">
+      {/* Simulation Banner - shown when simulation is active */}
+      <SimulationBanner />
+
       {/* Navigation Tabs */}
       <div className="bg-gray-900 border-b border-gray-800">
         <div className="max-w-6xl mx-auto px-2 sm:px-8">
@@ -74,14 +83,37 @@ function App() {
             >
               📊 Geçmiş
             </button>
+
+            {/* Simulation Button - only show when not in simulation */}
+            {!isSimulationMode && (
+              <button
+                onClick={() => setShowSimPanel(true)}
+                className="ml-auto px-3 sm:px-4 py-3 font-bold text-xs sm:text-sm transition-colors border-b-2 border-transparent text-gray-500 hover:text-purple-400 hover:bg-purple-500/10 whitespace-nowrap"
+              >
+                🎮 <span className="hidden sm:inline">Simülasyon</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       {/* Dashboard with tab context */}
       <StrategyDashboard activeTab={activeTab} />
+
+      {/* Simulation Setup Panel */}
+      {showSimPanel && (
+        <SimulationPanel onClose={() => setShowSimPanel(false)} />
+      )}
     </div>
-  )
+  );
+}
+
+function App() {
+  return (
+    <SimulationProvider>
+      <AppContent />
+    </SimulationProvider>
+  );
 }
 
 export default App

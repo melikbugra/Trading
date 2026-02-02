@@ -7,17 +7,170 @@ from sqlalchemy import (
     Boolean,
     JSON,
     DateTime,
+    Date,
     Enum as SQLEnum,
 )
 from sqlalchemy.orm import sessionmaker, declarative_base
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date, time
+from typing import Optional
 import enum
 import os
+import pytz
+
+# Turkey timezone constant
+TZ_TURKEY = pytz.timezone("Europe/Istanbul")
+
+
+# ============= Simulation Time Manager =============
+class SimulationTimeManager:
+    """
+    Singleton class to manage simulation time.
+    When simulation is active, now_turkey() returns simulation time instead of real time.
+    """
+
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+
+        # Simulation state
+        self.is_active: bool = False
+        self.is_paused: bool = False
+        self.day_completed: bool = False
+        self.is_eod_running: bool = False  # Track if EOD analysis is in progress
+
+        # Simulation time settings
+        self.current_time: Optional[datetime] = None
+        self.start_date: Optional[date] = None
+        self.end_date: Optional[date] = None
+        self.seconds_per_hour: int = 30  # Default: 1 sim hour = 30 real seconds
+
+        # Session tracking
+        self.session_id: Optional[int] = None
+
+    def start(self, start_date: date, end_date: date, seconds_per_hour: int = 30):
+        """Start a new simulation session."""
+        self.is_active = True
+        self.is_paused = False
+        self.day_completed = False
+        self.is_eod_running = False  # Track if EOD analysis is running
+        self.start_date = start_date
+        self.end_date = end_date
+        self.seconds_per_hour = seconds_per_hour
+        # Start at 09:30 on the first trading day (timezone-aware)
+        naive_time = datetime.combine(start_date, time(9, 30))
+        self.current_time = TZ_TURKEY.localize(naive_time)
+        # Skip to next trading day if weekend
+        self._skip_weekend()
+
+    def stop(self):
+        """Stop the simulation."""
+        self.is_active = False
+        self.is_paused = False
+        self.day_completed = False
+        self.is_eod_running = False
+        self.current_time = None
+        self.start_date = None
+        self.end_date = None
+        self.session_id = None
+
+    def pause(self):
+        """Pause the simulation."""
+        self.is_paused = True
+
+    def resume(self):
+        """Resume the simulation."""
+        self.is_paused = False
+        self.day_completed = False
+
+    def advance_hour(self) -> bool:
+        """
+        Advance simulation time by 1 hour.
+        Returns True if day is completed (reached 18:00 - BIST closes at 18:00).
+        """
+        if not self.is_active or not self.current_time:
+            return False
+
+        self.current_time += timedelta(hours=1)
+
+        # Check if day is completed (18:00 - BIST closes)
+        if self.current_time.hour >= 18:
+            self.day_completed = True
+            return True
+
+        return False
+
+    def next_day(self) -> bool:
+        """
+        Move to the next trading day.
+        Returns True if simulation is complete (past end_date).
+        """
+        if not self.is_active or not self.current_time:
+            return True
+
+        # Move to next day at 09:30 (keep timezone-aware)
+        next_date = self.current_time.date() + timedelta(days=1)
+        naive_time = datetime.combine(next_date, time(9, 30))
+        self.current_time = TZ_TURKEY.localize(naive_time)
+
+        # Skip weekends
+        self._skip_weekend()
+
+        # Check if simulation is complete
+        if self.current_time.date() > self.end_date:
+            return True
+
+        self.day_completed = False
+        self.is_paused = False
+        return False
+
+    def _skip_weekend(self):
+        """Skip to Monday if current day is weekend."""
+        if self.current_time:
+            while self.current_time.weekday() >= 5:  # Saturday=5, Sunday=6
+                # Keep timezone when adding days
+                next_date = self.current_time.date() + timedelta(days=1)
+                naive_time = datetime.combine(next_date, time(9, 30))
+                self.current_time = TZ_TURKEY.localize(naive_time)
+
+    def get_time(self) -> datetime:
+        """Get current simulation time or real time if not in simulation."""
+        if self.is_active and self.current_time:
+            return self.current_time
+        return datetime.utcnow() + timedelta(hours=3)  # Real Turkey time
+
+    def get_status(self) -> dict:
+        """Get current simulation status."""
+        return {
+            "is_active": self.is_active,
+            "is_paused": self.is_paused,
+            "day_completed": self.day_completed,
+            "is_eod_running": self.is_eod_running,
+            "current_time": self.current_time.isoformat()
+            if self.current_time
+            else None,
+            "start_date": self.start_date.isoformat() if self.start_date else None,
+            "end_date": self.end_date.isoformat() if self.end_date else None,
+            "seconds_per_hour": self.seconds_per_hour,
+            "session_id": self.session_id,
+        }
+
+
+# Global simulation time manager instance
+simulation_time_manager = SimulationTimeManager()
 
 
 def now_turkey():
-    """Return current time in Turkey timezone (UTC+3)."""
-    return datetime.utcnow() + timedelta(hours=3)
+    """Return current time in Turkey timezone (UTC+3), or simulation time if active."""
+    return simulation_time_manager.get_time()
 
 
 DATABASE_URL = "sqlite:///./data/portfolio.db"
@@ -210,6 +363,148 @@ class BinanceRecommendation(Base):
     price = Column(Float, default=0.0)
     divergence_count = Column(Float, default=0.0)
     last_updated = Column(String, default="-")
+
+
+# ============= Simulation Tables =============
+class SimStrategy(Base):
+    """Simulation strategies - mirrors Strategy table structure"""
+
+    __tablename__ = "sim_strategies"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, unique=True, nullable=False)
+    description = Column(String, default="")
+    strategy_type = Column(String, nullable=False)
+    params = Column(JSON, default={})
+    risk_reward_ratio = Column(Float, default=2.0)
+    horizon = Column(String, default="short")
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=now_turkey)
+
+
+class SimWatchlistItem(Base):
+    """Simulation watchlist - mirrors WatchlistItem table structure"""
+
+    __tablename__ = "sim_watchlist"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String, nullable=False)
+    market = Column(String, nullable=False)
+    strategy_id = Column(Integer, nullable=False)
+    is_active = Column(Boolean, default=True)
+    added_at = Column(DateTime, default=now_turkey)
+
+
+class SimSignal(Base):
+    """Simulation signals - mirrors Signal table structure"""
+
+    __tablename__ = "sim_signals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String, nullable=False)
+    market = Column(String, nullable=False)
+    strategy_id = Column(Integer, nullable=False)
+    status = Column(String, default="pending")
+
+    # Signal details
+    direction = Column(String, default="long")
+    entry_price = Column(Float, nullable=True)
+    stop_loss = Column(Float, nullable=True)
+    take_profit = Column(Float, nullable=True)
+    current_price = Column(Float, nullable=True)
+
+    # Peak/Trough data
+    last_peak = Column(Float, nullable=True)
+    last_trough = Column(Float, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=now_turkey)
+    triggered_at = Column(DateTime, nullable=True)
+    entered_at = Column(DateTime, nullable=True)
+    closed_at = Column(DateTime, nullable=True)
+
+    # Entry confirmation
+    entry_reached = Column(Boolean, default=False)
+    actual_entry_price = Column(Float, nullable=True)
+
+    # Lot tracking
+    lots = Column(Float, default=0.0)
+    remaining_lots = Column(Float, default=0.0)
+
+    # Extra data
+    notes = Column(String, default="")
+    extra_data = Column(JSON, default={})
+
+
+class SimTradeHistory(Base):
+    """Simulation trade history - mirrors TradeHistory table structure"""
+
+    __tablename__ = "sim_trade_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    signal_id = Column(Integer, nullable=False)
+    ticker = Column(String, nullable=False)
+    market = Column(String, nullable=False)
+    strategy_id = Column(Integer, nullable=False)
+
+    direction = Column(String, default="long")
+    entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=False)
+    stop_loss = Column(Float, nullable=True)
+    take_profit = Column(Float, nullable=True)
+
+    result = Column(String, nullable=False)
+    profit_percent = Column(Float, default=0.0)
+    profit_tl = Column(Float, default=0.0)
+    lots = Column(Float, default=0.0)
+    risk_reward_achieved = Column(Float, default=0.0)
+
+    entered_at = Column(DateTime, nullable=False)
+    closed_at = Column(DateTime, default=now_turkey)
+    notes = Column(String, default="")
+
+
+class SimScannerConfig(Base):
+    """Simulation scanner configuration"""
+
+    __tablename__ = "sim_scanner_config"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    last_scan_at = Column(DateTime, nullable=True)
+
+
+class SimSession(Base):
+    """Simulation session tracking"""
+
+    __tablename__ = "sim_session"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    current_date = Column(Date, nullable=True)
+    seconds_per_hour = Column(Integer, default=30)
+    status = Column(String, default="active")  # active, paused, completed, stopped
+    created_at = Column(DateTime, default=now_turkey)
+    completed_at = Column(DateTime, nullable=True)
+
+
+def clear_simulation_data():
+    """Clear all simulation data from sim_* tables. Called when starting a new simulation."""
+    db = SessionLocal()
+    try:
+        db.query(SimSignal).delete()
+        db.query(SimTradeHistory).delete()
+        db.query(SimScannerConfig).delete()
+        db.query(SimSession).delete()
+        db.query(SimWatchlistItem).delete()
+        db.query(SimStrategy).delete()
+        db.commit()
+        print("[Database] Simulation data cleared")
+    except Exception as e:
+        print(f"[Database] Error clearing simulation data: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
 
 # Legacy aliases for backward compatibility during migration

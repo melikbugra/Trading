@@ -22,12 +22,24 @@ except ImportError:
     RECIPIENT_EMAIL = "melikbugraozcelik2@gmail.com"
 
 
+# Import simulation time manager to check if in simulation mode
+try:
+    from financia.web_api.database import simulation_time_manager
+except ImportError:
+    simulation_time_manager = None
+
+
 class EmailService:
     @staticmethod
     def send_email(subject, body, to_email=RECIPIENT_EMAIL):
         """
         Sends an email in a background thread to avoid blocking the main app.
         """
+        # Skip email in simulation mode
+        if simulation_time_manager and simulation_time_manager.is_active:
+            print("[EmailService] Skipping email: Simulation mode active.")
+            return
+
         # Validate credentials first to avoid useless thread spawn if not configured
         if "sizinepostaniz" in SENDER_EMAIL or "uygulama_sifresi" in SENDER_PASSWORD:
             print("[EmailService] Skipping email: Credentials not set.")

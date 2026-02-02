@@ -2,12 +2,14 @@ import { useState, useEffect, useCallback } from 'react';
 import ChartModal from './ChartModal';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { useToast } from '../contexts/ToastContext';
+import { useSimulation } from '../contexts/SimulationContext';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export default function SignalsPanel({ strategies }) {
     const { activeSignals } = useWebSocket();
     const { addToast } = useToast();
+    const { isSimulationMode, simSignals, getApiUrl } = useSimulation();
     const [signals, setSignals] = useState([]);
     const [filter, setFilter] = useState('all'); // all, pending, triggered, entered
     const [marketFilter, setMarketFilter] = useState('all'); // all, bist100, binance
@@ -23,6 +25,9 @@ export default function SignalsPanel({ strategies }) {
     const [exitModal, setExitModal] = useState(null); // { signalId, ticker, direction, remaining_lots }
     const [exitPrice, setExitPrice] = useState('');
     const [exitLots, setExitLots] = useState('');
+
+    // Use simulation signals when in simulation mode
+    const effectiveSignals = isSimulationMode ? simSignals : activeSignals;
 
     const openChartModal = (signal) => {
         setChartModal({
@@ -70,7 +75,12 @@ export default function SignalsPanel({ strategies }) {
             if (entryStopLoss) payload.stop_loss = parseFloat(entryStopLoss);
             if (entryTakeProfit) payload.take_profit = parseFloat(entryTakeProfit);
 
-            const res = await fetch(`${API_BASE}/strategies/signals/${entryModal.signalId}/confirm-entry`, {
+            // Use simulation endpoint when in simulation mode
+            const endpoint = isSimulationMode
+                ? `${API_BASE}/simulation/signals/${entryModal.signalId}/confirm-entry`
+                : `${API_BASE}/strategies/signals/${entryModal.signalId}/confirm-entry`;
+
+            const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -97,7 +107,12 @@ export default function SignalsPanel({ strategies }) {
         if (!exitModal || !exitPrice || !exitLots) return;
 
         try {
-            const res = await fetch(`${API_BASE}/strategies/signals/${exitModal.signalId}/close-position`, {
+            // Use simulation endpoint when in simulation mode
+            const endpoint = isSimulationMode
+                ? `${API_BASE}/simulation/signals/${exitModal.signalId}/close-position`
+                : `${API_BASE}/strategies/signals/${exitModal.signalId}/close-position`;
+
+            const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -133,7 +148,12 @@ export default function SignalsPanel({ strategies }) {
     // Initial fetch
     const fetchSignals = useCallback(async () => {
         try {
-            const res = await fetch(`${API_BASE}/strategies/signals/active`);
+            // Use simulation endpoint when in simulation mode
+            const endpoint = isSimulationMode
+                ? `${API_BASE}/simulation/signals/active`
+                : `${API_BASE}/strategies/signals/active`;
+
+            const res = await fetch(endpoint);
             if (res.ok) {
                 const data = await res.json();
                 setSignals(data);
@@ -143,7 +163,7 @@ export default function SignalsPanel({ strategies }) {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [isSimulationMode]);
 
     // Fetch only once on mount, then rely on WebSocket
     useEffect(() => {
@@ -152,17 +172,22 @@ export default function SignalsPanel({ strategies }) {
 
     // Update signals when WebSocket sends new data
     useEffect(() => {
-        if (activeSignals && activeSignals.length > 0) {
-            setSignals(activeSignals);
+        if (effectiveSignals && effectiveSignals.length > 0) {
+            setSignals(effectiveSignals);
             setLoading(false);
         }
-    }, [activeSignals]);
+    }, [effectiveSignals]);
 
     const cancelSignal = async (signalId) => {
         if (!confirm('Sinyali iptal etmek istediğinize emin misiniz?')) return;
 
         try {
-            await fetch(`${API_BASE}/strategies/signals/${signalId}`, { method: 'DELETE' });
+            // Use simulation endpoint when in simulation mode
+            const endpoint = isSimulationMode
+                ? `${API_BASE}/simulation/signals/${signalId}`
+                : `${API_BASE}/strategies/signals/${signalId}`;
+
+            await fetch(endpoint, { method: 'DELETE' });
             // No need to fetchSignals - WebSocket will update
         } catch (err) {
             console.error('Failed to cancel signal:', err);

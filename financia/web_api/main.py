@@ -3,6 +3,7 @@ Strategy-Based Trading Dashboard API
 
 Multi-market support for BIST100 and Binance.
 Rule-based strategy system with signal generation.
+Includes Simulation Mode for practicing with historical data.
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -13,9 +14,11 @@ from financia.web_api.database import init_db, SessionLocal, ScannerConfig
 from financia.web_api.websocket_manager import manager
 from financia.scanner import scanner
 from financia.eod_service import eod_service
+from financia.simulation_scanner import simulation_scanner
 
 # Routers
 from financia.web_api.routers import strategies
+from financia.web_api.routers import simulation
 
 
 @asynccontextmanager
@@ -38,6 +41,7 @@ async def lifespan(app: FastAPI):
     # Connect scanner and EOD service to WebSocket manager for broadcasting
     scanner.set_ws_manager(manager)
     eod_service.set_ws_manager(manager)
+    simulation_scanner.set_ws_manager(manager)
 
     # Load scanner config and auto-start if enabled
     db = SessionLocal()
@@ -65,6 +69,7 @@ async def lifespan(app: FastAPI):
     print("\nShutting down services...")
     await scanner.stop()
     await eod_service.stop()
+    await simulation_scanner.stop()
     print("Goodbye!")
 
 
@@ -88,6 +93,9 @@ app.add_middleware(
 
 # Include Strategy Router
 app.include_router(strategies.router)
+
+# Include Simulation Router
+app.include_router(simulation.router)
 
 
 # -- WebSocket Endpoint --

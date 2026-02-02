@@ -2,12 +2,14 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import ChartModal from './ChartModal';
 import { useToast } from '../contexts/ToastContext';
 import { useWebSocket } from '../contexts/WebSocketContext';
+import { useSimulation } from '../contexts/SimulationContext';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export default function EODAnalysisPanel({ strategies }) {
     const { addToast } = useToast();
     const { eodStatus } = useWebSocket();
+    const { isSimulationMode, simEodResults, simEodProgress, cancelEodAnalysis } = useSimulation();
 
     // Tab state
     const [activeTab, setActiveTab] = useState('volume'); // 'volume' or 'trend'
@@ -79,8 +81,36 @@ export default function EODAnalysisPanel({ strategies }) {
         loadInitialStatus();
     }, []);
 
-    // Handle WebSocket updates
+    // Handle simulation EOD results
     useEffect(() => {
+        if (!isSimulationMode || !simEodResults) return;
+
+        console.log('[EODPanel] Simulation EOD results:', simEodResults);
+
+        if (simEodResults.results && simEodResults.results.length > 0) {
+            setVolumeResults(simEodResults.results);
+            setVolumeStats({
+                count: simEodResults.results_count,
+                total_scanned: simEodResults.total_scanned
+            });
+            setLastRun(new Date());
+            setVolumeLoading(false); // Stop loading when results arrive
+            addToast(`Simülasyon gün sonu analizi: ${simEodResults.date}`, 'success');
+        }
+    }, [isSimulationMode, simEodResults, addToast]);
+
+    // Handle simulation EOD progress
+    useEffect(() => {
+        if (!isSimulationMode) return;
+
+        if (simEodProgress) {
+            setVolumeLoading(true);
+        }
+    }, [isSimulationMode, simEodProgress]);
+
+    // Handle WebSocket updates (live mode)
+    useEffect(() => {
+        if (isSimulationMode) return; // Skip in simulation mode
         if (!eodStatus) return;
 
         setVolumeLoading(eodStatus.is_analyzing);
@@ -115,6 +145,22 @@ export default function EODAnalysisPanel({ strategies }) {
         setVolumeStats({ count: 0, total_scanned: 0 });
 
         try {
+            // Use simulation endpoint if in simulation mode
+            if (isSimulationMode) {
+                const res = await fetch(`${API_BASE}/simulation/eod-analysis`, {
+                    method: 'POST',
+                });
+
+                if (res.ok) {
+                    addToast('Simülasyon EOD analizi başlatıldı...', 'info');
+                } else {
+                    const err = await res.json();
+                    addToast(err.detail || 'Analiz başlatılamadı', 'error');
+                }
+                setVolumeLoading(false);
+                return;
+            }
+
             const params = new URLSearchParams({
                 min_change: volumeFilters.min_change,
                 min_relative_volume: volumeFilters.min_relative_volume,
@@ -141,7 +187,7 @@ export default function EODAnalysisPanel({ strategies }) {
             addToast('Bağlantı hatası', 'error');
             setVolumeLoading(false);
         }
-    }, [volumeFilters, volumeLoading, addToast]);
+    }, [volumeFilters, volumeLoading, addToast, isSimulationMode]);
 
     // Run Trend Analysis
     const runTrendAnalysis = useCallback(async () => {
@@ -152,6 +198,22 @@ export default function EODAnalysisPanel({ strategies }) {
         setTrendStats({ count: 0, total_scanned: 0 });
 
         try {
+            // Use simulation endpoint if in simulation mode (same as volume for now)
+            if (isSimulationMode) {
+                const res = await fetch(`${API_BASE}/simulation/eod-analysis`, {
+                    method: 'POST',
+                });
+
+                if (res.ok) {
+                    addToast('Simülasyon EOD analizi başlatıldı...', 'info');
+                } else {
+                    const err = await res.json();
+                    addToast(err.detail || 'Analiz başlatılamadı', 'error');
+                }
+                setTrendLoading(false);
+                return;
+            }
+
             const params = new URLSearchParams({
                 min_trend_score: trendFilters.min_trend_score,
                 min_volume_tl: trendFilters.min_volume_tl,
@@ -177,7 +239,7 @@ export default function EODAnalysisPanel({ strategies }) {
             addToast('Bağlantı hatası', 'error');
             setTrendLoading(false);
         }
-    }, [trendFilters, trendLoading, addToast]);
+    }, [trendFilters, trendLoading, addToast, isSimulationMode]);
 
     // Sorting handlers
     const handleVolumeSort = (field) => {
@@ -291,11 +353,10 @@ export default function EODAnalysisPanel({ strategies }) {
             <div className="flex gap-2 mb-4 border-b border-gray-800 pb-2">
                 <button
                     onClick={() => setActiveTab('volume')}
-                    className={`px-4 py-2 rounded-t-lg font-medium transition-colors ${
-                        activeTab === 'volume'
-                            ? 'bg-purple-600 text-white'
-                            : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                    }`}
+                    className={`px-4 py-2 rounded-t-lg font-medium transition-colors ${activeTab === 'volume'
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                        }`}
                 >
                     📊 Hacim Analizi
                     {volumeResults.length > 0 && (
@@ -306,11 +367,10 @@ export default function EODAnalysisPanel({ strategies }) {
                 </button>
                 <button
                     onClick={() => setActiveTab('trend')}
-                    className={`px-4 py-2 rounded-t-lg font-medium transition-colors ${
-                        activeTab === 'trend'
-                            ? 'bg-green-600 text-white'
-                            : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                    }`}
+                    className={`px-4 py-2 rounded-t-lg font-medium transition-colors ${activeTab === 'trend'
+                        ? 'bg-green-600 text-white'
+                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                        }`}
                 >
                     🎯 Trend Tahmini
                     {trendResults.length > 0 && (
@@ -362,11 +422,10 @@ export default function EODAnalysisPanel({ strategies }) {
                             <button
                                 onClick={runVolumeAnalysis}
                                 disabled={volumeLoading}
-                                className={`px-4 py-2 font-bold rounded-lg transition-all flex items-center gap-2 text-sm whitespace-nowrap ${
-                                    volumeLoading
-                                        ? 'bg-yellow-600 text-white cursor-wait'
-                                        : 'bg-purple-600 hover:bg-purple-500 text-white'
-                                }`}
+                                className={`px-4 py-2 font-bold rounded-lg transition-all flex items-center gap-2 text-sm whitespace-nowrap ${volumeLoading
+                                    ? 'bg-yellow-600 text-white cursor-wait'
+                                    : 'bg-purple-600 hover:bg-purple-500 text-white'
+                                    }`}
                             >
                                 {volumeLoading ? (
                                     <><span className="animate-spin">🔄</span> Taranıyor...</>
@@ -374,7 +433,32 @@ export default function EODAnalysisPanel({ strategies }) {
                                     <>🔍 Analiz Et</>
                                 )}
                             </button>
+                            {/* Cancel button for simulation */}
+                            {isSimulationMode && simEodProgress && (
+                                <button
+                                    onClick={cancelEodAnalysis}
+                                    className="px-3 py-2 font-bold rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm whitespace-nowrap"
+                                >
+                                    ❌ İptal
+                                </button>
+                            )}
                         </div>
+
+                        {/* Simulation Progress Bar */}
+                        {isSimulationMode && simEodProgress && (
+                            <div className="mt-3">
+                                <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
+                                    <span>{simEodProgress.ticker || '...'} taranıyor...</span>
+                                    <span>{simEodProgress.current} / {simEodProgress.total} ({Math.round((simEodProgress.current / simEodProgress.total) * 100)}%)</span>
+                                </div>
+                                <div className="w-full bg-gray-800 rounded-full h-2.5">
+                                    <div
+                                        className="bg-purple-600 h-2.5 rounded-full transition-all duration-300"
+                                        style={{ width: `${(simEodProgress.current / simEodProgress.total) * 100}%` }}
+                                    ></div>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* Stats */}
@@ -498,11 +582,10 @@ export default function EODAnalysisPanel({ strategies }) {
                             <button
                                 onClick={runTrendAnalysis}
                                 disabled={trendLoading}
-                                className={`px-4 py-2 font-bold rounded-lg transition-all flex items-center gap-2 text-sm whitespace-nowrap ${
-                                    trendLoading
-                                        ? 'bg-yellow-600 text-white cursor-wait'
-                                        : 'bg-green-600 hover:bg-green-500 text-white'
-                                }`}
+                                className={`px-4 py-2 font-bold rounded-lg transition-all flex items-center gap-2 text-sm whitespace-nowrap ${trendLoading
+                                    ? 'bg-yellow-600 text-white cursor-wait'
+                                    : 'bg-green-600 hover:bg-green-500 text-white'
+                                    }`}
                             >
                                 {trendLoading ? (
                                     <><span className="animate-spin">🔄</span> Taranıyor...</>

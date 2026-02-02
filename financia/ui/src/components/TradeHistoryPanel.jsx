@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSimulation } from '../contexts/SimulationContext';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export default function TradeHistoryPanel({ strategies }) {
+    const { isSimulationMode } = useSimulation();
     const [trades, setTrades] = useState([]);
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -10,7 +12,12 @@ export default function TradeHistoryPanel({ strategies }) {
 
     const fetchTrades = useCallback(async () => {
         try {
-            let url = `${API_BASE}/strategies/trades?limit=100`;
+            // Use simulation endpoint when in simulation mode
+            const baseEndpoint = isSimulationMode
+                ? `${API_BASE}/simulation/trades`
+                : `${API_BASE}/strategies/trades`;
+
+            let url = `${baseEndpoint}?limit=100`;
             if (filter.market) url += `&market=${filter.market}`;
             if (filter.result) url += `&result=${filter.result}`;
             if (filter.strategy_id) url += `&strategy_id=${filter.strategy_id}`;
@@ -25,7 +32,7 @@ export default function TradeHistoryPanel({ strategies }) {
         } finally {
             setLoading(false);
         }
-    }, [filter]);
+    }, [filter, isSimulationMode]);
 
     const fetchStats = useCallback(async () => {
         try {
@@ -33,7 +40,12 @@ export default function TradeHistoryPanel({ strategies }) {
             if (filter.market) params.append('market', filter.market);
             if (filter.strategy_id) params.append('strategy_id', filter.strategy_id);
 
-            let url = `${API_BASE}/strategies/trades/stats`;
+            // Use simulation endpoint when in simulation mode
+            const baseEndpoint = isSimulationMode
+                ? `${API_BASE}/simulation/trades/stats`
+                : `${API_BASE}/strategies/trades/stats`;
+
+            let url = baseEndpoint;
             if (params.toString()) url += `?${params.toString()}`;
 
             const res = await fetch(url);
@@ -44,7 +56,7 @@ export default function TradeHistoryPanel({ strategies }) {
         } catch (err) {
             console.error('Failed to fetch stats:', err);
         }
-    }, [filter.market, filter.strategy_id]);
+    }, [filter.market, filter.strategy_id, isSimulationMode]);
 
     useEffect(() => {
         fetchTrades();

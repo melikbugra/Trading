@@ -21,6 +21,9 @@ export const WebSocketProvider = ({ children }) => {
         results: [],
         total_scanned: 0
     });
+    // Simulation-related state (managed by SimulationContext, but we pass raw messages)
+    const [simStatus, setSimStatus] = useState(null);
+    const [simSignals, setSimSignals] = useState([]);
     const wsRef = useRef(null);
 
     // Get API Endpoint (Convert http/https to ws/wss)
@@ -63,6 +66,8 @@ export const WebSocketProvider = ({ children }) => {
                     const m = updatedData.data.market;
                     if (m) setActiveScans(prev => prev.filter(x => x !== m));
                 }
+                // Simulation messages - passed through lastMessage to SimulationContext
+                // sim_status, sim_signals_update, sim_eod_complete are handled by SimulationContext
             } catch (err) {
                 console.error("WS Parse Error:", err);
             }
