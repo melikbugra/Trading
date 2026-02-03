@@ -106,8 +106,15 @@ class SimulationScanner:
                     .order_by(SimSignal.created_at.desc())
                     .all()
                 )
-                sim_time = simulation_time_manager.current_time
-                price_updated_at = sim_time.isoformat() if sim_time else None
+
+                def get_price_updated_at(signal):
+                    """Get actual data timestamp from extra_data, fallback to sim_time."""
+                    if signal.extra_data and isinstance(signal.extra_data, dict):
+                        data_ts = signal.extra_data.get("data_timestamp")
+                        if data_ts:
+                            return data_ts
+                    sim_time = simulation_time_manager.current_time
+                    return sim_time.isoformat() if sim_time else None
 
                 signals_data = [
                     {
@@ -121,7 +128,7 @@ class SimulationScanner:
                         "stop_loss": s.stop_loss,
                         "take_profit": s.take_profit,
                         "current_price": s.current_price,
-                        "price_updated_at": price_updated_at,
+                        "price_updated_at": get_price_updated_at(s),
                         "last_peak": s.last_peak,
                         "last_trough": s.last_trough,
                         "entry_reached": s.entry_reached or False,
@@ -457,8 +464,16 @@ class SimulationScanner:
             if data.empty:
                 return None
 
+            # Get actual data timestamp (last candle time)
+            data_timestamp = data.index[-1].isoformat() if len(data) > 0 else None
+
             # Evaluate strategy
             result = strategy.evaluate(data)
+
+            # Store data timestamp in result's extra_data
+            if result.extra_data is None:
+                result.extra_data = {}
+            result.extra_data["data_timestamp"] = data_timestamp
 
             # Check for existing signal - return only ID for main session to re-fetch
             existing_signal = (
@@ -555,8 +570,17 @@ class SimulationScanner:
 
                 time.sleep(0.15)
 
-                # Calculate start date (need enough data for indicators)
-                start_date = end_time - timedelta(days=365)  # 1 year of history
+                # Calculate start date - need 200 days for EMA 200
+                # But Yahoo Finance limits 1h data to last 730 days from TODAY
+                from financia.web_api.database import now_turkey
+
+                today = now_turkey()
+                yahoo_limit_start = today - timedelta(days=729)  # Safe margin
+
+                desired_start = end_time - timedelta(days=200)
+                start_date = max(
+                    desired_start, yahoo_limit_start
+                )  # Don't exceed Yahoo limit
 
                 if market == "bist100":
                     stock = yf.Ticker(ticker)
@@ -621,10 +645,12 @@ class SimulationScanner:
         if result.main_condition_met:
             if existing_signal and existing_signal.status == "triggered":
                 # Already triggered, check price levels
+                existing_signal.extra_data = extra_data  # Update data_timestamp
                 await self._check_entry_exit(db, existing_signal, result)
             elif existing_signal and existing_signal.status == "entered":
                 # Already in position, update current price
                 existing_signal.current_price = current_price
+                existing_signal.extra_data = extra_data  # Update data_timestamp
                 await self._check_position_levels(db, existing_signal, result)
             else:
                 # Create new triggered signal
@@ -660,9 +686,11 @@ class SimulationScanner:
         elif result.precondition_met:
             if existing_signal and existing_signal.status == "entered":
                 existing_signal.current_price = current_price
+                existing_signal.extra_data = extra_data  # Update data_timestamp
             elif existing_signal and existing_signal.status == "triggered":
                 # Update current price for triggered signals even when main condition not met
                 existing_signal.current_price = current_price
+                existing_signal.extra_data = extra_data  # Update data_timestamp
                 await self._check_entry_exit(db, existing_signal, result)
             elif not existing_signal:
                 new_signal = SimSignal(
@@ -694,9 +722,11 @@ class SimulationScanner:
             elif existing_signal and existing_signal.status == "triggered":
                 # Update current price for triggered signals
                 existing_signal.current_price = current_price
+                existing_signal.extra_data = extra_data  # Update data_timestamp
                 await self._check_entry_exit(db, existing_signal, result)
             elif existing_signal and existing_signal.status == "entered":
                 existing_signal.current_price = current_price
+                existing_signal.extra_data = extra_data  # Update data_timestamp
 
         db.commit()
         await self._broadcast_signals(db)
