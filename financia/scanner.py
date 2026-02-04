@@ -109,7 +109,14 @@ class ScannerService:
                     .order_by(Signal.created_at.desc())
                     .all()
                 )
-                price_updated_at = now_turkey().isoformat()
+
+                def get_price_updated_at(signal):
+                    """Get actual data timestamp from extra_data, fallback to now."""
+                    if signal.extra_data and isinstance(signal.extra_data, dict):
+                        data_ts = signal.extra_data.get("data_timestamp")
+                        if data_ts:
+                            return data_ts
+                    return now_turkey().isoformat()
 
                 signals_data = [
                     {
@@ -123,7 +130,7 @@ class ScannerService:
                         "stop_loss": s.stop_loss,
                         "take_profit": s.take_profit,
                         "current_price": s.current_price,
-                        "price_updated_at": price_updated_at,
+                        "price_updated_at": get_price_updated_at(s),
                         "last_peak": s.last_peak,
                         "last_trough": s.last_trough,
                         "entry_reached": s.entry_reached or False,
@@ -194,13 +201,63 @@ class ScannerService:
 
         return market_open <= now <= market_close
 
+    def _is_end_of_day(self) -> bool:
+        """Check if it's end of trading day (18:30-19:00)."""
+        now = now_turkey()
+        if now.weekday() >= 5:  # Weekend
+            return False
+        eod_start = now.replace(hour=18, minute=30, second=0, microsecond=0)
+        eod_end = now.replace(hour=19, minute=0, second=0, microsecond=0)
+        return eod_start <= now <= eod_end
+
+    async def _cleanup_day_end_signals(self):
+        """Clean up non-entered signals at end of day (keep only 'entered' positions)."""
+        db = SessionLocal()
+        try:
+            now = now_turkey()
+
+            # Find all pending and triggered signals (not entered)
+            signals_to_cancel = (
+                db.query(Signal)
+                .filter(Signal.status.in_(["pending", "triggered"]))
+                .all()
+            )
+
+            if signals_to_cancel:
+                print(
+                    f"[Scanner] 🌙 End of day cleanup: cancelling {len(signals_to_cancel)} pending/triggered signals"
+                )
+                for signal in signals_to_cancel:
+                    signal.status = "cancelled"
+                    signal.closed_at = now
+                    signal.notes = (
+                        f"Gün sonu temizliği - {now.strftime('%Y-%m-%d %H:%M')}"
+                    )
+                db.commit()
+                await self._broadcast_signals(db)
+        except Exception as e:
+            print(f"[Scanner] Error in day-end cleanup: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
     async def _scan_loop(self):
         """Main scanning loop."""
+        _day_end_cleanup_done = None  # Track which day we did cleanup for
+
         while self.is_running:
             try:
+                now = now_turkey()
+                today = now.date()
+
+                # Check if it's end of day and we haven't done cleanup yet today
+                if self._is_end_of_day() and _day_end_cleanup_done != today:
+                    print(f"[Scanner] End of trading day detected, running cleanup...")
+                    await self._cleanup_day_end_signals()
+                    _day_end_cleanup_done = today
+
                 # Check if BIST market is open
                 if not self._is_bist_market_open():
-                    now = now_turkey()
                     print(
                         f"[Scanner] Market closed ({now.strftime('%H:%M')}), skipping scan..."
                     )
@@ -383,8 +440,16 @@ class ScannerService:
             if data.empty:
                 return None
 
+            # Get actual data timestamp (last candle time)
+            data_timestamp = data.index[-1].isoformat() if len(data) > 0 else None
+
             # Evaluate strategy
             result = strategy.evaluate(data)
+
+            # Store data timestamp in result's extra_data
+            if result.extra_data is None:
+                result.extra_data = {}
+            result.extra_data["data_timestamp"] = data_timestamp
 
             # Get real-time current price
             real_current_price = await self._get_realtime_price(
@@ -547,10 +612,12 @@ class ScannerService:
         if result.main_condition_met:
             if existing_signal and existing_signal.status == "triggered":
                 # Already triggered, check price levels
+                existing_signal.extra_data = extra_data  # Update data_timestamp
                 await self._check_entry_exit(db, existing_signal, result)
             elif existing_signal and existing_signal.status == "entered":
                 # Already in position, just update current price and check SL/TP
                 existing_signal.current_price = current_price
+                existing_signal.extra_data = extra_data  # Update data_timestamp
                 # Check if SL or TP hit for entered position
                 await self._check_position_levels(db, existing_signal, result)
             else:
@@ -604,9 +671,11 @@ class ScannerService:
             # Skip if already in position
             if existing_signal and existing_signal.status == "entered":
                 existing_signal.current_price = current_price
+                existing_signal.extra_data = extra_data  # Update data_timestamp
             elif existing_signal and existing_signal.status == "triggered":
                 # Update current price for triggered signals even when main condition not met
                 existing_signal.current_price = current_price
+                existing_signal.extra_data = extra_data  # Update data_timestamp
                 await self._check_entry_exit(db, existing_signal, result)
             elif not existing_signal:
                 new_signal = Signal(
@@ -638,10 +707,12 @@ class ScannerService:
             elif existing_signal and existing_signal.status == "triggered":
                 # Update current price for triggered signals
                 existing_signal.current_price = current_price
+                existing_signal.extra_data = extra_data  # Update data_timestamp
                 await self._check_entry_exit(db, existing_signal, result)
             elif existing_signal and existing_signal.status == "entered":
                 # Just update current price for entered positions
                 existing_signal.current_price = current_price
+                existing_signal.extra_data = extra_data  # Update data_timestamp
 
         db.commit()
         await self._broadcast_signals(db)
