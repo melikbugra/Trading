@@ -5,13 +5,11 @@ const SimulationBanner = () => {
     const {
         isSimulationMode,
         simStatus,
-        pauseSimulation,
-        resumeSimulation,
+        nextHour,
         nextDay,
         stopSimulation,
         isLoading,
         formatSimTime,
-        getSpeedLabel,
     } = useSimulation();
 
     if (!isSimulationMode) return null;
@@ -24,9 +22,11 @@ const SimulationBanner = () => {
     return (
         <div className={`w-full ${simStatus.day_completed
             ? 'bg-gradient-to-r from-green-600/90 to-green-700/90'
-            : simStatus.is_paused
-                ? 'bg-gradient-to-r from-yellow-600/90 to-yellow-700/90'
-                : 'bg-gradient-to-r from-purple-600/90 to-purple-700/90'
+            : simStatus.hour_completed
+                ? 'bg-gradient-to-r from-blue-600/90 to-blue-700/90'
+                : simStatus.is_scanning
+                    ? 'bg-gradient-to-r from-orange-600/90 to-orange-700/90'
+                    : 'bg-gradient-to-r from-purple-600/90 to-purple-700/90'
             }`}>
             {/* Inner container aligned with tabs */}
             <div className="max-w-6xl mx-auto px-2 sm:px-8 py-2 flex items-center justify-between gap-4">
@@ -57,14 +57,6 @@ const SimulationBanner = () => {
                             </div>
                         </>
                     )}
-
-                    <div className="h-6 w-px bg-white/30" />
-
-                    {/* Speed */}
-                    <div className="flex items-center gap-2 text-white/90">
-                        <span className="text-lg">⚡</span>
-                        <span>{simStatus.seconds_per_hour}sn/saat</span>
-                    </div>
 
                     <div className="h-6 w-px bg-white/30" />
 
@@ -105,11 +97,19 @@ const SimulationBanner = () => {
                             </span>
                         </>
                     )}
-                    {simStatus.is_paused && !simStatus.day_completed && !simStatus.is_eod_running && (
+                    {simStatus.is_scanning && !simStatus.is_eod_running && (
                         <>
                             <div className="h-6 w-px bg-white/30" />
-                            <span className="px-2 py-1 bg-yellow-500/30 rounded text-yellow-200 text-sm font-medium">
-                                ⏸️ Duraklatıldı
+                            <span className="px-2 py-1 bg-orange-500/30 rounded text-orange-200 text-sm font-medium flex items-center gap-1">
+                                <span className="animate-spin">🔄</span> Taranıyor...
+                            </span>
+                        </>
+                    )}
+                    {simStatus.hour_completed && !simStatus.day_completed && !simStatus.is_eod_running && !simStatus.is_scanning && (
+                        <>
+                            <div className="h-6 w-px bg-white/30" />
+                            <span className="px-2 py-1 bg-blue-500/30 rounded text-blue-200 text-sm font-medium">
+                                ✅ Tarama Tamamlandı
                             </span>
                         </>
                     )}
@@ -117,6 +117,17 @@ const SimulationBanner = () => {
 
                 {/* Right: Controls */}
                 <div className="flex items-center gap-2">
+                    {/* Next Hour: Show when hour scan done and day not completed */}
+                    {simStatus.hour_completed && !simStatus.day_completed && !simStatus.is_eod_running && (
+                        <button
+                            onClick={nextHour}
+                            disabled={isLoading || simStatus.is_scanning}
+                            className="px-4 py-1.5 bg-blue-500/50 hover:bg-blue-500/70 text-white rounded-lg transition flex items-center gap-2 font-medium disabled:opacity-50"
+                        >
+                            ⏭️ Sonraki Saat
+                        </button>
+                    )}
+
                     {/* Day Completed: Show Next Day button (disabled during EOD) */}
                     {simStatus.day_completed && (
                         <button
@@ -129,29 +140,6 @@ const SimulationBanner = () => {
                         >
                             ▶️ Sonraki Gün
                         </button>
-                    )}
-
-                    {/* Pause/Resume */}
-                    {!simStatus.day_completed && (
-                        simStatus.is_paused ? (
-                            <button
-                                onClick={resumeSimulation}
-                                disabled={isLoading}
-                                className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg transition disabled:opacity-50"
-                                title="Devam Et"
-                            >
-                                ▶️
-                            </button>
-                        ) : (
-                            <button
-                                onClick={pauseSimulation}
-                                disabled={isLoading}
-                                className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg transition disabled:opacity-50"
-                                title="Duraklat"
-                            >
-                                ⏸️
-                            </button>
-                        )
                     )}
 
                     {/* Stop */}

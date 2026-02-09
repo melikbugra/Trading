@@ -47,6 +47,7 @@ class SimulationTimeManager:
         self.day_completed: bool = False
         self.is_eod_running: bool = False  # Track if EOD analysis is in progress
         self.is_scanning: bool = False  # Track if scan is in progress
+        self.hour_completed: bool = False  # Track if current hour scan is done (waiting for manual advance)
 
         # Simulation time settings
         self.current_time: Optional[datetime] = None
@@ -76,7 +77,8 @@ class SimulationTimeManager:
         self.is_active = True
         self.is_paused = False
         self.day_completed = False
-        self.is_eod_running = False  # Track if EOD analysis is running
+        self.is_eod_running = False
+        self.hour_completed = False
         self.start_date = start_date
         self.end_date = end_date
         self.seconds_per_hour = seconds_per_hour
@@ -100,6 +102,7 @@ class SimulationTimeManager:
         self.day_completed = False
         self.is_eod_running = False
         self.is_scanning = False
+        self.hour_completed = False
         self.current_time = None
         self.start_date = None
         self.end_date = None
@@ -120,6 +123,7 @@ class SimulationTimeManager:
         """Resume the simulation."""
         self.is_paused = False
         self.day_completed = False
+        self.hour_completed = False
 
     def advance_hour(self) -> bool:
         """
@@ -160,6 +164,7 @@ class SimulationTimeManager:
 
         self.day_completed = False
         self.is_paused = False
+        self.hour_completed = False
         return False
 
     def _skip_weekend(self):
@@ -218,6 +223,7 @@ class SimulationTimeManager:
             "day_completed": self.day_completed,
             "is_eod_running": self.is_eod_running,
             "is_scanning": self.is_scanning,
+            "hour_completed": self.hour_completed,
             "current_time": self.current_time.isoformat()
             if self.current_time
             else None,

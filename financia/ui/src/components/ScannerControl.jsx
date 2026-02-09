@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useSimulation } from '../contexts/SimulationContext';
 import { useToast } from '../contexts/ToastContext';
 import { useWebSocket } from '../contexts/WebSocketContext';
@@ -12,36 +12,6 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
     const [editingInterval, setEditingInterval] = useState(false);
     const [tempInterval, setTempInterval] = useState(config.scan_interval_minutes);
     const [simScanning, setSimScanning] = useState(false);
-    const [countdown, setCountdown] = useState(null);
-
-    // Countdown timer for simulation mode
-    useEffect(() => {
-        if (!isSimulationMode || !simStatus.is_active) {
-            setCountdown(null);
-            return;
-        }
-
-        // If paused, day completed, EOD running, or scanning - don't count down
-        if (simStatus.is_paused || simStatus.day_completed || simStatus.is_eod_running || simStatus.is_scanning) {
-            setCountdown(null);
-            return;
-        }
-
-        // Start countdown from seconds_per_hour
-        const totalSeconds = simStatus.seconds_per_hour || 30;
-        setCountdown(totalSeconds);
-
-        const interval = setInterval(() => {
-            setCountdown(prev => {
-                if (prev === null || prev <= 1) {
-                    return totalSeconds; // Reset when reaching 0
-                }
-                return prev - 1;
-            });
-        }, 1000);
-
-        return () => clearInterval(interval);
-    }, [isSimulationMode, simStatus.is_active, simStatus.is_paused, simStatus.day_completed, simStatus.is_eod_running, simStatus.is_scanning, simStatus.seconds_per_hour]);
 
     // Manual scan for simulation mode
     const handleSimScanNow = async () => {
@@ -82,13 +52,6 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                         <span className="text-purple-300 font-medium text-sm sm:text-base">
                             Simülasyon Modu Aktif
                         </span>
-                        {/* Countdown timer */}
-                        {countdown !== null && !isPaused && !isEodRunning && !isScanningNow && (
-                            <span className="bg-purple-800/50 px-2 py-1 rounded text-purple-200 text-xs sm:text-sm font-mono flex items-center gap-1">
-                                ⏱️ <span className="font-bold">{countdown}s</span>
-                                <span className="text-purple-400/70 hidden sm:inline">/ sonraki saat</span>
-                            </span>
-                        )}
                         {isScanningNow && !isEodRunning && (
                             <div className="flex items-center gap-2">
                                 <span className="bg-orange-800/50 px-2 py-1 rounded text-orange-200 text-xs sm:text-sm flex items-center gap-1">
@@ -123,9 +86,6 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                                 ⏸️ {simStatus.day_completed ? 'Gün Tamamlandı' : 'Duraklatıldı'}
                             </span>
                         )}
-                        <span className="text-purple-400/70 text-xs hidden lg:inline">
-                            — {simStatus.seconds_per_hour}sn/saat hızında
-                        </span>
                     </div>
                     <button
                         onClick={handleSimScanNow}

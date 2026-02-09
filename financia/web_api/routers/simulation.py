@@ -40,10 +40,13 @@ class SimulationStatusResponse(BaseModel):
     is_active: bool
     is_paused: bool
     day_completed: bool
+    hour_completed: bool = False
+    is_scanning: bool = False
+    is_eod_running: bool = False
     current_time: Optional[str]
     start_date: Optional[str]
     end_date: Optional[str]
-    seconds_per_hour: int
+    seconds_per_hour: int = 30
     session_id: Optional[int]
     # Balance fields
     initial_balance: Optional[float] = 100000.0
@@ -175,11 +178,22 @@ def get_simulation_status():
         is_active=status["is_active"],
         is_paused=status["is_paused"],
         day_completed=status["day_completed"],
+        hour_completed=status.get("hour_completed", False),
+        is_scanning=status.get("is_scanning", False),
+        is_eod_running=status.get("is_eod_running", False),
         current_time=status["current_time"],
         start_date=status["start_date"],
         end_date=status["end_date"],
-        seconds_per_hour=status["seconds_per_hour"],
+        seconds_per_hour=status.get("seconds_per_hour", 30),
         session_id=status["session_id"],
+        initial_balance=status.get("initial_balance", 100000),
+        current_balance=status.get("current_balance", 100000),
+        total_profit=status.get("total_profit", 0),
+        profit_percent=status.get("profit_percent", 0),
+        total_trades=status.get("total_trades", 0),
+        winning_trades=status.get("winning_trades", 0),
+        losing_trades=status.get("losing_trades", 0),
+        win_rate=status.get("win_rate", 0),
     )
 
 
@@ -197,10 +211,6 @@ async def start_simulation(
 
     if request.start_date > date.today():
         raise HTTPException(400, "Start date cannot be in the future")
-
-    # Validate seconds_per_hour
-    if request.seconds_per_hour not in [10, 30, 60, 120]:
-        raise HTTPException(400, "seconds_per_hour must be 10, 30, 60, or 120")
 
     # Stop any existing simulation
     if simulation_time_manager.is_active:
@@ -333,6 +343,57 @@ async def cancel_simulation_eod_analysis():
     simulation_time_manager.is_eod_running = False
 
     return {"status": "ok", "message": "EOD analysis cancelled"}
+
+
+@router.post("/next-hour", response_model=SimulationStatusResponse)
+async def next_simulation_hour(db: Session = Depends(get_db)):
+    """
+    Advance to the next hour in simulation.
+    Triggers automatic scan at the new hour.
+    If the day is completed (18:00), runs EOD analysis.
+    """
+    if not simulation_time_manager.is_active:
+        raise HTTPException(400, "No simulation is active")
+
+    if not simulation_time_manager.hour_completed:
+        raise HTTPException(400, "Current hour scan not completed yet")
+
+    if simulation_time_manager.day_completed:
+        raise HTTPException(400, "Day is completed, use next-day instead")
+
+    # Advance simulation time by 1 hour
+    day_completed = simulation_time_manager.advance_hour()
+
+    from financia.simulation_scanner import simulation_scanner
+
+    if day_completed:
+        print(
+            f"[Simulation] Day completed: {simulation_time_manager.current_time}"
+        )
+        # Pause and run EOD
+        simulation_time_manager.pause()
+        await simulation_scanner._broadcast_status()
+
+        # Clean up non-entered signals at end of day
+        await simulation_scanner._cleanup_day_end_signals()
+
+        # Run EOD analysis
+        simulation_time_manager.is_eod_running = True
+        await simulation_scanner._broadcast_status()
+
+        await simulation_scanner._run_sim_eod_analysis()
+
+        simulation_time_manager.is_eod_running = False
+        await simulation_scanner._broadcast_status()
+    else:
+        # Reset hour_completed to allow loop to scan at new hour
+        simulation_time_manager.hour_completed = False
+        await simulation_scanner._broadcast_status()
+
+    print(
+        f"[Simulation] Advanced to: {simulation_time_manager.current_time}"
+    )
+    return get_simulation_status()
 
 
 @router.post("/next-day", response_model=SimulationStatusResponse)

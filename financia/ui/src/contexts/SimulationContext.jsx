@@ -17,6 +17,7 @@ export const SimulationProvider = ({ children }) => {
         day_completed: false,
         is_eod_running: false,
         is_scanning: false,
+        hour_completed: false,
         current_time: null,
         start_date: null,
         end_date: null,
@@ -146,6 +147,21 @@ export const SimulationProvider = ({ children }) => {
         }
     };
 
+    const nextHour = async () => {
+        setIsLoading(true);
+        try {
+            const res = await fetch(`${API_URL}/simulation/next-hour`, { method: 'POST' });
+            if (res.ok) {
+                const data = await res.json();
+                setSimStatus(data);
+            }
+        } catch (err) {
+            console.error('[Simulation] Next hour failed:', err);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     const nextDay = async () => {
         setIsLoading(true);
         try {
@@ -253,6 +269,7 @@ export const SimulationProvider = ({ children }) => {
         startSimulation,
         pauseSimulation,
         resumeSimulation,
+        nextHour,
         nextDay,
         stopSimulation,
         cancelEodAnalysis,

@@ -253,7 +253,7 @@ class SimulationScanner:
         return True
 
     async def _simulation_loop(self):
-        """Main simulation loop - advances time and scans."""
+        """Main simulation loop - scans at current hour and waits for manual advance."""
         while self.is_running:
             try:
                 # Check if paused or day completed or EOD running
@@ -271,38 +271,21 @@ class SimulationScanner:
                 if not simulation_time_manager.is_active:
                     break
 
+                # If current hour already scanned, wait for manual advance
+                if simulation_time_manager.hour_completed:
+                    await asyncio.sleep(0.5)
+                    continue
+
                 # Perform scan at current simulation time
                 await self._scan_all()
 
-                # Wait for the configured interval (seconds_per_hour)
-                wait_seconds = simulation_time_manager.seconds_per_hour
-                await asyncio.sleep(wait_seconds)
-
-                # Advance simulation time by 1 hour
-                day_completed = simulation_time_manager.advance_hour()
+                # Mark hour as completed - wait for user to click "Sonraki Saat"
+                simulation_time_manager.hour_completed = True
                 await self._broadcast_status()
 
-                if day_completed:
-                    print(
-                        f"[SimScanner] Day completed: {simulation_time_manager.current_time}"
-                    )
-                    # Pause first, then run EOD
-                    simulation_time_manager.pause()
-                    await self._broadcast_status()
-
-                    # Clean up non-entered signals at end of day
-                    await self._cleanup_day_end_signals()
-
-                    # Set EOD running flag and broadcast
-                    simulation_time_manager.is_eod_running = True
-                    await self._broadcast_status()
-
-                    # Run EOD analysis for simulation
-                    await self._run_sim_eod_analysis()
-
-                    # EOD finished - clear flag and broadcast
-                    simulation_time_manager.is_eod_running = False
-                    await self._broadcast_status()
+                print(
+                    f"[SimScanner] Hour scan complete at {simulation_time_manager.current_time.strftime('%Y-%m-%d %H:%M')} - waiting for manual advance"
+                )
 
             except asyncio.CancelledError:
                 break
