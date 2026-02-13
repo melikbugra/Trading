@@ -67,6 +67,9 @@ class SimulationScanner:
         if self._ws_manager:
             try:
                 status = simulation_time_manager.get_status()
+                # Add scanner-level backtest running state
+                if status.get("is_backtest"):
+                    status["is_backtest_running"] = self.is_running
                 await self._ws_manager.broadcast(
                     {
                         "type": "sim_status",

@@ -10,6 +10,8 @@ const SimulationBanner = () => {
         stopSimulation,
         stopBacktest,
         backtestProgress,
+        backtestResults,
+        reopenBacktestResults,
         isLoading,
         formatSimTime,
     } = useSimulation();
@@ -87,14 +89,26 @@ const SimulationBanner = () => {
                             </div>
                         </>
                     ) : isBacktest ? (
-                        /* Backtest completed or starting */
-                        <span className="text-white/80 text-sm flex items-center gap-2">
-                            {backtestProgress === null && simStatus.is_active ? (
-                                <><span>✅</span> Backtest tamamlandı</>
-                            ) : (
-                                <><span className="animate-spin">⏳</span> Başlatılıyor...</>
+                        /* Backtest completed, running (no progress yet), or starting */
+                        <div className="flex items-center gap-3">
+                            <span className="text-white/80 text-sm flex items-center gap-2">
+                                {simStatus.is_backtest_running ? (
+                                    <><span className="animate-spin">⏳</span> Backtest çalışıyor...</>
+                                ) : simStatus.is_active ? (
+                                    <><span>✅</span> Backtest tamamlandı</>
+                                ) : (
+                                    <><span className="animate-spin">⏳</span> Başlatılıyor...</>
+                                )}
+                            </span>
+                            {!simStatus.is_backtest_running && simStatus.is_active && !backtestResults && (
+                                <button
+                                    onClick={reopenBacktestResults}
+                                    className="px-3 py-1 bg-white/20 hover:bg-white/30 text-white text-sm rounded-lg transition flex items-center gap-1.5 font-medium"
+                                >
+                                    📊 Sonuçları Göster
+                                </button>
                             )}
-                        </span>
+                        </div>
                     ) : (
                         /* Normal simulation info */
                         <>

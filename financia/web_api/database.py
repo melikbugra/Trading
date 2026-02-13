@@ -200,8 +200,10 @@ class SimulationTimeManager:
 
     def get_balance_stats(self) -> dict:
         """Get current balance statistics."""
+        # Derive total_profit from balance to ensure consistency
+        actual_profit = self.current_balance - self.initial_balance
         profit_percent = (
-            ((self.current_balance - self.initial_balance) / self.initial_balance * 100)
+            (actual_profit / self.initial_balance * 100)
             if self.initial_balance > 0
             else 0
         )
@@ -213,7 +215,7 @@ class SimulationTimeManager:
         return {
             "initial_balance": self.initial_balance,
             "current_balance": round(self.current_balance, 2),
-            "total_profit": round(self.total_profit, 2),
+            "total_profit": round(actual_profit, 2),
             "profit_percent": round(profit_percent, 2),
             "total_trades": self.total_trades,
             "winning_trades": self.winning_trades,

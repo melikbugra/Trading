@@ -17,6 +17,7 @@ export const SimulationProvider = ({ children }) => {
         day_completed: false,
         is_eod_running: false,
         is_scanning: false,
+        is_backtest_running: false,
         hour_completed: false,
         current_time: null,
         start_date: null,
@@ -40,6 +41,7 @@ export const SimulationProvider = ({ children }) => {
     const [error, setError] = useState(null);
     const [backtestProgress, setBacktestProgress] = useState(null); // Backtest progress
     const [backtestResults, setBacktestResults] = useState(null); // Backtest summary results
+    const [backtestDismissed, setBacktestDismissed] = useState(false); // User dismissed results
 
     const { lastMessage } = useWebSocket();
 
@@ -72,16 +74,19 @@ export const SimulationProvider = ({ children }) => {
             console.log('[Backtest] Complete:', lastMessage.data);
             setBacktestResults(lastMessage.data);
             setBacktestProgress(null);
+            setBacktestDismissed(false); // Reset dismissed flag on new results
         }
     }, [lastMessage]);
 
-    // Fallback: If backtest is active, progress is gone, and no results yet, fetch from API
+    // Fallback: If backtest completed (not running), progress is gone, results not received and not dismissed, fetch from API
     useEffect(() => {
         if (
             simStatus.is_backtest &&
             simStatus.is_active &&
+            !simStatus.is_backtest_running &&
             !backtestProgress &&
             !backtestResults &&
+            !backtestDismissed &&
             !isLoading
         ) {
             // Progress was cleared but no results arrived — try fetching from API
@@ -102,7 +107,7 @@ export const SimulationProvider = ({ children }) => {
             }, 3000); // Wait 3 seconds before fallback
             return () => clearTimeout(timer);
         }
-    }, [simStatus.is_backtest, simStatus.is_active, backtestProgress, backtestResults, isLoading]);
+    }, [simStatus.is_backtest, simStatus.is_active, simStatus.is_backtest_running, backtestProgress, backtestResults, backtestDismissed, isLoading]);
 
     // Fetch initial simulation status on mount
     useEffect(() => {
@@ -254,6 +259,7 @@ export const SimulationProvider = ({ children }) => {
         setError(null);
         setBacktestResults(null);
         setBacktestProgress(null);
+        setBacktestDismissed(false);
         try {
             const res = await fetch(`${API_URL}/simulation/backtest/start`, {
                 method: 'POST',
@@ -302,6 +308,22 @@ export const SimulationProvider = ({ children }) => {
 
     const clearBacktestResults = () => {
         setBacktestResults(null);
+        setBacktestDismissed(true); // Mark as dismissed so fallback doesn't re-fetch
+    };
+
+    const reopenBacktestResults = async () => {
+        try {
+            const res = await fetch(`${API_URL}/simulation/backtest/summary`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.overall) {
+                    setBacktestResults(data);
+                    setBacktestDismissed(false);
+                }
+            }
+        } catch (err) {
+            console.error('[Backtest] Failed to reopen results:', err);
+        }
     };
 
     // Helper to get API URL with simulation prefix
@@ -371,6 +393,7 @@ export const SimulationProvider = ({ children }) => {
         startBacktest,
         stopBacktest,
         clearBacktestResults,
+        reopenBacktestResults,
 
         // Helpers
         getApiUrl,

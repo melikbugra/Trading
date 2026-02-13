@@ -45,6 +45,7 @@ class SimulationStatusResponse(BaseModel):
     is_scanning: bool = False
     is_eod_running: bool = False
     is_backtest: bool = False
+    is_backtest_running: bool = False
     current_time: Optional[str]
     start_date: Optional[str]
     end_date: Optional[str]
@@ -188,6 +189,8 @@ class SimWatchlistResponse(BaseModel):
 @router.get("/status", response_model=SimulationStatusResponse)
 def get_simulation_status():
     """Get current simulation status."""
+    from financia.simulation_scanner import simulation_scanner
+
     status = simulation_time_manager.get_status()
     return SimulationStatusResponse(
         is_active=status["is_active"],
@@ -197,6 +200,9 @@ def get_simulation_status():
         is_scanning=status.get("is_scanning", False),
         is_eod_running=status.get("is_eod_running", False),
         is_backtest=status.get("is_backtest", False),
+        is_backtest_running=simulation_scanner.is_running
+        if status.get("is_backtest", False)
+        else False,
         current_time=status["current_time"],
         start_date=status["start_date"],
         end_date=status["end_date"],
