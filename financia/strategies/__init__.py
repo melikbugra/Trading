@@ -6,11 +6,13 @@ Supports both BIST100 and Binance markets.
 from .base import BaseStrategy, StrategyResult
 from .ema_macd import EMAMACDStrategy
 from .resistance_stoch_rsi import ResistanceBreakoutStrategy
+from .inside_bar_breakout import InsideBarBreakoutStrategy
 
 # Registry of available strategies
 STRATEGY_REGISTRY = {
     "EMAMACDStrategy": EMAMACDStrategy,
     "ResistanceBreakoutStrategy": ResistanceBreakoutStrategy,
+    "InsideBarBreakoutStrategy": InsideBarBreakoutStrategy,
 }
 
 
