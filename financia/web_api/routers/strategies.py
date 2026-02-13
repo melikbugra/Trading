@@ -65,6 +65,12 @@ class WatchlistCreate(BaseModel):
     strategy_id: int
 
 
+class WatchlistBulkCreate(BaseModel):
+    tickers: List[str]
+    market: str = "bist100"
+    strategy_id: int
+
+
 class WatchlistResponse(BaseModel):
     id: int
     ticker: str
@@ -301,6 +307,44 @@ def add_to_watchlist(item: WatchlistCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_item)
     return db_item
+
+
+@router.post("/watchlist/bulk")
+def add_to_watchlist_bulk(data: WatchlistBulkCreate, db: Session = Depends(get_db)):
+    """Add multiple tickers to watchlist at once."""
+    # Check strategy exists
+    strategy = db.query(Strategy).filter(Strategy.id == data.strategy_id).first()
+    if not strategy:
+        raise HTTPException(404, "Strategy not found")
+
+    added = 0
+    skipped = 0
+    for ticker in data.tickers:
+        ticker_normalized = ticker.upper()
+        if data.market == "bist100" and not ticker_normalized.endswith(".IS"):
+            ticker_normalized = f"{ticker_normalized}.IS"
+
+        existing = (
+            db.query(WatchlistItem)
+            .filter(
+                WatchlistItem.ticker == ticker_normalized,
+                WatchlistItem.strategy_id == data.strategy_id,
+            )
+            .first()
+        )
+        if existing:
+            skipped += 1
+        else:
+            db_item = WatchlistItem(
+                ticker=ticker_normalized,
+                market=data.market,
+                strategy_id=data.strategy_id,
+            )
+            db.add(db_item)
+            added += 1
+
+    db.commit()
+    return {"added": added, "skipped": skipped, "total": len(data.tickers)}
 
 
 @router.delete("/watchlist/{item_id}")

@@ -277,140 +277,43 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
         }
     };
 
-    // Helper for delay
-    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-    const addAllBist100 = async () => {
+    // Helper for bulk add - single API call
+    const bulkAddTickers = async (tickers, market, label, setLoading) => {
         if (!showAddTickerModal) return;
 
-        setAddingAllBist(true);
+        setLoading(true);
         setAddTickerError('');
 
-        let added = 0;
-        let skipped = 0;
-
-        // Batch size for parallel requests
-        const batchSize = 5;
-
-        for (let i = 0; i < BIST100_TICKERS.length; i += batchSize) {
-            const batch = BIST100_TICKERS.slice(i, i + batchSize);
-
-            const promises = batch.map(async (ticker) => {
-                const formattedTicker = ticker + '.IS';
-                try {
-                    const res = await fetch(getWatchlistApi(), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            ticker: formattedTicker,
-                            market: 'bist100',
-                            strategy_id: showAddTickerModal
-                        })
-                    });
-
-                    if (res.ok) {
-                        return 'added';
-                    } else {
-                        return 'skipped'; // Muhtemelen zaten ekli
-                    }
-                } catch (err) {
-                    return 'skipped';
-                }
+        try {
+            const res = await fetch(`${getWatchlistApi()}/bulk`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    tickers,
+                    market,
+                    strategy_id: showAddTickerModal
+                })
             });
 
-            const results = await Promise.all(promises);
-            results.forEach(r => {
-                if (r === 'added') added++;
-                else skipped++;
-            });
-
-            // Rate limiting between batches
-            if (i + batchSize < BIST100_TICKERS.length) {
-                await delay(100);
+            if (res.ok) {
+                const data = await res.json();
+                fetchWatchlist();
+                setShowAddTickerModal(null);
+                addToast(`✅ ${label}: ${data.added} sembol eklendi${data.skipped > 0 ? `, ${data.skipped} atlandı` : ''}`, 'success', 5000);
+            } else {
+                const err = await res.json();
+                setAddTickerError(err.detail || 'Ekleme başarısız');
             }
+        } catch (err) {
+            setAddTickerError('Bağlantı hatası');
+        } finally {
+            setLoading(false);
         }
-
-        setAddingAllBist(false);
-        fetchWatchlist();
-        setShowAddTickerModal(null);
-        addToast(`✅ BIST100: ${added} sembol eklendi${skipped > 0 ? `, ${skipped} atlandı` : ''}`, 'success', 5000);
     };
 
-    const addAllBist30 = async () => {
-        if (!showAddTickerModal) return;
-
-        setAddingBist30(true);
-        setAddTickerError('');
-
-        let added = 0;
-        let skipped = 0;
-
-        for (const ticker of BIST30_TICKERS) {
-            const formattedTicker = ticker + '.IS';
-            try {
-                const res = await fetch(getWatchlistApi(), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        ticker: formattedTicker,
-                        market: 'bist100',
-                        strategy_id: showAddTickerModal
-                    })
-                });
-
-                if (res.ok) {
-                    added++;
-                } else {
-                    skipped++;
-                }
-            } catch (err) {
-                skipped++;
-            }
-        }
-
-        setAddingBist30(false);
-        fetchWatchlist();
-        setShowAddTickerModal(null);
-        addToast(`✅ BIST30: ${added} sembol eklendi${skipped > 0 ? `, ${skipped} atlandı` : ''}`, 'success', 5000);
-    };
-
-    const addTopCrypto = async () => {
-        if (!showAddTickerModal) return;
-
-        setAddingCrypto(true);
-        setAddTickerError('');
-
-        let added = 0;
-        let skipped = 0;
-
-        for (const ticker of TOP_CRYPTO_TICKERS) {
-            const formattedTicker = ticker + 'TRY';
-            try {
-                const res = await fetch(getWatchlistApi(), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        ticker: formattedTicker,
-                        market: 'binance',
-                        strategy_id: showAddTickerModal
-                    })
-                });
-
-                if (res.ok) {
-                    added++;
-                } else {
-                    skipped++;
-                }
-            } catch (err) {
-                skipped++;
-            }
-        }
-
-        setAddingCrypto(false);
-        fetchWatchlist();
-        setShowAddTickerModal(null);
-        addToast(`✅ Top 10 Crypto: ${added} sembol eklendi${skipped > 0 ? `, ${skipped} atlandı` : ''}`, 'success', 5000);
-    };
+    const addAllBist100 = () => bulkAddTickers(BIST100_TICKERS, 'bist100', 'BIST100', setAddingAllBist);
+    const addAllBist30 = () => bulkAddTickers(BIST30_TICKERS, 'bist100', 'BIST30', setAddingBist30);
+    const addTopCrypto = () => bulkAddTickers(TOP_CRYPTO_TICKERS.map(t => t + 'TRY'), 'binance', 'Top 10 Crypto', setAddingCrypto);
 
     const deleteAllTickers = async (strategyId, confirmed = false) => {
         const tickers = getWatchlistForStrategy(strategyId);

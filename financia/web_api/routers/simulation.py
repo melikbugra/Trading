@@ -155,6 +155,12 @@ class SimWatchlistCreate(BaseModel):
     strategy_id: int
 
 
+class SimWatchlistBulkCreate(BaseModel):
+    tickers: List[str]
+    market: str = "bist100"
+    strategy_id: int
+
+
 class SimWatchlistResponse(BaseModel):
     id: int
     ticker: str
@@ -367,9 +373,7 @@ async def next_simulation_hour(db: Session = Depends(get_db)):
     from financia.simulation_scanner import simulation_scanner
 
     if day_completed:
-        print(
-            f"[Simulation] Day completed: {simulation_time_manager.current_time}"
-        )
+        print(f"[Simulation] Day completed: {simulation_time_manager.current_time}")
         # Pause and run EOD
         simulation_time_manager.pause()
         await simulation_scanner._broadcast_status()
@@ -390,9 +394,7 @@ async def next_simulation_hour(db: Session = Depends(get_db)):
         simulation_time_manager.hour_completed = False
         await simulation_scanner._broadcast_status()
 
-    print(
-        f"[Simulation] Advanced to: {simulation_time_manager.current_time}"
-    )
+    print(f"[Simulation] Advanced to: {simulation_time_manager.current_time}")
     return get_simulation_status()
 
 
@@ -1142,43 +1144,44 @@ def add_sim_watchlist_item(data: SimWatchlistCreate, db: Session = Depends(get_d
 
 @router.post("/watchlist/bulk")
 def add_sim_watchlist_bulk(
-    strategy_id: int,
-    tickers: List[str],
-    market: str = "bist100",
+    data: SimWatchlistBulkCreate,
     db: Session = Depends(get_db),
 ):
     """Add multiple tickers to simulation watchlist at once."""
     # Verify strategy exists
-    strategy = db.query(SimStrategy).filter(SimStrategy.id == strategy_id).first()
+    strategy = db.query(SimStrategy).filter(SimStrategy.id == data.strategy_id).first()
     if not strategy:
         raise HTTPException(404, "Strategy not found")
 
     added = 0
-    for ticker in tickers:
+    skipped = 0
+    for ticker in data.tickers:
         ticker_normalized = ticker.upper()
-        if market == "bist100" and not ticker_normalized.endswith(".IS"):
+        if data.market == "bist100" and not ticker_normalized.endswith(".IS"):
             ticker_normalized = f"{ticker_normalized}.IS"
 
         existing = (
             db.query(SimWatchlistItem)
             .filter(
                 SimWatchlistItem.ticker == ticker_normalized,
-                SimWatchlistItem.market == market,
-                SimWatchlistItem.strategy_id == strategy_id,
+                SimWatchlistItem.market == data.market,
+                SimWatchlistItem.strategy_id == data.strategy_id,
             )
             .first()
         )
         if not existing:
             item = SimWatchlistItem(
                 ticker=ticker_normalized,
-                market=market,
-                strategy_id=strategy_id,
+                market=data.market,
+                strategy_id=data.strategy_id,
             )
             db.add(item)
             added += 1
+        else:
+            skipped += 1
 
     db.commit()
-    return {"added": added, "total": len(tickers)}
+    return {"added": added, "skipped": skipped, "total": len(data.tickers)}
 
 
 @router.delete("/watchlist/{item_id}")

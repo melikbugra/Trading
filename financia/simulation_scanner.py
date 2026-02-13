@@ -145,6 +145,9 @@ class SimulationScanner:
                         "entered_at": s.entered_at.isoformat()
                         if s.entered_at
                         else None,
+                        "sl_tp_alert": (s.extra_data or {}).get("sl_tp_alert")
+                        if s.status == "entered"
+                        else None,
                     }
                     for s in signals
                 ]
@@ -453,10 +456,13 @@ class SimulationScanner:
             # Evaluate strategy
             result = strategy.evaluate(data)
 
-            # Store data timestamp in result's extra_data
+            # Store data timestamp and last candle High/Low in extra_data
             if result.extra_data is None:
                 result.extra_data = {}
             result.extra_data["data_timestamp"] = data_timestamp
+            # Store last candle High/Low for intra-bar SL/TP detection
+            result.extra_data["last_candle_high"] = float(data["High"].iloc[-1])
+            result.extra_data["last_candle_low"] = float(data["Low"].iloc[-1])
 
             # Check for existing signal - return only ID for main session to re-fetch
             existing_signal = (
@@ -624,6 +630,43 @@ class SimulationScanner:
 
         sim_time = simulation_time_manager.current_time
 
+        # For entered positions, check if last candle's High/Low hit SL/TP
+        candle_high = extra_data.get("last_candle_high") if extra_data else None
+        candle_low = extra_data.get("last_candle_low") if extra_data else None
+
+        def check_sl_tp_hit(signal):
+            """Check if candle High/Low touched SL or TP. Returns alert string or None."""
+            if (
+                not candle_high
+                or not candle_low
+                or not signal.stop_loss
+                or not signal.take_profit
+            ):
+                return None
+            if signal.direction == "long":
+                if candle_low <= signal.stop_loss:
+                    return "sl_hit"
+                if candle_high >= signal.take_profit:
+                    return "tp_hit"
+            else:  # short
+                if candle_high >= signal.stop_loss:
+                    return "sl_hit"
+                if candle_low <= signal.take_profit:
+                    return "tp_hit"
+            return None
+
+        def apply_sl_tp_alert(signal, ed):
+            """Check SL/TP hit and update extra_data accordingly."""
+            alert = check_sl_tp_hit(signal)
+            if alert:
+                ed["sl_tp_alert"] = alert
+                print(
+                    f"[SimScanner] {'⚠️ SL' if alert == 'sl_hit' else '🎯 TP'} HIT (intra-bar): {signal.ticker}"
+                )
+            else:
+                ed.pop("sl_tp_alert", None)
+            return ed
+
         # Case 1: Main condition met - new signal triggered
         if result.main_condition_met:
             if existing_signal and existing_signal.status == "triggered":
@@ -633,7 +676,8 @@ class SimulationScanner:
             elif existing_signal and existing_signal.status == "entered":
                 # Already in position, update current price
                 existing_signal.current_price = current_price
-                existing_signal.extra_data = extra_data  # Update data_timestamp
+                extra_data = apply_sl_tp_alert(existing_signal, extra_data)
+                existing_signal.extra_data = extra_data
                 await self._check_position_levels(db, existing_signal, result)
             else:
                 # Create new triggered signal
@@ -669,6 +713,7 @@ class SimulationScanner:
         elif result.precondition_met:
             if existing_signal and existing_signal.status == "entered":
                 existing_signal.current_price = current_price
+                extra_data = apply_sl_tp_alert(existing_signal, extra_data)
                 existing_signal.extra_data = extra_data  # Update data_timestamp
             elif existing_signal and existing_signal.status == "triggered":
                 # Update current price for triggered signals even when main condition not met
@@ -709,6 +754,7 @@ class SimulationScanner:
                 await self._check_entry_exit(db, existing_signal, result)
             elif existing_signal and existing_signal.status == "entered":
                 existing_signal.current_price = current_price
+                extra_data = apply_sl_tp_alert(existing_signal, extra_data)
                 existing_signal.extra_data = extra_data  # Update data_timestamp
 
         db.commit()
