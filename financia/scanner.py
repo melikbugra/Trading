@@ -201,15 +201,6 @@ class ScannerService:
 
         return market_open <= now <= market_close
 
-    def _is_end_of_day(self) -> bool:
-        """Check if it's end of trading day (18:30-19:00)."""
-        now = now_turkey()
-        if now.weekday() >= 5:  # Weekend
-            return False
-        eod_start = now.replace(hour=18, minute=30, second=0, microsecond=0)
-        eod_end = now.replace(hour=19, minute=0, second=0, microsecond=0)
-        return eod_start <= now <= eod_end
-
     async def _cleanup_day_end_signals(self):
         """Clean up non-entered signals at end of day (keep only 'entered' positions)."""
         db = SessionLocal()
@@ -244,20 +235,40 @@ class ScannerService:
     async def _scan_loop(self):
         """Main scanning loop."""
         _day_end_cleanup_done = None  # Track which day we did cleanup for
+        _was_market_open = False  # Track market state transitions
 
         while self.is_running:
             try:
                 now = now_turkey()
                 today = now.date()
+                market_open = self._is_bist_market_open()
 
-                # Check if it's end of day and we haven't done cleanup yet today
-                if self._is_end_of_day() and _day_end_cleanup_done != today:
-                    print(f"[Scanner] End of trading day detected, running cleanup...")
+                # Day-end cleanup: when market transitions from open to closed
+                if (
+                    _was_market_open
+                    and not market_open
+                    and _day_end_cleanup_done != today
+                ):
+                    print(f"[Scanner] Market just closed, running day-end cleanup...")
                     await self._cleanup_day_end_signals()
                     _day_end_cleanup_done = today
 
+                _was_market_open = market_open
+
                 # Check if BIST market is open
-                if not self._is_bist_market_open():
+                if not market_open:
+                    # Also do cleanup if we haven't yet today (e.g., scanner started after market close)
+                    if (
+                        now.weekday() < 5
+                        and now.hour >= 18
+                        and _day_end_cleanup_done != today
+                    ):
+                        print(
+                            f"[Scanner] Market already closed, running day-end cleanup..."
+                        )
+                        await self._cleanup_day_end_signals()
+                        _day_end_cleanup_done = today
+
                     print(
                         f"[Scanner] Market closed ({now.strftime('%H:%M')}), skipping scan..."
                     )
@@ -524,8 +535,16 @@ class ScannerService:
         if data.empty:
             return
 
+        # Get actual data timestamp (last candle time)
+        data_timestamp = data.index[-1].isoformat() if len(data) > 0 else None
+
         # Evaluate strategy
         result = strategy.evaluate(data)
+
+        # Store data timestamp in result's extra_data
+        if result.extra_data is None:
+            result.extra_data = {}
+        result.extra_data["data_timestamp"] = data_timestamp
 
         # Get real-time current price (independent of strategy timeframe)
         # This ensures all signals show the same current price regardless of horizon
