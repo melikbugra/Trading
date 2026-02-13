@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSimulation } from '../contexts/SimulationContext';
 
+const API_BASE = import.meta.env.VITE_API_BASE || '';
+
 const SimulationPanel = ({ onClose }) => {
-    const { startSimulation, isLoading, error } = useSimulation();
+    const { startSimulation, startBacktest, isLoading, error } = useSimulation();
 
     // Form state
     const [startDate, setStartDate] = useState(() => {
@@ -19,6 +21,45 @@ const SimulationPanel = ({ onClose }) => {
     });
     const [initialBalance, setInitialBalance] = useState(100000);
     const [localError, setLocalError] = useState(null);
+
+    // Backtest mode
+    const [isBacktest, setIsBacktest] = useState(false);
+    const [strategyTypes, setStrategyTypes] = useState([]);
+    const [selectedStrategyTypes, setSelectedStrategyTypes] = useState([]);
+    const [loadingStrategies, setLoadingStrategies] = useState(false);
+
+    // Fetch strategies when backtest mode is enabled
+    useEffect(() => {
+        if (isBacktest) {
+            fetchStrategies();
+        }
+    }, [isBacktest]);
+
+    const fetchStrategies = async () => {
+        setLoadingStrategies(true);
+        try {
+            // Fetch Python-defined strategy types (from STRATEGY_REGISTRY)
+            const res = await fetch(`${API_BASE}/strategies/available-types`);
+            if (res.ok) {
+                const data = await res.json();
+                setStrategyTypes(data);
+                // Auto-select all
+                setSelectedStrategyTypes(data.map(s => s.type));
+            }
+        } catch (err) {
+            console.error('Failed to fetch strategy types:', err);
+        } finally {
+            setLoadingStrategies(false);
+        }
+    };
+
+    const toggleStrategy = (type) => {
+        setSelectedStrategyTypes(prev =>
+            prev.includes(type)
+                ? prev.filter(t => t !== type)
+                : [...prev, type]
+        );
+    };
 
     const handleStart = async () => {
         setLocalError(null);
@@ -41,11 +82,24 @@ const SimulationPanel = ({ onClose }) => {
             return;
         }
 
-        try {
-            await startSimulation(startDate, endDate, 30, initialBalance);
-            onClose?.();
-        } catch (err) {
-            setLocalError(err.message);
+        if (isBacktest) {
+            if (selectedStrategyTypes.length === 0) {
+                setLocalError('En az bir strateji seçmelisiniz');
+                return;
+            }
+            try {
+                await startBacktest(startDate, endDate, initialBalance, selectedStrategyTypes);
+                onClose?.();
+            } catch (err) {
+                setLocalError(err.message);
+            }
+        } else {
+            try {
+                await startSimulation(startDate, endDate, 30, initialBalance);
+                onClose?.();
+            } catch (err) {
+                setLocalError(err.message);
+            }
         }
     };
 
@@ -55,8 +109,10 @@ const SimulationPanel = ({ onClose }) => {
                 {/* Header */}
                 <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
                     <div className="flex items-center gap-3">
-                        <span className="text-2xl">🎮</span>
-                        <h2 className="text-xl font-semibold text-white">Simülasyon Modu</h2>
+                        <span className="text-2xl">{isBacktest ? '⚡' : '🎮'}</span>
+                        <h2 className="text-xl font-semibold text-white">
+                            {isBacktest ? 'Backtest Modu' : 'Simülasyon Modu'}
+                        </h2>
                     </div>
                     <button
                         onClick={onClose}
@@ -68,10 +124,88 @@ const SimulationPanel = ({ onClose }) => {
 
                 {/* Content */}
                 <div className="p-6 space-y-6">
+                    {/* Mode Toggle */}
+                    <div className="flex items-center gap-3 p-3 bg-gray-700/50 rounded-lg">
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={isBacktest}
+                                onChange={(e) => setIsBacktest(e.target.checked)}
+                                className="w-4 h-4 rounded border-gray-500 text-yellow-500 focus:ring-yellow-500 bg-gray-600"
+                            />
+                            <span className="text-yellow-400 font-medium">⚡ Backtest Modu</span>
+                        </label>
+                        <span className="text-gray-400 text-xs">
+                            {isBacktest
+                                ? 'Otomatik al-sat, hızlandırılmış simülasyon'
+                                : 'Manuel kontrollü simülasyon'}
+                        </span>
+                    </div>
+
+                    {/* Strategy Selection (Backtest only) */}
+                    {isBacktest && (
+                        <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">
+                                📋 Test Edilecek Stratejiler
+                            </label>
+                            {loadingStrategies ? (
+                                <div className="text-gray-400 text-sm p-3 bg-gray-700/50 rounded-lg">
+                                    <span className="animate-spin inline-block mr-2">⏳</span>
+                                    Stratejiler yükleniyor...
+                                </div>
+                            ) : strategyTypes.length === 0 ? (
+                                <div className="text-red-400 text-sm p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                                    ⚠️ Tanımlı strateji bulunamadı.
+                                </div>
+                            ) : (
+                                <div className="space-y-1 max-h-40 overflow-y-auto bg-gray-700/30 rounded-lg p-2">
+                                    {strategyTypes.map((s) => (
+                                        <label
+                                            key={s.type}
+                                            className={`flex items-center gap-2 p-2 rounded cursor-pointer transition ${selectedStrategyTypes.includes(s.type)
+                                                ? 'bg-yellow-500/10 border border-yellow-500/30'
+                                                : 'hover:bg-gray-600/50 border border-transparent'
+                                                }`}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedStrategyTypes.includes(s.type)}
+                                                onChange={() => toggleStrategy(s.type)}
+                                                className="w-4 h-4 rounded border-gray-500 text-yellow-500 focus:ring-yellow-500 bg-gray-600"
+                                            />
+                                            <div className="flex-1 min-w-0">
+                                                <span className="text-white text-sm font-medium">{s.name}</span>
+                                                <span className="text-gray-400 text-xs ml-2">({s.type})</span>
+                                            </div>
+                                        </label>
+                                    ))}
+                                    {strategyTypes.length > 1 && (
+                                        <div className="flex gap-2 mt-1 pt-1 border-t border-gray-600">
+                                            <button
+                                                onClick={() => setSelectedStrategyTypes(strategyTypes.map(s => s.type))}
+                                                className="text-xs text-blue-400 hover:text-blue-300"
+                                            >
+                                                Tümünü Seç
+                                            </button>
+                                            <button
+                                                onClick={() => setSelectedStrategyTypes([])}
+                                                className="text-xs text-gray-400 hover:text-gray-300"
+                                            >
+                                                Temizle
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {/* Description */}
                     <p className="text-gray-400 text-sm">
-                        Geçmiş verileri canlı piyasa gibi oynatarak strateji pratik yapın.
-                        Her saatte otomatik tarama yapılır, sonraki saate siz geçersiniz.
+                        {isBacktest
+                            ? 'Seçilen stratejileri geçmiş verilerle otomatik test edin. Sinyal gelince 1 lot alınır, SL/TP değince satılır.'
+                            : 'Geçmiş verileri canlı piyasa gibi oynatarak strateji pratik yapın. Her saatte otomatik tarama yapılır, sonraki saate siz geçersiniz.'
+                        }
                     </p>
 
                     {/* Date Range */}
@@ -140,9 +274,19 @@ const SimulationPanel = ({ onClose }) => {
                     )}
 
                     {/* Info Box */}
-                    <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-yellow-400 text-sm">
-                        <strong>Not:</strong> Simülasyon başladığında mevcut simülasyon verileri silinir.
-                        Hafta sonları otomatik olarak atlanır.
+                    <div className={`p-3 ${isBacktest ? 'bg-yellow-500/10 border-yellow-500/30' : 'bg-yellow-500/10 border-yellow-500/30'} border rounded-lg text-yellow-400 text-sm`}>
+                        {isBacktest ? (
+                            <>
+                                <strong>Backtest:</strong> Tüm tarih aralığı otomatik olarak hızlandırılmış şekilde işlenecek.
+                                Her sinyal tetiklendiğinde 1 lot alınır, SL/TP değdiğinde otomatik satılır.
+                                Sonuçları Geçmiş sekmesinden inceleyebilirsiniz.
+                            </>
+                        ) : (
+                            <>
+                                <strong>Not:</strong> Simülasyon başladığında mevcut simülasyon verileri silinir.
+                                Hafta sonları otomatik olarak atlanır.
+                            </>
+                        )}
                     </div>
                 </div>
 
@@ -156,13 +300,17 @@ const SimulationPanel = ({ onClose }) => {
                     </button>
                     <button
                         onClick={handleStart}
-                        disabled={isLoading}
-                        className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        disabled={isLoading || (isBacktest && selectedStrategyTypes.length === 0)}
+                        className={`flex-1 px-4 py-2 ${isBacktest ? 'bg-yellow-600 hover:bg-yellow-500' : 'bg-blue-600 hover:bg-blue-500'} text-white rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2`}
                     >
                         {isLoading ? (
                             <>
                                 <span className="animate-spin">⏳</span>
                                 Başlatılıyor...
+                            </>
+                        ) : isBacktest ? (
+                            <>
+                                ⚡ Backtest Başlat
                             </>
                         ) : (
                             <>

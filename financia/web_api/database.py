@@ -47,7 +47,10 @@ class SimulationTimeManager:
         self.day_completed: bool = False
         self.is_eod_running: bool = False  # Track if EOD analysis is in progress
         self.is_scanning: bool = False  # Track if scan is in progress
-        self.hour_completed: bool = False  # Track if current hour scan is done (waiting for manual advance)
+        self.hour_completed: bool = (
+            False  # Track if current hour scan is done (waiting for manual advance)
+        )
+        self.is_backtest: bool = False  # Track if running in backtest mode
 
         # Simulation time settings
         self.current_time: Optional[datetime] = None
@@ -72,6 +75,7 @@ class SimulationTimeManager:
         end_date: date,
         seconds_per_hour: int = 30,
         initial_balance: float = 100000.0,
+        is_backtest: bool = False,
     ):
         """Start a new simulation session."""
         self.is_active = True
@@ -79,6 +83,7 @@ class SimulationTimeManager:
         self.day_completed = False
         self.is_eod_running = False
         self.hour_completed = False
+        self.is_backtest = is_backtest
         self.start_date = start_date
         self.end_date = end_date
         self.seconds_per_hour = seconds_per_hour
@@ -103,6 +108,7 @@ class SimulationTimeManager:
         self.is_eod_running = False
         self.is_scanning = False
         self.hour_completed = False
+        self.is_backtest = False
         self.current_time = None
         self.start_date = None
         self.end_date = None
@@ -224,6 +230,7 @@ class SimulationTimeManager:
             "is_eod_running": self.is_eod_running,
             "is_scanning": self.is_scanning,
             "hour_completed": self.hour_completed,
+            "is_backtest": self.is_backtest,
             "current_time": self.current_time.isoformat()
             if self.current_time
             else None,

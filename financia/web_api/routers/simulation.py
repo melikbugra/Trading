@@ -18,6 +18,7 @@ from financia.web_api.database import (
     SimTradeHistory,
     SimStrategy,
     SimWatchlistItem,
+    SimScannerConfig,
     Strategy,
     WatchlistItem,
     now_turkey,
@@ -43,6 +44,7 @@ class SimulationStatusResponse(BaseModel):
     hour_completed: bool = False
     is_scanning: bool = False
     is_eod_running: bool = False
+    is_backtest: bool = False
     current_time: Optional[str]
     start_date: Optional[str]
     end_date: Optional[str]
@@ -161,6 +163,13 @@ class SimWatchlistBulkCreate(BaseModel):
     strategy_id: int
 
 
+class BacktestStartRequest(BaseModel):
+    start_date: date
+    end_date: date
+    initial_balance: float = 100000.0
+    strategy_types: List[str]  # Python strategy type names from STRATEGY_REGISTRY
+
+
 class SimWatchlistResponse(BaseModel):
     id: int
     ticker: str
@@ -187,6 +196,7 @@ def get_simulation_status():
         hour_completed=status.get("hour_completed", False),
         is_scanning=status.get("is_scanning", False),
         is_eod_running=status.get("is_eod_running", False),
+        is_backtest=status.get("is_backtest", False),
         current_time=status["current_time"],
         start_date=status["start_date"],
         end_date=status["end_date"],
@@ -1256,3 +1266,206 @@ def toggle_sim_watchlist_item(item_id: int, db: Session = Depends(get_db)):
     item.is_active = not item.is_active
     db.commit()
     return {"id": item_id, "is_active": item.is_active}
+
+
+# ============= Backtest Endpoints =============
+
+
+@router.post("/backtest/start", response_model=SimulationStatusResponse)
+async def start_backtest(request: BacktestStartRequest, db: Session = Depends(get_db)):
+    """
+    Start a backtest session.
+    Runs the simulation automatically — auto-enters on triggered signals,
+    auto-exits on SL/TP hit. No manual intervention needed.
+    """
+    # Validate
+    if request.start_date > request.end_date:
+        raise HTTPException(400, "Start date must be before or equal to end date")
+    if request.start_date > date.today():
+        raise HTTPException(400, "Start date cannot be in the future")
+    if not request.strategy_types:
+        raise HTTPException(400, "At least one strategy must be selected")
+
+    # Validate strategy types exist in Python STRATEGY_REGISTRY
+    from financia.strategies import STRATEGY_REGISTRY, get_strategy_class
+
+    for st in request.strategy_types:
+        if st not in STRATEGY_REGISTRY:
+            raise HTTPException(400, f"Unknown strategy type: {st}")
+
+    # Clear ALL sim data first
+    db.query(SimSignal).delete()
+    db.query(SimTradeHistory).delete()
+    db.query(SimScannerConfig).delete()
+    db.query(SimSession).delete()
+    db.query(SimWatchlistItem).delete()
+    db.query(SimStrategy).delete()
+    db.commit()
+
+    # Create sim strategies from Python class defaults
+    sim_strategy_ids = []
+    for st in request.strategy_types:
+        cls = get_strategy_class(st)
+        sim_s = SimStrategy(
+            name=cls.name,
+            description=cls.description,
+            strategy_type=st,
+            params=cls.default_params,
+            risk_reward_ratio=cls.default_params.get("risk_reward_ratio", 2.0),
+            horizon="short",
+            is_active=True,
+        )
+        db.add(sim_s)
+        db.flush()
+        sim_strategy_ids.append(sim_s.id)
+
+    # Add all BIST100 tickers to each selected strategy
+    from financia.bist100_tickers import get_bist_tickers
+
+    bist_tickers = get_bist_tickers("100")
+    for sim_sid in sim_strategy_ids:
+        for ticker in bist_tickers:
+            sim_item = SimWatchlistItem(
+                ticker=ticker,
+                market="bist100",
+                strategy_id=sim_sid,
+                is_active=True,
+            )
+            db.add(sim_item)
+    db.commit()
+
+    strategies = db.query(SimStrategy).all()
+
+    # Create new session
+    session = SimSession(
+        start_date=request.start_date,
+        end_date=request.end_date,
+        current_date=request.start_date,
+        seconds_per_hour=0,  # instant
+        status="active",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    # Start simulation in backtest mode
+    simulation_time_manager.start(
+        start_date=request.start_date,
+        end_date=request.end_date,
+        seconds_per_hour=0,
+        initial_balance=request.initial_balance,
+        is_backtest=True,
+    )
+    simulation_time_manager.session_id = session.id
+
+    # Import and start backtest
+    from financia.simulation_scanner import simulation_scanner
+
+    await simulation_scanner.start_backtest()
+
+    strategy_names = [s.name for s in strategies]
+    print(
+        f"[Backtest] Started: {request.start_date} to {request.end_date}, "
+        f"Balance: {request.initial_balance:,.0f} TL, "
+        f"Strategies: {', '.join(strategy_names)}"
+    )
+
+    return get_simulation_status()
+
+
+@router.post("/backtest/stop", response_model=SimulationStatusResponse)
+async def stop_backtest(db: Session = Depends(get_db)):
+    """Stop a running backtest or exit backtest mode after completion."""
+    if not simulation_time_manager.is_active:
+        raise HTTPException(400, "No simulation is active")
+
+    # Update session
+    if simulation_time_manager.session_id:
+        session = (
+            db.query(SimSession)
+            .filter(SimSession.id == simulation_time_manager.session_id)
+            .first()
+        )
+        if session:
+            session.status = "stopped"
+            session.completed_at = datetime.utcnow()
+            db.commit()
+
+    simulation_time_manager.stop()
+
+    from financia.simulation_scanner import simulation_scanner
+
+    await simulation_scanner.stop()
+
+    print("[Backtest] Stopped by user")
+    return get_simulation_status()
+
+
+@router.get("/backtest/summary")
+def get_backtest_summary(db: Session = Depends(get_db)):
+    """Get backtest results summary with per-strategy breakdown."""
+
+    # Overall stats
+    balance_stats = simulation_time_manager.get_balance_stats()
+
+    # Per-strategy breakdown
+    strategy_stats = []
+    strategies = db.query(SimStrategy).filter(SimStrategy.is_active == True).all()
+
+    for strategy in strategies:
+        trades = (
+            db.query(SimTradeHistory)
+            .filter(SimTradeHistory.strategy_id == strategy.id)
+            .all()
+        )
+
+        if not trades:
+            strategy_stats.append(
+                {
+                    "strategy_id": strategy.id,
+                    "strategy_name": strategy.name,
+                    "strategy_type": strategy.strategy_type,
+                    "total_trades": 0,
+                    "winning_trades": 0,
+                    "losing_trades": 0,
+                    "win_rate": 0,
+                    "total_profit_tl": 0,
+                    "total_profit_percent": 0,
+                    "avg_profit_percent": 0,
+                    "avg_rr_achieved": 0,
+                    "best_trade_percent": 0,
+                    "worst_trade_percent": 0,
+                }
+            )
+            continue
+
+        wins = [t for t in trades if t.result == "win"]
+        losses = [t for t in trades if t.result == "loss"]
+        total_profit_tl = sum(t.profit_tl for t in trades)
+        profits = [t.profit_percent for t in trades]
+        rrs = [t.risk_reward_achieved for t in trades]
+
+        strategy_stats.append(
+            {
+                "strategy_id": strategy.id,
+                "strategy_name": strategy.name,
+                "strategy_type": strategy.strategy_type,
+                "total_trades": len(trades),
+                "winning_trades": len(wins),
+                "losing_trades": len(losses),
+                "win_rate": round(len(wins) / len(trades) * 100, 1) if trades else 0,
+                "total_profit_tl": round(total_profit_tl, 2),
+                "total_profit_percent": round(sum(profits), 2),
+                "avg_profit_percent": round(sum(profits) / len(profits), 2)
+                if profits
+                else 0,
+                "avg_rr_achieved": round(sum(rrs) / len(rrs), 2) if rrs else 0,
+                "best_trade_percent": round(max(profits), 2) if profits else 0,
+                "worst_trade_percent": round(min(profits), 2) if profits else 0,
+            }
+        )
+
+    return {
+        "overall": balance_stats,
+        "per_strategy": strategy_stats,
+    }

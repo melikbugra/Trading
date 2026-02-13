@@ -38,6 +38,8 @@ export const SimulationProvider = ({ children }) => {
     const [simEodProgress, setSimEodProgress] = useState(null); // EOD analysis progress
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [backtestProgress, setBacktestProgress] = useState(null); // Backtest progress
+    const [backtestResults, setBacktestResults] = useState(null); // Backtest summary results
 
     const { lastMessage } = useWebSocket();
 
@@ -64,8 +66,43 @@ export const SimulationProvider = ({ children }) => {
             console.log('[Simulation] EOD complete:', lastMessage.data);
             setSimEodResults(lastMessage.data);
             setSimEodProgress(null); // Clear progress on completion
+        } else if (lastMessage.type === 'sim_backtest_progress') {
+            setBacktestProgress(lastMessage.data);
+        } else if (lastMessage.type === 'backtest_complete') {
+            console.log('[Backtest] Complete:', lastMessage.data);
+            setBacktestResults(lastMessage.data);
+            setBacktestProgress(null);
         }
     }, [lastMessage]);
+
+    // Fallback: If backtest is active, progress is gone, and no results yet, fetch from API
+    useEffect(() => {
+        if (
+            simStatus.is_backtest &&
+            simStatus.is_active &&
+            !backtestProgress &&
+            !backtestResults &&
+            !isLoading
+        ) {
+            // Progress was cleared but no results arrived — try fetching from API
+            const timer = setTimeout(async () => {
+                try {
+                    console.log('[Backtest] Fallback: fetching results from API...');
+                    const res = await fetch(`${API_URL}/simulation/backtest/summary`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data && data.overall && data.overall.total_trades > 0) {
+                            console.log('[Backtest] Fallback: got results from API');
+                            setBacktestResults(data);
+                        }
+                    }
+                } catch (err) {
+                    console.error('[Backtest] Fallback fetch failed:', err);
+                }
+            }, 3000); // Wait 3 seconds before fallback
+            return () => clearTimeout(timer);
+        }
+    }, [simStatus.is_backtest, simStatus.is_active, backtestProgress, backtestResults, isLoading]);
 
     // Fetch initial simulation status on mount
     useEffect(() => {
@@ -212,6 +249,61 @@ export const SimulationProvider = ({ children }) => {
         }
     };
 
+    const startBacktest = async (startDate, endDate, initialBalance, strategyTypes) => {
+        setIsLoading(true);
+        setError(null);
+        setBacktestResults(null);
+        setBacktestProgress(null);
+        try {
+            const res = await fetch(`${API_URL}/simulation/backtest/start`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    start_date: startDate,
+                    end_date: endDate,
+                    initial_balance: initialBalance,
+                    strategy_types: strategyTypes,
+                }),
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || 'Failed to start backtest');
+            }
+            const data = await res.json();
+            setSimStatus(data);
+            setIsSimulationMode(true);
+            return data;
+        } catch (err) {
+            setError(err.message);
+            throw err;
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const stopBacktest = async () => {
+        setIsLoading(true);
+        try {
+            const res = await fetch(`${API_URL}/simulation/backtest/stop`, { method: 'POST' });
+            if (res.ok) {
+                const data = await res.json();
+                setSimStatus(data);
+                if (!data.is_active) {
+                    setIsSimulationMode(false);
+                }
+                setBacktestProgress(null);
+            }
+        } catch (err) {
+            console.error('[Backtest] Stop failed:', err);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const clearBacktestResults = () => {
+        setBacktestResults(null);
+    };
+
     // Helper to get API URL with simulation prefix
     const getApiUrl = useCallback((path) => {
         if (isSimulationMode) {
@@ -264,6 +356,8 @@ export const SimulationProvider = ({ children }) => {
         simEodProgress,
         isLoading,
         error,
+        backtestProgress,
+        backtestResults,
 
         // Actions
         startSimulation,
@@ -274,6 +368,9 @@ export const SimulationProvider = ({ children }) => {
         stopSimulation,
         cancelEodAnalysis,
         fetchStatus,
+        startBacktest,
+        stopBacktest,
+        clearBacktestResults,
 
         // Helpers
         getApiUrl,

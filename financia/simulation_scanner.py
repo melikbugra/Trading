@@ -205,6 +205,19 @@ class SimulationScanner:
         print("[SimScanner] Started simulation")
         await self._broadcast_status()
 
+    async def start_backtest(self):
+        """Start the backtest mode - fully automated simulation."""
+        if self.is_running:
+            return
+
+        self.is_running = True
+        self.is_paused = False
+        self._data_cache = {}
+        self._task = asyncio.create_task(self._backtest_loop())
+
+        print("[SimScanner] Started backtest")
+        await self._broadcast_status()
+
     async def stop(self):
         """Stop the simulation scanner loop."""
         self.is_running = False
@@ -298,6 +311,497 @@ class SimulationScanner:
 
                 traceback.print_exc()
                 await asyncio.sleep(1)
+
+    async def _backtest_loop(self):
+        """
+        Backtest loop - runs simulation automatically without waiting for user input.
+        Auto-enters on triggered signals, auto-exits on SL/TP hit.
+        """
+        from datetime import datetime as dt
+
+        loop_start = dt.now()
+
+        # Calculate total trading days for progress
+        start = simulation_time_manager.start_date
+        end = simulation_time_manager.end_date
+        total_days = 0
+        d = start
+        while d <= end:
+            if d.weekday() < 5:  # Mon-Fri
+                total_days += 1
+            d += timedelta(days=1)
+
+        current_day = 0
+
+        print(f"[Backtest] Starting automated run: {total_days} trading days")
+
+        while self.is_running and simulation_time_manager.is_active:
+            try:
+                sim_time = simulation_time_manager.current_time
+                if not sim_time:
+                    break
+
+                # Broadcast progress at start of each day
+                if sim_time.hour == 9 and sim_time.minute == 30:
+                    current_day += 1
+                    await self._broadcast_backtest_progress(
+                        current_day, total_days, sim_time
+                    )
+                    print(
+                        f"[Backtest] Day {current_day}/{total_days}: {sim_time.strftime('%Y-%m-%d')}"
+                    )
+
+                # 1. Scan all tickers at current hour
+                await self._scan_all()
+
+                # 2. Auto-trade: enter triggered signals, exit on SL/TP
+                await self._backtest_auto_trade()
+
+                # 3. Advance to next hour
+                day_done = simulation_time_manager.advance_hour()
+
+                if day_done:
+                    # Day end: close all open positions at EOD price
+                    await self._backtest_close_eod_positions()
+
+                    # Day end: cleanup non-entered signals
+                    await self._cleanup_day_end_signals()
+
+                    # Move to next day
+                    is_complete = simulation_time_manager.next_day()
+
+                    if is_complete:
+                        # Backtest finished
+                        break
+
+                    # Clear cache for new day
+                    self.clear_cache()
+
+                # Yield to event loop briefly to allow WS broadcasts and cancellation
+                await asyncio.sleep(0)
+
+            except asyncio.CancelledError:
+                print("[Backtest] Loop cancelled")
+                break
+            except Exception as e:
+                print(f"[Backtest] Error in loop: {e}")
+                import traceback
+
+                traceback.print_exc()
+                # Try to continue
+                try:
+                    day_done = simulation_time_manager.advance_hour()
+                    if day_done:
+                        is_complete = simulation_time_manager.next_day()
+                        if is_complete:
+                            break
+                        self.clear_cache()
+                except Exception:
+                    break
+
+        # Backtest complete - wrap in try to handle CancelledError
+        try:
+            elapsed = (dt.now() - loop_start).total_seconds()
+            stats = simulation_time_manager.get_balance_stats()
+            print(
+                f"[Backtest] Completed in {elapsed:.1f}s | "
+                f"Trades: {stats['total_trades']} | "
+                f"Win Rate: {stats['win_rate']:.1f}% | "
+                f"P/L: {stats['total_profit']:+,.0f} TL ({stats['profit_percent']:+.1f}%)"
+            )
+
+            # Mark session as completed
+            db = SessionLocal()
+            try:
+                if simulation_time_manager.session_id:
+                    from financia.web_api.database import SimSession
+
+                    session = (
+                        db.query(SimSession)
+                        .filter(SimSession.id == simulation_time_manager.session_id)
+                        .first()
+                    )
+                    if session:
+                        session.status = "completed"
+                        session.completed_at = dt.utcnow()
+                        db.commit()
+            except Exception:
+                pass
+            finally:
+                db.close()
+
+            # Small delay to ensure WS connection is ready
+            await asyncio.sleep(0.5)
+
+            # Broadcast completion
+            await self._broadcast_backtest_complete()
+
+            # Send results via email
+            self._send_backtest_email(stats)
+
+            self.is_running = False
+            await self._broadcast_status()
+        except asyncio.CancelledError:
+            print("[Backtest] Post-loop cancelled, skipping broadcast")
+            self.is_running = False
+        except Exception as e:
+            print(f"[Backtest] Post-loop error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            self.is_running = False
+
+    async def _backtest_auto_trade(self):
+        """
+        Auto-trade logic for backtest mode.
+        - Enter triggered signals at entry_price with 1 lot.
+        - Exit entered signals when SL/TP is hit at the exact SL/TP price.
+        """
+        db = SessionLocal()
+        try:
+            sim_time = simulation_time_manager.current_time
+
+            # 1. Auto-exit: Check entered signals for SL/TP hit
+            entered_signals = (
+                db.query(SimSignal).filter(SimSignal.status == "entered").all()
+            )
+
+            for signal in entered_signals:
+                extra = signal.extra_data or {}
+                alert = extra.get("sl_tp_alert")
+
+                if alert == "sl_hit" and signal.stop_loss:
+                    # Exit at SL price
+                    await self._backtest_close_position(
+                        db, signal, signal.stop_loss, "stopped", sim_time
+                    )
+                elif alert == "tp_hit" and signal.take_profit:
+                    # Exit at TP price
+                    await self._backtest_close_position(
+                        db, signal, signal.take_profit, "target_hit", sim_time
+                    )
+
+            # 2. Auto-enter: Enter triggered signals where entry price has been reached
+            triggered_signals = (
+                db.query(SimSignal)
+                .filter(
+                    SimSignal.status == "triggered",
+                    SimSignal.entry_reached == True,
+                )
+                .all()
+            )
+
+            for signal in triggered_signals:
+                if not signal.entry_price:
+                    continue
+
+                lots = 1.0
+                position_cost = signal.entry_price * lots
+
+                # Check balance
+                if position_cost > simulation_time_manager.current_balance:
+                    continue  # Skip - not enough balance
+
+                # Deduct from balance
+                simulation_time_manager.current_balance -= position_cost
+
+                # Enter position
+                signal.status = "entered"
+                signal.entered_at = sim_time
+                signal.actual_entry_price = signal.entry_price
+                signal.lots = lots
+                signal.remaining_lots = lots
+                signal.notes = (
+                    f"Backtest auto-entry @ {signal.entry_price} x {lots} lot"
+                )
+
+            db.commit()
+
+        except Exception as e:
+            print(f"[Backtest] Auto-trade error: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+    async def _backtest_close_eod_positions(self):
+        """Close all open (entered) positions at end-of-day price."""
+        db = SessionLocal()
+        try:
+            sim_time = simulation_time_manager.current_time
+            entered_signals = (
+                db.query(SimSignal).filter(SimSignal.status == "entered").all()
+            )
+
+            for signal in entered_signals:
+                # Use current_price as EOD price
+                eod_price = signal.current_price or signal.entry_price
+                await self._backtest_close_position(
+                    db, signal, eod_price, "stopped", sim_time
+                )
+                signal.notes = (
+                    f"Backtest: EOD close @ {eod_price} | "
+                    + (signal.notes or "").split("|", 1)[-1].strip()
+                )
+
+            if entered_signals:
+                db.commit()
+                print(
+                    f"[Backtest] EOD: Closed {len(entered_signals)} open position(s) at day-end price"
+                )
+        except Exception as e:
+            print(f"[Backtest] EOD close error: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+    async def _backtest_close_position(
+        self,
+        db: Session,
+        signal: SimSignal,
+        exit_price: float,
+        reason: str,
+        sim_time: datetime,
+    ):
+        """Close a position in backtest mode and record trade history."""
+        entry_price = signal.actual_entry_price or signal.entry_price
+        lots = signal.lots or 1.0
+
+        if signal.direction == "long":
+            profit_percent = ((exit_price - entry_price) / entry_price) * 100
+            profit_tl = (exit_price - entry_price) * lots
+        else:
+            profit_percent = ((entry_price - exit_price) / entry_price) * 100
+            profit_tl = (entry_price - exit_price) * lots
+
+        result = "win" if profit_percent > 0 else "loss"
+
+        risk = abs(entry_price - signal.stop_loss) if signal.stop_loss else 1
+        reward = abs(exit_price - entry_price)
+        rr_achieved = reward / risk if risk > 0 else 0
+
+        # Create trade record
+        trade = SimTradeHistory(
+            signal_id=signal.id,
+            ticker=signal.ticker,
+            market=signal.market,
+            strategy_id=signal.strategy_id,
+            direction=signal.direction,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            stop_loss=signal.stop_loss,
+            take_profit=signal.take_profit,
+            result=result,
+            profit_percent=round(profit_percent, 2),
+            profit_tl=round(profit_tl, 2),
+            lots=lots,
+            risk_reward_achieved=round(rr_achieved, 2),
+            entered_at=signal.entered_at,
+            closed_at=sim_time,
+            notes=f"Backtest auto-{reason} @ {exit_price}",
+        )
+        db.add(trade)
+
+        # Update balance
+        position_value = exit_price * lots
+        simulation_time_manager.current_balance += position_value
+
+        # Update stats
+        simulation_time_manager.total_profit += profit_tl
+        simulation_time_manager.total_trades += 1
+        if result == "win":
+            simulation_time_manager.winning_trades += 1
+        else:
+            simulation_time_manager.losing_trades += 1
+
+        # Close signal
+        signal.status = reason
+        signal.closed_at = sim_time
+        signal.remaining_lots = 0
+        signal.notes = (
+            f"Backtest: {reason} @ {exit_price} | P/L: {profit_percent:+.2f}%"
+        )
+
+        db.commit()
+
+    async def _broadcast_backtest_progress(
+        self, current_day: int, total_days: int, sim_time: datetime
+    ):
+        """Broadcast backtest progress."""
+        if self._ws_manager:
+            try:
+                stats = simulation_time_manager.get_balance_stats()
+                await self._ws_manager.broadcast(
+                    {
+                        "type": "sim_backtest_progress",
+                        "data": {
+                            "current_day": current_day,
+                            "total_days": total_days,
+                            "current_date": sim_time.strftime("%Y-%m-%d"),
+                            "trades_so_far": stats["total_trades"],
+                            "current_balance": stats["current_balance"],
+                            "total_profit": stats["total_profit"],
+                            "status": "running",
+                        },
+                    }
+                )
+            except Exception as e:
+                print(f"[Backtest] Failed to broadcast progress: {e}")
+
+    async def _broadcast_backtest_complete(self):
+        """Broadcast backtest completion with summary."""
+        if self._ws_manager:
+            try:
+                stats = simulation_time_manager.get_balance_stats()
+
+                # Get per-strategy breakdown
+                db = SessionLocal()
+                try:
+                    from financia.web_api.database import SimStrategy as SimStrategyDB
+
+                    strategies = (
+                        db.query(SimStrategyDB)
+                        .filter(SimStrategyDB.is_active == True)
+                        .all()
+                    )
+                    per_strategy = []
+                    for strategy in strategies:
+                        trades = (
+                            db.query(SimTradeHistory)
+                            .filter(SimTradeHistory.strategy_id == strategy.id)
+                            .all()
+                        )
+                        if trades:
+                            wins = [t for t in trades if t.result == "win"]
+                            total_pl = sum(t.profit_tl for t in trades)
+                            profits = [t.profit_percent for t in trades]
+                            per_strategy.append(
+                                {
+                                    "strategy_id": strategy.id,
+                                    "strategy_name": strategy.name,
+                                    "total_trades": len(trades),
+                                    "winning_trades": len(wins),
+                                    "losing_trades": len(trades) - len(wins),
+                                    "win_rate": round(len(wins) / len(trades) * 100, 1),
+                                    "total_profit_tl": round(float(total_pl), 2),
+                                    "avg_profit_percent": round(
+                                        float(sum(profits) / len(profits)), 2
+                                    ),
+                                }
+                            )
+                        else:
+                            per_strategy.append(
+                                {
+                                    "strategy_id": strategy.id,
+                                    "strategy_name": strategy.name,
+                                    "total_trades": 0,
+                                    "winning_trades": 0,
+                                    "losing_trades": 0,
+                                    "win_rate": 0,
+                                    "total_profit_tl": 0,
+                                    "avg_profit_percent": 0,
+                                }
+                            )
+                finally:
+                    db.close()
+
+                message = {
+                    "type": "backtest_complete",
+                    "data": {
+                        "summary": stats,
+                        "per_strategy": per_strategy,
+                    },
+                }
+                print(
+                    f"[Backtest] Broadcasting completion: {len(per_strategy)} strategies, {stats['total_trades']} trades"
+                )
+                await self._ws_manager.broadcast(message)
+                print("[Backtest] Completion broadcast sent successfully")
+            except Exception as e:
+                print(f"[Backtest] Failed to broadcast completion: {e}")
+                import traceback
+
+                traceback.print_exc()
+
+    def _send_backtest_email(self, stats: dict):
+        """Send backtest results summary via email."""
+        try:
+            from financia.notification_service import EmailService
+
+            # Get per-strategy breakdown
+            db = SessionLocal()
+            try:
+                from financia.web_api.database import SimStrategy as SimStrategyDB
+
+                strategies = (
+                    db.query(SimStrategyDB)
+                    .filter(SimStrategyDB.is_active == True)
+                    .all()
+                )
+
+                # Build email body
+                start_date = simulation_time_manager.start_date
+                end_date = simulation_time_manager.end_date
+                lines = []
+                lines.append("=" * 50)
+                lines.append("⚡ BACKTEST SONUÇLARI")
+                lines.append("=" * 50)
+                lines.append(f"📅 Dönem: {start_date} → {end_date}")
+                lines.append(f"💰 Başlangıç: {stats['initial_balance']:,.0f} TL")
+                lines.append(f"💰 Son Bakiye: {stats['current_balance']:,.0f} TL")
+                lines.append(
+                    f"📈 Toplam K/Z: {stats['total_profit']:+,.0f} TL ({stats['profit_percent']:+.1f}%)"
+                )
+                lines.append(f"🔢 Toplam İşlem: {stats['total_trades']}")
+                lines.append(
+                    f"✅ Kazanan: {stats['winning_trades']} | ❌ Kaybeden: {stats['losing_trades']}"
+                )
+                lines.append(f"📊 Kazanma Oranı: {stats['win_rate']:.1f}%")
+                lines.append("")
+
+                for strategy in strategies:
+                    trades = (
+                        db.query(SimTradeHistory)
+                        .filter(SimTradeHistory.strategy_id == strategy.id)
+                        .all()
+                    )
+                    lines.append("-" * 40)
+                    lines.append(f"📋 {strategy.name} ({strategy.strategy_type})")
+                    if trades:
+                        wins = [t for t in trades if t.result == "win"]
+                        total_pl = sum(t.profit_tl for t in trades)
+                        profits = [t.profit_percent for t in trades]
+                        win_rate = len(wins) / len(trades) * 100
+                        avg_pct = sum(profits) / len(profits)
+                        lines.append(
+                            f"   İşlem: {len(trades)} | Kazanan: {len(wins)} | Kaybeden: {len(trades) - len(wins)}"
+                        )
+                        lines.append(f"   Kazanma Oranı: {win_rate:.1f}%")
+                        lines.append(f"   Toplam K/Z: {total_pl:+,.0f} TL")
+                        lines.append(f"   Ort. Getiri: {avg_pct:+.2f}%")
+                        lines.append(
+                            f"   En İyi: {max(profits):+.2f}% | En Kötü: {min(profits):+.2f}%"
+                        )
+                    else:
+                        lines.append("   İşlem yok")
+                    lines.append("")
+
+                lines.append("=" * 50)
+                body = "\n".join(lines)
+
+                # Build subject
+                emoji = "📈" if stats["total_profit"] >= 0 else "📉"
+                subject = f"{emoji} Backtest: {stats['profit_percent']:+.1f}% | {stats['total_trades']} işlem | {start_date} → {end_date}"
+
+                # Send directly bypassing simulation check
+                from financia.notification_service import RECIPIENT_EMAIL
+
+                EmailService._send_sync(subject, body, RECIPIENT_EMAIL)
+            finally:
+                db.close()
+
+            print("[Backtest] Results email sent")
+        except Exception as e:
+            print(f"[Backtest] Failed to send email: {e}")
 
     async def _scan_all(self):
         """Scan all active watchlist items at current simulation time in parallel."""

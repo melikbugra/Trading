@@ -3,6 +3,7 @@ import PinLogin from './components/PinLogin';
 import StrategyDashboard from './components/StrategyDashboard';
 import SimulationBanner from './components/SimulationBanner';
 import SimulationPanel from './components/SimulationPanel';
+import BacktestResultsModal from './components/BacktestResultsModal';
 import { SimulationProvider, useSimulation } from './contexts/SimulationContext';
 
 function AppContent() {
@@ -10,8 +11,16 @@ function AppContent() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('signals');
   const [showSimPanel, setShowSimPanel] = useState(false);
+  const [showBacktestResults, setShowBacktestResults] = useState(false);
 
-  const { isSimulationMode } = useSimulation();
+  const { isSimulationMode, backtestResults } = useSimulation();
+
+  // Auto-show backtest results modal when backtest completes
+  useEffect(() => {
+    if (backtestResults) {
+      setShowBacktestResults(true);
+    }
+  }, [backtestResults]);
 
   useEffect(() => {
     // Check localStorage for existing session
@@ -103,6 +112,17 @@ function AppContent() {
       {/* Simulation Setup Panel */}
       {showSimPanel && (
         <SimulationPanel onClose={() => setShowSimPanel(false)} />
+      )}
+
+      {/* Backtest Results Modal */}
+      {showBacktestResults && (
+        <BacktestResultsModal
+          onClose={() => setShowBacktestResults(false)}
+          onGoToHistory={() => {
+            setShowBacktestResults(false);
+            handleTabChange('history');
+          }}
+        />
       )}
     </div>
   );
