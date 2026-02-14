@@ -594,6 +594,7 @@ def get_trade_history(
     market: Optional[str] = None,
     strategy_id: Optional[int] = None,
     result: Optional[str] = None,
+    direction: Optional[str] = None,
     limit: int = 100,
     db: Session = Depends(get_db),
 ):
@@ -605,6 +606,8 @@ def get_trade_history(
         query = query.filter(TradeHistory.strategy_id == strategy_id)
     if result:
         query = query.filter(TradeHistory.result == result)
+    if direction:
+        query = query.filter(TradeHistory.direction == direction)
     return query.order_by(TradeHistory.closed_at.desc()).limit(limit).all()
 
 
@@ -612,6 +615,7 @@ def get_trade_history(
 def get_trade_stats(
     market: Optional[str] = None,
     strategy_id: Optional[int] = None,
+    direction: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Get trade statistics."""
@@ -620,6 +624,8 @@ def get_trade_stats(
         query = query.filter(TradeHistory.market == market)
     if strategy_id:
         query = query.filter(TradeHistory.strategy_id == strategy_id)
+    if direction:
+        query = query.filter(TradeHistory.direction == direction)
 
     trades = query.all()
 

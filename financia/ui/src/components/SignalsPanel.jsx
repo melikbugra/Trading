@@ -12,6 +12,7 @@ export default function SignalsPanel({ strategies }) {
     const { isSimulationMode, simSignals, getApiUrl } = useSimulation();
     const [signals, setSignals] = useState([]);
     const [filter, setFilter] = useState('all'); // all, pending, triggered, entered
+    const [directionFilter, setDirectionFilter] = useState('long'); // all, long, short
     const [marketFilter, setMarketFilter] = useState('all'); // all, bist100, binance
     const [strategyFilter, setStrategyFilter] = useState('all'); // all or strategy_id
     const [sortBy, setSortBy] = useState('status'); // date, ticker, status
@@ -233,6 +234,8 @@ export default function SignalsPanel({ strategies }) {
     const filteredSignals = signals.filter(s => {
         // Status filter
         if (filter !== 'all' && s.status !== filter) return false;
+        // Direction filter
+        if (directionFilter !== 'all' && s.direction !== directionFilter) return false;
         // Market filter
         if (marketFilter !== 'all' && s.market !== marketFilter) return false;
         // Strategy filter
@@ -282,6 +285,25 @@ export default function SignalsPanel({ strategies }) {
                                     ({signals.filter(s => s.status === f).length})
                                 </span>
                             )}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Separator */}
+                <div className="hidden sm:block w-px h-6 bg-gray-700" />
+
+                {/* Direction Filters */}
+                <div className="flex gap-1 sm:gap-2 shrink-0">
+                    {[{ key: 'all', label: 'Tümü' }, { key: 'long', label: '📈 Long' }, { key: 'short', label: '📉 Short' }].map(d => (
+                        <button
+                            key={d.key}
+                            onClick={() => setDirectionFilter(d.key)}
+                            className={`px-2 sm:px-3 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${directionFilter === d.key
+                                ? 'bg-green-600 text-white'
+                                : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                                }`}
+                        >
+                            {d.label}
                         </button>
                     ))}
                 </div>

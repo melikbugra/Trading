@@ -727,6 +727,7 @@ def get_sim_trade_history(
     market: Optional[str] = None,
     strategy_id: Optional[int] = None,
     result: Optional[str] = None,
+    direction: Optional[str] = None,
     limit: int = 100,
     db: Session = Depends(get_db),
 ):
@@ -738,6 +739,8 @@ def get_sim_trade_history(
         query = query.filter(SimTradeHistory.strategy_id == strategy_id)
     if result:
         query = query.filter(SimTradeHistory.result == result)
+    if direction:
+        query = query.filter(SimTradeHistory.direction == direction)
     return query.order_by(SimTradeHistory.closed_at.desc()).limit(limit).all()
 
 
@@ -745,6 +748,7 @@ def get_sim_trade_history(
 def get_sim_trade_stats(
     market: Optional[str] = None,
     strategy_id: Optional[int] = None,
+    direction: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Get simulation trade statistics."""
@@ -753,6 +757,8 @@ def get_sim_trade_stats(
         query = query.filter(SimTradeHistory.market == market)
     if strategy_id:
         query = query.filter(SimTradeHistory.strategy_id == strategy_id)
+    if direction:
+        query = query.filter(SimTradeHistory.direction == direction)
 
     trades = query.all()
 

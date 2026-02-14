@@ -8,7 +8,7 @@ export default function TradeHistoryPanel({ strategies }) {
     const [trades, setTrades] = useState([]);
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState({ market: '', result: '', strategy_id: '' });
+    const [filter, setFilter] = useState({ market: '', result: '', strategy_id: '', direction: 'long' });
 
     const fetchTrades = useCallback(async () => {
         try {
@@ -21,6 +21,7 @@ export default function TradeHistoryPanel({ strategies }) {
             if (filter.market) url += `&market=${filter.market}`;
             if (filter.result) url += `&result=${filter.result}`;
             if (filter.strategy_id) url += `&strategy_id=${filter.strategy_id}`;
+            if (filter.direction) url += `&direction=${filter.direction}`;
 
             const res = await fetch(url);
             if (res.ok) {
@@ -39,6 +40,7 @@ export default function TradeHistoryPanel({ strategies }) {
             const params = new URLSearchParams();
             if (filter.market) params.append('market', filter.market);
             if (filter.strategy_id) params.append('strategy_id', filter.strategy_id);
+            if (filter.direction) params.append('direction', filter.direction);
 
             // Use simulation endpoint when in simulation mode
             const baseEndpoint = isSimulationMode
@@ -56,7 +58,7 @@ export default function TradeHistoryPanel({ strategies }) {
         } catch (err) {
             console.error('Failed to fetch stats:', err);
         }
-    }, [filter.market, filter.strategy_id, isSimulationMode]);
+    }, [filter.market, filter.strategy_id, filter.direction, isSimulationMode]);
 
     useEffect(() => {
         fetchTrades();
@@ -130,6 +132,15 @@ export default function TradeHistoryPanel({ strategies }) {
                             {s.name}
                         </option>
                     ))}
+                </select>
+                <select
+                    value={filter.direction}
+                    onChange={(e) => setFilter({ ...filter, direction: e.target.value })}
+                    className="bg-gray-800 border border-gray-700 text-white px-2 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-sm flex-1 sm:flex-none min-w-0"
+                >
+                    <option value="">↕️ Tüm Yönler</option>
+                    <option value="long">📈 Long</option>
+                    <option value="short">📉 Short</option>
                 </select>
                 <select
                     value={filter.result}
