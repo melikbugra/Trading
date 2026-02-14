@@ -455,8 +455,8 @@ export default function SignalsPanel({ strategies }) {
                                         <div className="flex flex-col gap-1">
                                             {signal.sl_tp_alert && (
                                                 <div className={`px-2 py-1 rounded text-xs font-bold text-center animate-pulse ${signal.sl_tp_alert === 'sl_hit'
-                                                        ? 'bg-red-900/80 text-red-300 border border-red-500'
-                                                        : 'bg-green-900/80 text-green-300 border border-green-500'
+                                                    ? 'bg-red-900/80 text-red-300 border border-red-500'
+                                                    : 'bg-green-900/80 text-green-300 border border-green-500'
                                                     }`}>
                                                     {signal.sl_tp_alert === 'sl_hit' ? '⚠️ SL Değdi!' : '🎯 TP Değdi!'}
                                                 </div>
@@ -464,8 +464,8 @@ export default function SignalsPanel({ strategies }) {
                                             <button
                                                 onClick={() => openExitModal(signal)}
                                                 className={`px-3 py-2 text-white rounded text-xs sm:text-sm font-bold transition-colors flex-1 sm:flex-none ${signal.sl_tp_alert
-                                                        ? 'bg-red-600 hover:bg-red-500 animate-pulse'
-                                                        : 'bg-orange-600 hover:bg-orange-500'
+                                                    ? 'bg-red-600 hover:bg-red-500 animate-pulse'
+                                                    : 'bg-orange-600 hover:bg-orange-500'
                                                     }`}
                                             >
                                                 🚪 <span className="hidden sm:inline">Pozisyondan </span>Çık
