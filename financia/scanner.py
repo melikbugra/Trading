@@ -645,6 +645,21 @@ class ScannerService:
                     existing_signal.status = "cancelled"
                     existing_signal.notes = "Replaced by new signal"
 
+                # Skip signal if price already passed entry level (missed entry)
+                if entry_price and current_price:
+                    if result.direction == "long" and current_price >= entry_price:
+                        print(
+                            f"[Scanner] ⏭️ SKIP: {item.ticker} LONG - fiyat ({current_price}) zaten giriş ({entry_price}) üzerinde"
+                        )
+                        db.commit()
+                        return
+                    elif result.direction == "short" and current_price <= entry_price:
+                        print(
+                            f"[Scanner] ⏭️ SKIP: {item.ticker} SHORT - fiyat ({current_price}) zaten giriş ({entry_price}) altında"
+                        )
+                        db.commit()
+                        return
+
                 new_signal = Signal(
                     ticker=item.ticker,
                     market=item.market,
