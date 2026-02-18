@@ -1415,7 +1415,8 @@ async def stop_backtest(db: Session = Depends(get_db)):
 
 @router.get("/backtest/summary")
 def get_backtest_summary(db: Session = Depends(get_db)):
-    """Get backtest results summary with per-strategy breakdown."""
+    """Get backtest results summary with per-strategy breakdown and scientific statistics."""
+    import math
 
     # Overall stats
     balance_stats = simulation_time_manager.get_balance_stats()
@@ -1441,43 +1442,202 @@ def get_backtest_summary(db: Session = Depends(get_db)):
                     "winning_trades": 0,
                     "losing_trades": 0,
                     "win_rate": 0,
-                    "total_profit_tl": 0,
-                    "total_profit_percent": 0,
                     "avg_profit_percent": 0,
                     "avg_rr_achieved": 0,
                     "best_trade_percent": 0,
                     "worst_trade_percent": 0,
+                    # R-multiple stats
+                    "total_r": 0,
+                    "avg_r_per_trade": 0,
+                    "best_r": 0,
+                    "worst_r": 0,
+                    # Scientific stats
+                    "avg_win_percent": 0,
+                    "avg_loss_percent": 0,
+                    "expected_value": 0,
+                    "profit_factor": 0,
+                    "breakeven_rr": 0,
+                    "optimal_rr": 0,
+                    "current_rr": strategy.risk_reward_ratio or 2.0,
+                    "rr_verdict": "❓ Veri yok",
+                    "kelly_percent": 0,
+                    "max_drawdown_percent": 0,
+                    "sharpe_like_ratio": 0,
                 }
             )
             continue
 
         wins = [t for t in trades if t.result == "win"]
         losses = [t for t in trades if t.result == "loss"]
-        total_profit_tl = sum(t.profit_tl for t in trades)
         profits = [t.profit_percent for t in trades]
         rrs = [t.risk_reward_achieved for t in trades]
+
+        # Calculate R-multiple for each trade
+        # R = (exit - entry) / risk, where risk = |entry - stop_loss|
+        r_multiples = []
+        for t in trades:
+            if t.stop_loss and t.entry_price and t.exit_price:
+                if t.direction == "long":
+                    risk = abs(t.entry_price - t.stop_loss)
+                    if risk > 0:
+                        r_val = (t.exit_price - t.entry_price) / risk
+                        r_multiples.append(round(r_val, 2))
+                elif t.direction == "short":
+                    risk = abs(t.stop_loss - t.entry_price)
+                    if risk > 0:
+                        r_val = (t.entry_price - t.exit_price) / risk
+                        r_multiples.append(round(r_val, 2))
+
+        total_r = sum(r_multiples) if r_multiples else 0
+        avg_r = total_r / len(r_multiples) if r_multiples else 0
+        best_r = max(r_multiples) if r_multiples else 0
+        worst_r = min(r_multiples) if r_multiples else 0
+
+        # --- Basic stats ---
+        total = len(trades)
+        win_count = len(wins)
+        loss_count = len(losses)
+        win_rate = round(win_count / total * 100, 1) if total else 0
+
+        # --- Scientific stats ---
+        p_win = win_count / total if total else 0
+        p_loss = 1 - p_win
+
+        # Average win/loss percentages
+        win_profits = [t.profit_percent for t in wins]
+        loss_profits = [t.profit_percent for t in losses]
+        avg_win = sum(win_profits) / len(win_profits) if win_profits else 0
+        avg_loss = sum(loss_profits) / len(loss_profits) if loss_profits else 0  # negative
+
+        # Expected Value: EV = P(win) * avg_win + P(loss) * avg_loss
+        expected_value = p_win * avg_win + p_loss * avg_loss
+
+        # Profit Factor: total gains / total losses
+        total_gains = sum(p for p in win_profits) if win_profits else 0
+        total_losses = abs(sum(p for p in loss_profits)) if loss_profits else 0
+        profit_factor = total_gains / total_losses if total_losses > 0 else float('inf') if total_gains > 0 else 0
+
+        # Breakeven R:R: minimum R:R where EV = 0 → P_loss / P_win
+        breakeven_rr = p_loss / p_win if p_win > 0 else float('inf')
+
+        # Optimal R:R: breakeven × 1.5 for positive edge
+        optimal_rr = breakeven_rr * 1.5
+
+        # Current strategy R:R
+        current_rr = strategy.risk_reward_ratio or 2.0
+
+        # R:R verdict
+        if total < 5:
+            rr_verdict = "❓ Yetersiz veri"
+        elif current_rr >= optimal_rr:
+            rr_verdict = "✅ Yeterli"
+        elif current_rr >= breakeven_rr:
+            rr_verdict = "⚠️ Marjinal"
+        else:
+            rr_verdict = "❌ Artırın"
+
+        # Kelly Criterion: f = p_win - (p_loss / avg_rr)
+        avg_rr = sum(rrs) / len(rrs) if rrs else current_rr
+        kelly = (p_win - (p_loss / avg_rr)) * 100 if avg_rr > 0 else 0
+        kelly = max(0, kelly)  # Never negative (don't bet)
+
+        # Max Drawdown (from cumulative profit series)
+        cumulative = 0
+        peak = 0
+        max_dd = 0
+        for t in sorted(trades, key=lambda x: x.closed_at or x.entered_at):
+            cumulative += t.profit_percent
+            if cumulative > peak:
+                peak = cumulative
+            dd = peak - cumulative
+            if dd > max_dd:
+                max_dd = dd
+
+        # Sharpe-like ratio: mean return / std dev of returns
+        if len(profits) > 1:
+            mean_r = sum(profits) / len(profits)
+            variance = sum((p - mean_r) ** 2 for p in profits) / (len(profits) - 1)
+            std_r = math.sqrt(variance) if variance > 0 else 0
+            sharpe = mean_r / std_r if std_r > 0 else 0
+        else:
+            sharpe = 0
 
         strategy_stats.append(
             {
                 "strategy_id": strategy.id,
                 "strategy_name": strategy.name,
                 "strategy_type": strategy.strategy_type,
-                "total_trades": len(trades),
-                "winning_trades": len(wins),
-                "losing_trades": len(losses),
-                "win_rate": round(len(wins) / len(trades) * 100, 1) if trades else 0,
-                "total_profit_tl": round(total_profit_tl, 2),
-                "total_profit_percent": round(sum(profits), 2),
-                "avg_profit_percent": round(sum(profits) / len(profits), 2)
-                if profits
-                else 0,
-                "avg_rr_achieved": round(sum(rrs) / len(rrs), 2) if rrs else 0,
+                # Basic stats
+                "total_trades": total,
+                "winning_trades": win_count,
+                "losing_trades": loss_count,
+                "win_rate": win_rate,
+                "avg_profit_percent": round(sum(profits) / len(profits), 2) if profits else 0,
+                "avg_rr_achieved": round(avg_rr, 2),
                 "best_trade_percent": round(max(profits), 2) if profits else 0,
                 "worst_trade_percent": round(min(profits), 2) if profits else 0,
+                # R-multiple stats
+                "total_r": round(total_r, 2),
+                "avg_r_per_trade": round(avg_r, 3),
+                "best_r": round(best_r, 2),
+                "worst_r": round(worst_r, 2),
+                # Scientific stats
+                "avg_win_percent": round(avg_win, 2),
+                "avg_loss_percent": round(avg_loss, 2),
+                "expected_value": round(expected_value, 3),
+                "profit_factor": round(profit_factor, 2) if profit_factor != float('inf') else 999,
+                "breakeven_rr": round(breakeven_rr, 2) if breakeven_rr != float('inf') else 999,
+                "optimal_rr": round(optimal_rr, 2) if optimal_rr != float('inf') else 999,
+                "current_rr": round(current_rr, 2),
+                "rr_verdict": rr_verdict,
+                "kelly_percent": round(kelly, 1),
+                "max_drawdown_percent": round(max_dd, 2),
+                "sharpe_like_ratio": round(sharpe, 2),
             }
         )
 
-    return {
-        "overall": balance_stats,
-        "per_strategy": strategy_stats,
+    # Rank strategies by expected value (highest first)
+    ranked = sorted(
+        [s for s in strategy_stats if s["total_trades"] > 0],
+        key=lambda x: x["expected_value"],
+        reverse=True
+    )
+    for i, s in enumerate(ranked):
+        s["rank"] = i + 1
+
+    # Overall R-based stats (position-size independent)
+    all_trades_count = sum(s["total_trades"] for s in strategy_stats)
+    all_wins = sum(s["winning_trades"] for s in strategy_stats)
+    all_losses = sum(s["losing_trades"] for s in strategy_stats)
+    all_total_r = sum(s["total_r"] for s in strategy_stats)
+    overall_win_rate = round(all_wins / all_trades_count * 100, 1) if all_trades_count else 0
+    overall_avg_r = round(all_total_r / all_trades_count, 3) if all_trades_count else 0
+
+    overall = {
+        "total_trades": all_trades_count,
+        "winning_trades": all_wins,
+        "losing_trades": all_losses,
+        "win_rate": overall_win_rate,
+        "total_r": round(all_total_r, 2),
+        "avg_r_per_trade": overall_avg_r,
     }
+
+    return {
+        "overall": overall,
+        "per_strategy": strategy_stats,
+        "ranked_strategies": [
+            {
+                "rank": s["rank"],
+                "strategy_name": s["strategy_name"],
+                "expected_value": s["expected_value"],
+                "win_rate": s["win_rate"],
+                "profit_factor": s["profit_factor"],
+                "total_trades": s["total_trades"],
+                "total_r": s["total_r"],
+                "avg_r_per_trade": s["avg_r_per_trade"],
+                "rr_verdict": s["rr_verdict"],
+            }
+            for s in ranked
+        ],
+    }
+

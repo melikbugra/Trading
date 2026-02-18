@@ -7,12 +7,14 @@ from .base import BaseStrategy, StrategyResult
 from .ema_macd import EMAMACDStrategy
 from .resistance_stoch_rsi import ResistanceBreakoutStrategy
 from .inside_bar_breakout import InsideBarBreakoutStrategy
+from .vwap_bounce import VWAPBounceStrategy
 
 # Registry of available strategies
 STRATEGY_REGISTRY = {
     "EMAMACDStrategy": EMAMACDStrategy,
     "ResistanceBreakoutStrategy": ResistanceBreakoutStrategy,
     "InsideBarBreakoutStrategy": InsideBarBreakoutStrategy,
+    "VWAPBounceStrategy": VWAPBounceStrategy,
 }
 
 
@@ -24,3 +26,4 @@ def get_strategy_class(strategy_type: str):
 def list_available_strategies():
     """List all available strategy types."""
     return list(STRATEGY_REGISTRY.keys())
+
