@@ -28,6 +28,7 @@ class StockAnalyzer:
         start=None,
         end=None,
         market=None,
+        drop_incomplete=False,
     ):
         """
         Initializes the StockAnalyzer with a specific stock ticker and trading horizon.
@@ -43,6 +44,10 @@ class StockAnalyzer:
         """
         self.ticker = ticker
         self.horizon = horizon.lower()
+        # When True, the still-forming (not yet closed) last candle is dropped
+        # so strategies decide only on closed bars. Critical with delayed data.
+        self.drop_incomplete = drop_incomplete
+        self._used_interval = None  # set by the fetch methods
 
         # Infer market if not provided
         if market:
@@ -59,9 +64,48 @@ class StockAnalyzer:
         else:
             self._fetch_yahoo_data(period, interval, start, end)
 
+        if self.drop_incomplete:
+            self._drop_incomplete_last_bar()
+
         if self.data.empty:
             print(f"Warning: No data found for ticker {ticker} ({self.market})")
             self.data = pd.DataFrame()  # Empty DF
+
+    @staticmethod
+    def _interval_to_timedelta(interval):
+        """Map an interval string to a pandas Timedelta (bar duration)."""
+        mapping = {
+            "1m": pd.Timedelta(minutes=1),
+            "5m": pd.Timedelta(minutes=5),
+            "15m": pd.Timedelta(minutes=15),
+            "30m": pd.Timedelta(minutes=30),
+            "60m": pd.Timedelta(hours=1),
+            "1h": pd.Timedelta(hours=1),
+            "4h": pd.Timedelta(hours=4),
+            "1d": pd.Timedelta(days=1),
+            "1wk": pd.Timedelta(weeks=1),
+        }
+        return mapping.get(interval)
+
+    def _drop_incomplete_last_bar(self):
+        """
+        Drop the last candle if it is still forming (not yet closed).
+
+        A bar starting at `t` for interval `d` is only closed once `t + d <= now`.
+        With delayed/live feeds yfinance/ccxt return the in-progress bar as the
+        last row; using it would make strategies repaint. This keeps decisions on
+        closed bars only.
+        """
+        if self.data is None or self.data.empty:
+            return
+        delta = self._interval_to_timedelta(self._used_interval)
+        if delta is None:
+            return
+        last_start = self.data.index[-1]
+        tz = getattr(last_start, "tz", None) or getattr(last_start, "tzinfo", None)
+        now = pd.Timestamp.now(tz=tz) if tz is not None else pd.Timestamp.now()
+        if last_start + delta > now:
+            self.data = self.data.iloc[:-1]
 
     def _fetch_yahoo_data(self, period, interval, start, end):
         """Fetch data from Yahoo Finance (Stocks)"""
@@ -82,6 +126,7 @@ class StockAnalyzer:
 
         use_period = period if period else _period
         use_interval = interval if interval else _interval
+        self._used_interval = use_interval
 
         self.stock = yf.Ticker(self.ticker)
 
@@ -105,6 +150,7 @@ class StockAnalyzer:
             }
             agg_dict = {k: v for k, v in agg_dict.items() if k in self.data.columns}
             self.data = self.data.resample("4h", origin="start").agg(agg_dict).dropna()
+            self._used_interval = "4h"
 
     def _fetch_binance_data(self, period, interval, start, end):
         """Fetch data from Binance via CCXT (Crypto)"""
@@ -148,6 +194,7 @@ class StockAnalyzer:
             else:
                 days = 30
 
+        self._used_interval = use_interval
         exchange = ccxt.binance({"enableRateLimit": True})
         since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
 
@@ -296,12 +343,20 @@ class StockAnalyzer:
     def _calculate_rsi(self, window=14):
         """
         Calculates the Relative Strength Index (RSI).
+
+        Uses Wilder's smoothing (RMA) as in the standard RSI definition,
+        matching TradingView / brokerage platforms. Equivalent to an EWMA
+        with alpha = 1/window.
         """
         delta = self.data["Close"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+        gain = delta.where(delta > 0, 0.0)
+        loss = (-delta).where(delta < 0, 0.0)
 
-        rs = gain / loss
+        # Wilder's smoothing (RMA)
+        avg_gain = gain.ewm(alpha=1 / window, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1 / window, adjust=False).mean()
+
+        rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
         return rsi
 

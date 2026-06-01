@@ -659,15 +659,30 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                             {Object.entries(formParams).map(([key, value]) => (
                                                 <div key={key}>
                                                     <label className="block text-gray-500 text-xs mb-1">{key}</label>
-                                                    <input
-                                                        type="number"
-                                                        value={value}
-                                                        onChange={(e) => setFormParams({
-                                                            ...formParams,
-                                                            [key]: parseFloat(e.target.value)
-                                                        })}
-                                                        className="w-full bg-gray-800 border border-gray-700 text-white px-3 py-1 rounded text-sm"
-                                                    />
+                                                    {typeof value === 'boolean' ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setFormParams({
+                                                                ...formParams,
+                                                                [key]: !value
+                                                            })}
+                                                            className={`w-full px-3 py-1 rounded text-sm font-bold border transition-colors ${value
+                                                                ? 'bg-green-600/30 text-green-300 border-green-500/50'
+                                                                : 'bg-gray-800 text-gray-400 border-gray-700'}`}
+                                                        >
+                                                            {value ? 'Açık' : 'Kapalı'}
+                                                        </button>
+                                                    ) : (
+                                                        <input
+                                                            type="number"
+                                                            value={value}
+                                                            onChange={(e) => setFormParams({
+                                                                ...formParams,
+                                                                [key]: parseFloat(e.target.value)
+                                                            })}
+                                                            className="w-full bg-gray-800 border border-gray-700 text-white px-3 py-1 rounded text-sm"
+                                                        />
+                                                    )}
                                                 </div>
                                             ))}
                                         </div>

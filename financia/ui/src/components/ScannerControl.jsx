@@ -165,7 +165,7 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
 
                 {/* Interval Setting */}
                 <div className="flex items-center gap-2 sm:gap-3">
-                    <span className="text-gray-400 text-xs sm:text-sm hidden sm:inline">Aralık:</span>
+                    <span className="text-gray-400 text-xs sm:text-sm hidden sm:inline" title="Tarama sıklığı. Sinyaller kapanmış muma göre üretilir; veri ~15 dk gecikmeli olabilir.">Tarama sıklığı:</span>
                     {editingInterval ? (
                         <div className="flex items-center gap-1 sm:gap-2">
                             <select

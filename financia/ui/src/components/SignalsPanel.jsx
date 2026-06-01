@@ -215,6 +215,7 @@ export default function SignalsPanel({ strategies }) {
         const badges = {
             pending: { color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50', text: '⏳ Bekliyor' },
             triggered: { color: 'bg-blue-500/20 text-blue-400 border-blue-500/50', text: '🎯 Tetiklendi' },
+            missed: { color: 'bg-gray-500/20 text-gray-400 border-gray-500/50', text: '⏭️ Kaçırıldı' },
             entered: { color: 'bg-green-500/20 text-green-400 border-green-500/50', text: '✅ Pozisyonda' },
         };
         const badge = badges[status] || { color: 'bg-gray-500/20 text-gray-400', text: status };
@@ -395,8 +396,12 @@ export default function SignalsPanel({ strategies }) {
                                     {signal.status !== 'pending' && (
                                         <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-4 mb-2 sm:mb-3">
                                             <div>
-                                                <div className="text-gray-500 text-xs">Giriş</div>
-                                                <div className="text-blue-400 font-mono text-sm sm:text-base">{signal.entry_price?.toFixed(2) || '-'}</div>
+                                                <div className="text-gray-500 text-xs">Giriş {signal.extra_data?.entry_zone ? '(limit)' : ''}</div>
+                                                <div className="text-blue-400 font-mono text-sm sm:text-base">
+                                                    {signal.extra_data?.entry_zone
+                                                        ? `${signal.extra_data.entry_zone.low?.toFixed(2)}–${signal.extra_data.entry_zone.high?.toFixed(2)}`
+                                                        : (signal.entry_price?.toFixed(2) || '-')}
+                                                </div>
                                             </div>
                                             <div>
                                                 <div className="text-gray-500 text-xs">Güncel</div>
@@ -431,10 +436,31 @@ export default function SignalsPanel({ strategies }) {
                                         </div>
                                     )}
 
+                                    {/* Partial TP / Trailing (entered positions) */}
+                                    {signal.status === 'entered' && (signal.extra_data?.partial_tp || signal.extra_data?.trailing_stop_current) && (
+                                        <div className="flex flex-wrap items-center gap-3 mb-2 text-xs">
+                                            {signal.extra_data?.partial_tp && (
+                                                <span className={signal.extra_data?.tp1_hit ? 'text-green-300 font-bold' : 'text-gray-400'}>
+                                                    TP1: {signal.extra_data.partial_tp.price?.toFixed(2)} (%{Math.round((signal.extra_data.partial_tp.pct ?? 0.5) * 100)}){signal.extra_data?.tp1_hit ? ' ✓ satıldı' : ''}
+                                                </span>
+                                            )}
+                                            {signal.extra_data?.trailing_stop_current && (
+                                                <span className="text-amber-400 font-bold">
+                                                    🔼 Trailing Stop: {signal.extra_data.trailing_stop_current.toFixed(2)}
+                                                </span>
+                                            )}
+                                        </div>
+                                    )}
+
                                     {/* Meta Info */}
                                     <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-xs text-gray-500">
                                         <span>📋 {getStrategyName(signal.strategy_id)}</span>
                                         <span className="hidden sm:inline">🕐 {new Date(signal.created_at).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' })}</span>
+                                        {signal.extra_data?.data_timestamp && (
+                                            <span className="hidden sm:inline" title="Kararın verildiği kapanmış mum">
+                                                🕯️ Mum: {new Date(signal.extra_data.data_timestamp).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                                            </span>
+                                        )}
                                         {signal.notes && <span className="text-gray-400 italic hidden md:inline">{signal.notes}</span>}
                                     </div>
                                 </div>
@@ -453,6 +479,11 @@ export default function SignalsPanel({ strategies }) {
                                     {/* Show "Pozisyondan Çık" button for entered signals */}
                                     {signal.status === 'entered' && (
                                         <div className="flex flex-col gap-1">
+                                            {signal.extra_data?.tp1_hit && (
+                                                <div className="px-2 py-1 rounded text-xs font-bold text-center bg-green-900/80 text-green-300 border border-green-500">
+                                                    🎯 TP1 — %{Math.round((signal.extra_data.partial_tp?.pct ?? 0.5) * 100)} sat
+                                                </div>
+                                            )}
                                             {signal.sl_tp_alert && (
                                                 <div className={`px-2 py-1 rounded text-xs font-bold text-center animate-pulse ${signal.sl_tp_alert === 'sl_hit'
                                                     ? 'bg-red-900/80 text-red-300 border border-red-500'

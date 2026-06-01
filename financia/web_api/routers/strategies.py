@@ -360,7 +360,7 @@ async def remove_from_watchlist(item_id: int, db: Session = Depends(get_db)):
         .filter(
             Signal.ticker == item.ticker,
             Signal.strategy_id == item.strategy_id,
-            Signal.status.in_(["pending", "triggered"]),
+            Signal.status.in_(["pending", "triggered", "missed"]),
         )
         .delete(synchronize_session=False)
     )
@@ -414,7 +414,7 @@ def get_active_signals(db: Session = Depends(get_db)):
     """Get active signals (pending, triggered, entered)."""
     return (
         db.query(Signal)
-        .filter(Signal.status.in_(["pending", "triggered", "entered"]))
+        .filter(Signal.status.in_(["pending", "triggered", "missed", "entered"]))
         .order_by(Signal.created_at.desc())
         .all()
     )
@@ -945,7 +945,7 @@ async def get_chart_data(
             .filter(
                 Signal.ticker == ticker,
                 Signal.strategy_id == strategy_id,
-                Signal.status.in_(["pending", "triggered", "entered"]),
+                Signal.status.in_(["pending", "triggered", "missed", "entered"]),
             )
             .order_by(Signal.created_at.desc())
             .first()

@@ -274,6 +274,7 @@ class MarketType(str, enum.Enum):
 class SignalStatus(str, enum.Enum):
     PENDING = "pending"  # Ön koşul sağlandı, ana koşul bekleniyor
     TRIGGERED = "triggered"  # Ana koşul sağlandı, giriş bekliyor
+    MISSED = "missed"  # Ana koşul sağlandı ama fiyat giriş bandını aştı (kaçırıldı)
     ENTERED = "entered"  # Pozisyona girildi
     STOPPED = "stopped"  # Stop loss tetiklendi
     TARGET_HIT = "target_hit"  # Take profit tetiklendi

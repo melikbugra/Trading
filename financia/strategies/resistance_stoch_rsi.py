@@ -50,16 +50,28 @@ class ResistanceBreakoutStrategy(BaseStrategy):
         "pivot_bars": 5,
         "atr_period": 14,
         "atr_multiplier": 0.5,
+        # Limit-giriş + kademeli kâr + trailing (R-bazlı)
+        "entry_tol_atr": 0.5,
+        "partial_tp_enabled": True,
+        "tp1_r": 1.0,
+        "tp1_pct": 0.5,
+        "trailing_enabled": True,
+        "trail_atr_mult": 2.0,
     }
 
     def calculate_rsi(self, close: pd.Series, period: int = 14) -> pd.Series:
-        """Calculate Relative Strength Index."""
+        """Calculate Relative Strength Index using Wilder's smoothing (RMA).
+
+        Matches the standard RSI used by TradingView / brokerage platforms
+        (equivalent to an EWMA with alpha = 1/period).
+        """
         delta = close.diff()
         gain = delta.where(delta > 0, 0.0)
         loss = (-delta).where(delta < 0, 0.0)
 
-        avg_gain = gain.rolling(window=period).mean()
-        avg_loss = loss.rolling(window=period).mean()
+        # Wilder's smoothing (RMA)
+        avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
 
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
@@ -231,6 +243,7 @@ class ResistanceBreakoutStrategy(BaseStrategy):
         else:
             result.notes = f"Ön koşul sağlandı, direnç kırılımı bekleniyor (direnç: {last_peak:.2f})"
 
+        result = self.annotate_trade_plan(data, result)
         return result
 
     def get_status_text(self, result: StrategyResult) -> str:

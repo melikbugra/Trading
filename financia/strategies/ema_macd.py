@@ -49,6 +49,14 @@ class EMAMACDStrategy(BaseStrategy):
         "pivot_bars": 5,
         "atr_period": 14,
         "atr_multiplier": 0.5,
+        "long_only": True,  # BIST spot: sadece LONG sinyali üret
+        # Limit-giriş + kademeli kâr + trailing (R-bazlı)
+        "entry_tol_atr": 0.5,  # giriş bandı genişliği = entry + 0.5*ATR
+        "partial_tp_enabled": True,
+        "tp1_r": 1.0,  # TP1 = giriş + 1R
+        "tp1_pct": 0.5,  # TP1'de pozisyonun %50'si
+        "trailing_enabled": True,
+        "trail_atr_mult": 2.0,  # trailing stop = son kapanış - 2*ATR
     }
 
     def evaluate(self, data: pd.DataFrame) -> StrategyResult:
@@ -134,6 +142,9 @@ class EMAMACDStrategy(BaseStrategy):
 
         # === SHORT SIGNAL ===
         elif price_below_ema:
+            if self.long_only:
+                result.notes = "Sadece LONG modu açık, fiyat EMA200 altında — işlem yok"
+                return result
             result.precondition_met = True
             result.direction = "short"
 
@@ -156,6 +167,7 @@ class EMAMACDStrategy(BaseStrategy):
                 else:
                     result.notes += " (Tepe/Dip bulunamadı)"
 
+        result = self.annotate_trade_plan(data, result)
         return result
 
     def get_status_text(self, result: StrategyResult) -> str:

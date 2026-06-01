@@ -69,6 +69,14 @@ class VWAPBounceStrategy(BaseStrategy):
         "band_std_mult": 1.0,  # VWAP ± 1σ
         "min_bars_from_open": 1,  # İlk 1 bari atla
         "trend_filter": True,  # VWAP'a göre trend filtresi
+        "long_only": True,  # BIST spot: sadece LONG sinyali üret
+        # Limit-giriş + kademeli kâr + trailing (R-bazlı)
+        "entry_tol_atr": 0.5,
+        "partial_tp_enabled": True,
+        "tp1_r": 1.0,
+        "tp1_pct": 0.5,
+        "trailing_enabled": True,
+        "trail_atr_mult": 2.0,
     }
 
     def _calculate_vwap(self, data: pd.DataFrame) -> tuple:
@@ -294,6 +302,10 @@ class VWAPBounceStrategy(BaseStrategy):
             if current_price > current_vwap:
                 short_bounce = False  # Don't go short above VWAP
 
+        # Long-only mode (BIST spot: no retail intraday short selling)
+        if self.long_only:
+            short_bounce = False
+
         # === LONG BOUNCE ===
         if long_bounce and volume_ok:
             result.direction = "long"
@@ -358,6 +370,7 @@ class VWAPBounceStrategy(BaseStrategy):
         else:
             result.notes = f"VWAP bölgesinde ({vwap_distance_pct:+.2f}%), bounce bekleniyor"
 
+        result = self.annotate_trade_plan(data, result)
         return result
 
     def get_status_text(self, result: StrategyResult) -> str:

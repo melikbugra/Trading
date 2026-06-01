@@ -34,4 +34,4 @@ services:
 networks:
   web:
     external: true
-    name: nginxproxymanager_default
+    name: traefik-proxy

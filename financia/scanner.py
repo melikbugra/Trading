@@ -43,6 +43,10 @@ class ScannerService:
     def __init__(self):
         self.is_running = False
         self.is_scanning = False  # True while actively scanning
+        # Per (ticker, strategy) last closed-bar timestamp we already produced a
+        # signal for. Prevents re-triggering the same closed bar within a horizon
+        # period (e.g. after a delayed-price SL close mid-bar). In-memory only.
+        self._last_signal_bar: Dict[tuple, str] = {}
         self.scan_interval = 5  # minutes, default
         self._task: Optional[asyncio.Task] = None
         self._ws_manager = None  # WebSocket manager reference
@@ -105,7 +109,7 @@ class ScannerService:
             try:
                 signals = (
                     db.query(Signal)
-                    .filter(Signal.status.in_(["pending", "triggered", "entered"]))
+                    .filter(Signal.status.in_(["pending", "triggered", "missed", "entered"]))
                     .order_by(Signal.created_at.desc())
                     .all()
                 )
@@ -147,6 +151,8 @@ class ScannerService:
                         "entered_at": s.entered_at.isoformat()
                         if s.entered_at
                         else None,
+                        "extra_data": s.extra_data or {},
+                        "sl_tp_alert": (s.extra_data or {}).get("sl_tp_alert"),
                     }
                     for s in signals
                 ]
@@ -210,7 +216,7 @@ class ScannerService:
             # Find all pending and triggered signals (not entered)
             signals_to_cancel = (
                 db.query(Signal)
-                .filter(Signal.status.in_(["pending", "triggered"]))
+                .filter(Signal.status.in_(["pending", "triggered", "missed"]))
                 .all()
             )
 
@@ -429,6 +435,7 @@ class ScannerService:
                         ticker=item.ticker,
                         market=item.market,
                         horizon=strategy_db.horizon or "short",
+                        drop_incomplete=True,  # decide on closed bars only
                     )
                     return analyzer.data
                 except Exception as e:
@@ -475,7 +482,7 @@ class ScannerService:
                 .filter(
                     Signal.ticker == item.ticker,
                     Signal.strategy_id == item.strategy_id,
-                    Signal.status.in_(["pending", "triggered", "entered"]),
+                    Signal.status.in_(["pending", "triggered", "missed", "entered"]),
                 )
                 .first()
             )
@@ -558,7 +565,7 @@ class ScannerService:
             .filter(
                 Signal.ticker == item.ticker,
                 Signal.strategy_id == item.strategy_id,
-                Signal.status.in_(["pending", "triggered", "entered"]),
+                Signal.status.in_(["pending", "triggered", "missed", "entered"]),
             )
             .first()
         )
@@ -627,6 +634,17 @@ class ScannerService:
         last_trough = to_python_native(result.last_trough)
         extra_data = to_python_native(result.extra_data)
 
+        # Entered positions are managed by levels every scan, independent of whether
+        # the entry condition still holds. Preserve the original trade plan in
+        # extra_data; only refresh the decision-bar timestamp.
+        if existing_signal and existing_signal.status == "entered":
+            merged = dict(existing_signal.extra_data or {})
+            if extra_data and extra_data.get("data_timestamp"):
+                merged["data_timestamp"] = extra_data["data_timestamp"]
+            existing_signal.extra_data = merged
+            await self._check_position_levels(db, existing_signal, result)
+            return
+
         # Case 1: Main condition met - new signal triggered
         if result.main_condition_met:
             if existing_signal and existing_signal.status == "triggered":
@@ -640,31 +658,60 @@ class ScannerService:
                 # Check if SL or TP hit for entered position
                 await self._check_position_levels(db, existing_signal, result)
             else:
-                # Create new triggered signal
+                # Bar-change gate: only produce one fresh signal per closed bar for
+                # a (ticker, strategy). Avoids re-triggering the same bar after a
+                # mid-bar (delayed-price) close. Existing active signals are handled
+                # by the branches above; this guards only brand-new creation.
+                bar_key = (item.ticker, item.strategy_id)
+                new_bar = (extra_data or {}).get("data_timestamp")
+                if (
+                    not existing_signal
+                    and new_bar is not None
+                    and self._last_signal_bar.get(bar_key) == new_bar
+                ):
+                    db.commit()
+                    return
+
+                # Limit-entry tolerance band: within [entry, entry+tol] (long) the
+                # limit order is still fillable; beyond it the move ran away -> "missed".
+                tol = to_python_native(result.entry_tolerance) or 0.0
+                signal_status = "triggered"
+                if entry_price and current_price:
+                    if result.direction == "long" and current_price > entry_price + tol:
+                        signal_status = "missed"
+                    elif (
+                        result.direction == "short"
+                        and current_price < entry_price - tol
+                    ):
+                        signal_status = "missed"
+
+                # Refresh an existing 'missed' signal in place to avoid churn
+                if existing_signal and existing_signal.status == "missed":
+                    existing_signal.status = signal_status
+                    existing_signal.entry_price = entry_price
+                    existing_signal.stop_loss = stop_loss
+                    existing_signal.take_profit = take_profit
+                    existing_signal.current_price = current_price
+                    existing_signal.last_peak = last_peak
+                    existing_signal.last_trough = last_trough
+                    existing_signal.notes = result.notes
+                    existing_signal.extra_data = extra_data
+                    if signal_status == "triggered" and not existing_signal.triggered_at:
+                        existing_signal.triggered_at = now_turkey()
+                    db.commit()
+                    await self._broadcast_signals(db)
+                    return
+
+                # Replace any other stale signal
                 if existing_signal:
                     existing_signal.status = "cancelled"
                     existing_signal.notes = "Replaced by new signal"
-
-                # Skip signal if price already passed entry level (missed entry)
-                if entry_price and current_price:
-                    if result.direction == "long" and current_price >= entry_price:
-                        print(
-                            f"[Scanner] ⏭️ SKIP: {item.ticker} LONG - fiyat ({current_price}) zaten giriş ({entry_price}) üzerinde"
-                        )
-                        db.commit()
-                        return
-                    elif result.direction == "short" and current_price <= entry_price:
-                        print(
-                            f"[Scanner] ⏭️ SKIP: {item.ticker} SHORT - fiyat ({current_price}) zaten giriş ({entry_price}) altında"
-                        )
-                        db.commit()
-                        return
 
                 new_signal = Signal(
                     ticker=item.ticker,
                     market=item.market,
                     strategy_id=item.strategy_id,
-                    status="triggered",
+                    status=signal_status,
                     direction=result.direction,
                     entry_price=entry_price,
                     stop_loss=stop_loss,
@@ -677,12 +724,21 @@ class ScannerService:
                     extra_data=extra_data,
                 )
                 db.add(new_signal)
-                print(
-                    f"[Scanner] 🎯 NEW SIGNAL: {item.ticker} {result.direction.upper()} @ {entry_price}"
-                )
+                if new_bar is not None:
+                    self._last_signal_bar[bar_key] = new_bar
+                if signal_status == "missed":
+                    print(
+                        f"[Scanner] ⏭️ MISSED: {item.ticker} {result.direction.upper()} - fiyat ({current_price}) giriş bandını aştı (entry {entry_price} + {tol:.2f})"
+                    )
+                else:
+                    print(
+                        f"[Scanner] 🎯 NEW SIGNAL: {item.ticker} {result.direction.upper()} @ {entry_price}"
+                    )
 
-                # Send email notification for new triggered signal (if enabled)
-                if self.email_notifications.get("triggered", True):
+                # Send email only for actionable (triggered) signals
+                if signal_status == "triggered" and self.email_notifications.get(
+                    "triggered", True
+                ):
                     strategy = (
                         db.query(Strategy)
                         .filter(Strategy.id == item.strategy_id)
@@ -831,33 +887,74 @@ class ScannerService:
     async def _check_position_levels(
         self, db: Session, signal: Signal, result: StrategyResult
     ):
-        """Check SL/TP levels for an entered position."""
+        """
+        Manage an entered position: SL/TP alerts plus R-based partial take-profit
+        (TP1) and trailing-stop SUGGESTIONS. Live mode never auto-closes — the user
+        executes manually in Midas; we only flag and notify.
+        """
 
         current_price = to_python_native(result.current_price)
         signal.current_price = current_price
 
-        if signal.direction == "long":
-            # Check stop loss
-            if current_price <= signal.stop_loss:
+        extra = dict(signal.extra_data or {})
+        long = signal.direction == "long"
+
+        # --- Partial take-profit (TP1) suggestion ---
+        ptp = extra.get("partial_tp")
+        if ptp and ptp.get("price") and not extra.get("tp1_hit"):
+            reached = (
+                current_price >= ptp["price"] if long else current_price <= ptp["price"]
+            )
+            if reached:
+                extra["tp1_hit"] = True
+                pct = int(round(float(ptp.get("pct", 0.5)) * 100))
+                print(
+                    f"[Scanner] 🎯 TP1: {signal.ticker} @ {current_price} → %{pct} sat öner"
+                )
+
+        # --- Trailing-stop suggestion (ratchet only, after TP1; floor = breakeven) ---
+        trailing = extra.get("trailing")
+        if trailing and trailing.get("enabled") and extra.get("tp1_hit"):
+            atr = float(trailing.get("atr", 0) or 0)
+            mult = float(trailing.get("atr_mult", 2.0))
+            be = signal.actual_entry_price or signal.entry_price
+            prev = extra.get("trailing_stop_current")
+            if long:
+                suggested = current_price - atr * mult
+                if be is not None:
+                    suggested = max(suggested, be)  # at least breakeven
+                if prev is None or suggested > prev:
+                    extra["trailing_stop_current"] = round(suggested, 4)
+            else:
+                suggested = current_price + atr * mult
+                if be is not None:
+                    suggested = min(suggested, be)
+                if prev is None or suggested < prev:
+                    extra["trailing_stop_current"] = round(suggested, 4)
+
+        # --- SL/TP alerts (notify only, manual management) ---
+        alert = None
+        if long:
+            if signal.stop_loss and current_price <= signal.stop_loss:
+                alert = "sl_hit"
                 print(f"[Scanner] ⚠️ SL HIT: {signal.ticker} LONG @ {current_price}")
-                # Don't auto-close, just notify - user manages position manually
-                return
-
-            # Check take profit
-            if current_price >= signal.take_profit:
+            elif signal.take_profit and current_price >= signal.take_profit:
+                alert = "tp_hit"
                 print(f"[Scanner] 🎯 TP HIT: {signal.ticker} LONG @ {current_price}")
-                return
-
-        else:  # short
-            # Check stop loss
-            if current_price >= signal.stop_loss:
+        else:
+            if signal.stop_loss and current_price >= signal.stop_loss:
+                alert = "sl_hit"
                 print(f"[Scanner] ⚠️ SL HIT: {signal.ticker} SHORT @ {current_price}")
-                return
-
-            # Check take profit
-            if current_price <= signal.take_profit:
+            elif signal.take_profit and current_price <= signal.take_profit:
+                alert = "tp_hit"
                 print(f"[Scanner] 🎯 TP HIT: {signal.ticker} SHORT @ {current_price}")
-                return
+
+        if alert:
+            extra["sl_tp_alert"] = alert
+        else:
+            extra.pop("sl_tp_alert", None)
+
+        signal.extra_data = extra
 
         db.commit()
         await self._broadcast_signals(db)

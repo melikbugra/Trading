@@ -40,6 +40,7 @@ class StrategyResult:
     entry_price: Optional[float] = None
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
+    entry_tolerance: Optional[float] = None  # limit-entry band width (e.g. 0.5*ATR)
 
     # Peak/Trough
     last_peak: Optional[float] = None
@@ -61,6 +62,7 @@ class StrategyResult:
             "entry_price": to_python_native(self.entry_price),
             "stop_loss": to_python_native(self.stop_loss),
             "take_profit": to_python_native(self.take_profit),
+            "entry_tolerance": to_python_native(self.entry_tolerance),
             "last_peak": to_python_native(self.last_peak),
             "last_trough": to_python_native(self.last_trough),
             "current_price": to_python_native(self.current_price),
@@ -95,6 +97,10 @@ class BaseStrategy(ABC):
         """
         self.params = {**self.default_params, **(params or {})}
         self.risk_reward_ratio = risk_reward_ratio
+        # Long-only mode: BIST spot/cash market does not allow retail intraday
+        # short selling, so SHORT signals are suppressed by default. Set
+        # params["long_only"] = False to re-enable SHORT (e.g. for VIOP).
+        self.long_only = bool(self.params.get("long_only", True))
 
     @abstractmethod
     def evaluate(self, data: pd.DataFrame) -> StrategyResult:
@@ -183,6 +189,69 @@ class BaseStrategy(ABC):
         macd = ema_fast - ema_slow
         signal_line = macd.ewm(span=signal, adjust=False).mean()
         return macd, signal_line
+
+    def annotate_trade_plan(
+        self, data: pd.DataFrame, result: "StrategyResult"
+    ) -> "StrategyResult":
+        """
+        Enrich a main-condition result with the limit-entry tolerance band,
+        an R-multiple partial take-profit (TP1) and a trailing-stop config.
+
+        All values are R-based: R = |entry - stop_loss|.
+        - entry_tolerance: limit-order band width = entry_tol_atr * ATR
+        - extra_data["entry_zone"]: {low, high} fillable limit zone
+        - extra_data["partial_tp"]: {price, pct, r}  (e.g. sell 50% at +1R)
+        - extra_data["trailing"]: {enabled, atr_mult, atr, activate_after}
+
+        Tunable via strategy params: entry_tol_atr, partial_tp_enabled, tp1_r,
+        tp1_pct, trailing_enabled, trail_atr_mult.
+        """
+        if (
+            not result.main_condition_met
+            or result.entry_price is None
+            or result.stop_loss is None
+        ):
+            return result
+
+        atr = self.calculate_atr(data)
+        current_atr = float(atr.iloc[-1]) if not pd.isna(atr.iloc[-1]) else 0.0
+
+        entry = float(result.entry_price)
+        sl = float(result.stop_loss)
+        direction = result.direction
+        risk = abs(entry - sl)
+
+        extra = dict(result.extra_data or {})
+
+        # Limit-entry tolerance band
+        tol = current_atr * float(self.params.get("entry_tol_atr", 0.5))
+        result.entry_tolerance = round(tol, 4)
+        if direction == "long":
+            extra["entry_zone"] = {"low": round(entry, 4), "high": round(entry + tol, 4)}
+        else:
+            extra["entry_zone"] = {"low": round(entry - tol, 4), "high": round(entry, 4)}
+
+        # R-based partial take-profit (TP1)
+        if self.params.get("partial_tp_enabled", True) and risk > 0:
+            tp1_r = float(self.params.get("tp1_r", 1.0))
+            tp1_pct = float(self.params.get("tp1_pct", 0.5))
+            if direction == "long":
+                tp1 = entry + risk * tp1_r
+            else:
+                tp1 = entry - risk * tp1_r
+            extra["partial_tp"] = {"price": round(tp1, 4), "pct": tp1_pct, "r": tp1_r}
+
+        # Trailing-stop config (move to breakeven after TP1, then trail by ATR)
+        if self.params.get("trailing_enabled", True):
+            extra["trailing"] = {
+                "enabled": True,
+                "atr_mult": float(self.params.get("trail_atr_mult", 2.0)),
+                "atr": round(current_atr, 4),
+                "activate_after": "tp1",
+            }
+
+        result.extra_data = extra
+        return result
 
     def calculate_levels(
         self,

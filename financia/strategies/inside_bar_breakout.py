@@ -62,6 +62,14 @@ class InsideBarBreakoutStrategy(BaseStrategy):
         "min_mother_bar_atr": 0.5,
         "max_mother_bar_atr": 3.0,
         "lookback_bars": 5,
+        "long_only": True,  # BIST spot: sadece LONG sinyali üret
+        # Limit-giriş + kademeli kâr + trailing (R-bazlı)
+        "entry_tol_atr": 0.5,
+        "partial_tp_enabled": True,
+        "tp1_r": 1.0,
+        "tp1_pct": 0.5,
+        "trailing_enabled": True,
+        "trail_atr_mult": 2.0,
     }
 
     def _find_inside_bars(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -248,6 +256,9 @@ class InsideBarBreakoutStrategy(BaseStrategy):
 
         # === SHORT BREAKOUT ===
         elif broke_low:
+            if self.long_only:
+                result.notes = f"Inside Bar ({consecutive}x) aşağı kırılım var ama sadece LONG modu açık"
+                return result
             # If trend filter is on and trend is long, skip
             if trend_direction == "long":
                 result.direction = "short"
@@ -280,6 +291,7 @@ class InsideBarBreakoutStrategy(BaseStrategy):
                 f"Inside Bar tespit edildi ({consecutive}x sıkışma), kırılım bekleniyor"
             )
 
+        result = self.annotate_trade_plan(data, result)
         return result
 
     def get_status_text(self, result: StrategyResult) -> str:

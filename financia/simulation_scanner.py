@@ -151,6 +151,7 @@ class SimulationScanner:
                         "sl_tp_alert": (s.extra_data or {}).get("sl_tp_alert")
                         if s.status == "entered"
                         else None,
+                        "extra_data": s.extra_data or {},
                     }
                     for s in signals
                 ]
@@ -454,11 +455,34 @@ class SimulationScanner:
             traceback.print_exc()
             self.is_running = False
 
+    @staticmethod
+    def _preserve_plan(old_extra, fresh_extra):
+        """
+        Keep R-based trade-plan keys (partial TP / trailing and their live state)
+        across bars. A fresh evaluate without a main condition would otherwise drop
+        these keys and reset the position's plan every bar.
+        """
+        merged = dict(fresh_extra or {})
+        old = old_extra or {}
+        for k in (
+            "partial_tp",
+            "trailing",
+            "tp1_hit",
+            "tp1_done",
+            "trailing_stop_current",
+            "entry_zone",
+        ):
+            if k in old and k not in merged:
+                merged[k] = old[k]
+        return merged
+
     async def _backtest_auto_trade(self):
         """
         Auto-trade logic for backtest mode.
         - Enter triggered signals at entry_price with 1 lot.
-        - Exit entered signals when SL/TP is hit at the exact SL/TP price.
+        - At TP1 (R-based) auto-close part of the position and move stop to
+          breakeven; afterwards trail the stop by ATR.
+        - Exit the remainder when SL/TP is hit (using the bar's High/Low).
         """
         db = SessionLocal()
         try:
@@ -470,19 +494,85 @@ class SimulationScanner:
             )
 
             for signal in entered_signals:
-                extra = signal.extra_data or {}
-                alert = extra.get("sl_tp_alert")
+                extra = dict(signal.extra_data or {})
+                ch = extra.get("last_candle_high")
+                cl = extra.get("last_candle_low")
+                long = signal.direction == "long"
 
-                if alert == "sl_hit" and signal.stop_loss:
-                    # Exit at SL price
-                    await self._backtest_close_position(
-                        db, signal, signal.stop_loss, "stopped", sim_time
+                # --- TP1: auto partial close + move stop to breakeven (once) ---
+                ptp = extra.get("partial_tp")
+                if (
+                    ptp
+                    and ptp.get("price")
+                    and not extra.get("tp1_done")
+                    and ch is not None
+                    and cl is not None
+                    and (signal.remaining_lots or 0) > 0
+                ):
+                    tp1_hit = (
+                        ch >= ptp["price"] if long else cl <= ptp["price"]
                     )
-                elif alert == "tp_hit" and signal.take_profit:
-                    # Exit at TP price
-                    await self._backtest_close_position(
-                        db, signal, signal.take_profit, "target_hit", sim_time
-                    )
+                    if tp1_hit:
+                        pct = float(ptp.get("pct", 0.5))
+                        part = min(
+                            round((signal.lots or 0) * pct, 4),
+                            signal.remaining_lots or 0,
+                        )
+                        if part > 0:
+                            await self._backtest_partial_close(
+                                db, signal, ptp["price"], part, "tp1", sim_time
+                            )
+                            extra = dict(signal.extra_data or {})
+                            extra["tp1_done"] = True
+                            # Move stop to breakeven for the remainder
+                            signal.stop_loss = (
+                                signal.actual_entry_price or signal.entry_price
+                            )
+                            signal.extra_data = extra
+                            db.commit()
+
+                # --- Trailing stop (ratchet) after TP1 ---
+                trailing = extra.get("trailing")
+                if (
+                    trailing
+                    and trailing.get("enabled")
+                    and extra.get("tp1_done")
+                    and ch is not None
+                    and cl is not None
+                ):
+                    atr = float(trailing.get("atr", 0) or 0)
+                    mult = float(trailing.get("atr_mult", 2.0))
+                    if long:
+                        new_sl = ch - atr * mult
+                        if signal.stop_loss is None or new_sl > signal.stop_loss:
+                            signal.stop_loss = round(new_sl, 4)
+                            db.commit()
+                    else:
+                        new_sl = cl + atr * mult
+                        if signal.stop_loss is None or new_sl < signal.stop_loss:
+                            signal.stop_loss = round(new_sl, 4)
+                            db.commit()
+
+                # --- Full exit of remainder on SL/TP (using bar High/Low) ---
+                if ch is not None and cl is not None:
+                    if long:
+                        if signal.stop_loss and cl <= signal.stop_loss:
+                            await self._backtest_close_position(
+                                db, signal, signal.stop_loss, "stopped", sim_time
+                            )
+                        elif signal.take_profit and ch >= signal.take_profit:
+                            await self._backtest_close_position(
+                                db, signal, signal.take_profit, "target_hit", sim_time
+                            )
+                    else:
+                        if signal.stop_loss and ch >= signal.stop_loss:
+                            await self._backtest_close_position(
+                                db, signal, signal.stop_loss, "stopped", sim_time
+                            )
+                        elif signal.take_profit and cl <= signal.take_profit:
+                            await self._backtest_close_position(
+                                db, signal, signal.take_profit, "target_hit", sim_time
+                            )
 
             # 2. Auto-enter: Enter triggered signals where entry price has been reached
             triggered_signals = (
@@ -567,7 +657,8 @@ class SimulationScanner:
     ):
         """Close a position in backtest mode and record trade history."""
         entry_price = signal.actual_entry_price or signal.entry_price
-        lots = signal.lots or 1.0
+        # Close whatever is left (may be less than the original lots after a TP1 partial)
+        lots = signal.remaining_lots or signal.lots or 1.0
 
         if signal.direction == "long":
             profit_percent = ((exit_price - entry_price) / entry_price) * 100
@@ -624,6 +715,69 @@ class SimulationScanner:
             f"Backtest: {reason} @ {exit_price} | P/L: {profit_percent:+.2f}%"
         )
 
+        db.commit()
+
+    async def _backtest_partial_close(
+        self,
+        db: Session,
+        signal: SimSignal,
+        exit_price: float,
+        lots: float,
+        reason: str,
+        sim_time: datetime,
+    ):
+        """
+        Partially close a position (e.g. TP1) in backtest mode. Records a
+        SimTradeHistory row and updates balance/profit, but keeps the position
+        'entered' and does NOT touch the win/loss trade counters (those track the
+        final, position-level outcome to keep win-rate meaningful).
+        """
+        entry_price = signal.actual_entry_price or signal.entry_price
+
+        if signal.direction == "long":
+            profit_percent = ((exit_price - entry_price) / entry_price) * 100
+            profit_tl = (exit_price - entry_price) * lots
+        else:
+            profit_percent = ((entry_price - exit_price) / entry_price) * 100
+            profit_tl = (entry_price - exit_price) * lots
+
+        result = (
+            "win" if profit_percent > 0 else ("loss" if profit_percent < 0 else "breakeven")
+        )
+        risk = abs(entry_price - signal.stop_loss) if signal.stop_loss else 1
+        reward = abs(exit_price - entry_price)
+        rr_achieved = reward / risk if risk > 0 else 0
+
+        trade = SimTradeHistory(
+            signal_id=signal.id,
+            ticker=signal.ticker,
+            market=signal.market,
+            strategy_id=signal.strategy_id,
+            direction=signal.direction,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            stop_loss=signal.stop_loss,
+            take_profit=signal.take_profit,
+            result=result,
+            profit_percent=round(profit_percent, 2),
+            profit_tl=round(profit_tl, 2),
+            lots=lots,
+            risk_reward_achieved=round(rr_achieved, 2),
+            entered_at=signal.entered_at,
+            closed_at=sim_time,
+            notes=f"Backtest partial-{reason} @ {exit_price} ({lots} lot)",
+        )
+        db.add(trade)
+
+        # Balance + aggregate profit (not the win/loss counters)
+        simulation_time_manager.current_balance += exit_price * lots
+        simulation_time_manager.total_profit += profit_tl
+
+        signal.remaining_lots = round((signal.remaining_lots or 0) - lots, 4)
+        signal.notes = (
+            f"Backtest: partial {reason} {lots} lot @ {exit_price} "
+            f"(kalan {signal.remaining_lots})"
+        )
         db.commit()
 
     async def _broadcast_backtest_progress(
@@ -1183,7 +1337,10 @@ class SimulationScanner:
             elif existing_signal and existing_signal.status == "entered":
                 # Already in position, update current price
                 existing_signal.current_price = current_price
-                extra_data = apply_sl_tp_alert(existing_signal, extra_data)
+                extra_data = apply_sl_tp_alert(
+                    existing_signal,
+                    self._preserve_plan(existing_signal.extra_data, extra_data),
+                )
                 existing_signal.extra_data = extra_data
                 await self._check_position_levels(db, existing_signal, result)
             else:
@@ -1220,7 +1377,10 @@ class SimulationScanner:
         elif result.precondition_met:
             if existing_signal and existing_signal.status == "entered":
                 existing_signal.current_price = current_price
-                extra_data = apply_sl_tp_alert(existing_signal, extra_data)
+                extra_data = apply_sl_tp_alert(
+                    existing_signal,
+                    self._preserve_plan(existing_signal.extra_data, extra_data),
+                )
                 existing_signal.extra_data = extra_data  # Update data_timestamp
             elif existing_signal and existing_signal.status == "triggered":
                 # Update current price for triggered signals even when main condition not met
@@ -1261,7 +1421,10 @@ class SimulationScanner:
                 await self._check_entry_exit(db, existing_signal, result)
             elif existing_signal and existing_signal.status == "entered":
                 existing_signal.current_price = current_price
-                extra_data = apply_sl_tp_alert(existing_signal, extra_data)
+                extra_data = apply_sl_tp_alert(
+                    existing_signal,
+                    self._preserve_plan(existing_signal.extra_data, extra_data),
+                )
                 existing_signal.extra_data = extra_data  # Update data_timestamp
 
         db.commit()

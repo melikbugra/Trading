@@ -1,0 +1,2 @@
+- [User Profile](user_profile.md) — Melik, Turkish developer building algo trading platform for BIST100/Binance
+- [Project Overview](project_overview.md) — FastAPI+React trading platform with 4 strategies, real-time scanning, simulation engine
