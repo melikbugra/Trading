@@ -17,11 +17,11 @@ services:
       - web
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.tradepi.rule=Host(`tradepi.melikbugraozcelik.com`)"
-      - "traefik.http.routers.tradepi.entrypoints=websecure"
-      - "traefik.http.routers.tradepi.tls.certresolver=le"
-      - "traefik.http.routers.tradepi.middlewares=hsts@file"
-      - "traefik.http.services.tradepi.loadbalancer.server.port=5173"
+      - "traefik.http.routers.tradeapi.rule=Host(`tradeapi.melikbugraozcelik.com`)"
+      - "traefik.http.routers.tradeapi.entrypoints=websecure"
+      - "traefik.http.routers.tradeapi.tls.certresolver=le"
+      - "traefik.http.routers.tradeapi.middlewares=hsts@file"
+      - "traefik.http.services.tradeapi.loadbalancer.server.port=8000"
 
   tradeui:
     build:
