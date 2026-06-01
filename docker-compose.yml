@@ -15,6 +15,13 @@ services:
       - PYTHONUNBUFFERED=1
     networks:
       - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.tradepi.rule=Host(`tradepi.melikbugraozcelik.com`)"
+      - "traefik.http.routers.tradepi.entrypoints=websecure"
+      - "traefik.http.routers.tradepi.tls.certresolver=le"
+      - "traefik.http.routers.tradepi.middlewares=hsts@file"
+      - "traefik.http.services.tradepi.loadbalancer.server.port=5173"
 
   tradeui:
     build:
@@ -30,6 +37,13 @@ services:
       - tradeapi
     networks:
       - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.tradeui.rule=Host(`tradeui.melikbugraozcelik.com`)"
+      - "traefik.http.routers.tradeui.entrypoints=websecure"
+      - "traefik.http.routers.tradeui.tls.certresolver=le"
+      - "traefik.http.routers.tradeui.middlewares=hsts@file"
+      - "traefik.http.services.tradeui.loadbalancer.server.port=5173"
 
 networks:
   web:
