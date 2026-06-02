@@ -169,6 +169,9 @@ class BacktestStartRequest(BaseModel):
     end_date: date
     initial_balance: float = 100000.0
     strategy_types: List[str]  # Python strategy type names from STRATEGY_REGISTRY
+    # When True, each backtest day trades only the EOD-selected stocks (top 20,
+    # computed as-of the previous trading day). When False, all watchlist tickers.
+    use_eod_watchlist: bool = True
 
 
 class SimWatchlistResponse(BaseModel):
@@ -1373,6 +1376,7 @@ async def start_backtest(request: BacktestStartRequest, db: Session = Depends(ge
     # Import and start backtest
     from financia.simulation_scanner import simulation_scanner
 
+    simulation_scanner.use_eod_watchlist = request.use_eod_watchlist
     await simulation_scanner.start_backtest()
 
     strategy_names = [s.name for s in strategies]

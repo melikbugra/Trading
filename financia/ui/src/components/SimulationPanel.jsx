@@ -24,6 +24,7 @@ const SimulationPanel = ({ onClose }) => {
 
     // Backtest mode
     const [isBacktest, setIsBacktest] = useState(false);
+    const [useEodWatchlist, setUseEodWatchlist] = useState(true);
     const [strategyTypes, setStrategyTypes] = useState([]);
     const [selectedStrategyTypes, setSelectedStrategyTypes] = useState([]);
     const [loadingStrategies, setLoadingStrategies] = useState(false);
@@ -88,7 +89,7 @@ const SimulationPanel = ({ onClose }) => {
                 return;
             }
             try {
-                await startBacktest(startDate, endDate, initialBalance, selectedStrategyTypes);
+                await startBacktest(startDate, endDate, initialBalance, selectedStrategyTypes, useEodWatchlist);
                 onClose?.();
             } catch (err) {
                 setLocalError(err.message);
@@ -198,6 +199,24 @@ const SimulationPanel = ({ onClose }) => {
                                 </div>
                             )}
                         </div>
+                    )}
+
+                    {/* EOD daily watchlist toggle (backtest only) */}
+                    {isBacktest && (
+                        <label className="flex items-start gap-2 p-3 bg-gray-700/30 rounded-lg cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={useEodWatchlist}
+                                onChange={(e) => setUseEodWatchlist(e.target.checked)}
+                                className="w-4 h-4 mt-0.5 rounded border-gray-500 text-yellow-500 focus:ring-yellow-500 bg-gray-600"
+                            />
+                            <div className="flex-1">
+                                <span className="text-white text-sm font-medium">📊 EOD ile günlük hisse seçimi (top 20)</span>
+                                <p className="text-gray-400 text-xs mt-0.5">
+                                    Her gün, bir önceki güne göre EOD analizi çalışır; o gün yalnızca seçilen hisseler işleme alınır (gerçek akış + daha hızlı). Kapalıyken tüm watchlist taranır.
+                                </p>
+                            </div>
+                        </label>
                     )}
 
                     {/* Description */}

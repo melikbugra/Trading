@@ -8,9 +8,206 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import pandas as pd
+import numpy as np
 
 from financia.notification_service import TelegramService
 from financia.web_api.database import now_turkey
+
+
+def score_daily(ticker: str, hist: pd.DataFrame, trend_filters: dict) -> Optional[Dict]:
+    """
+    Compute the daily TREND + REVERSAL scores and type for a ticker from a daily
+    OHLCV DataFrame. Pure/as-of: pass `hist` already sliced to the desired cutoff
+    (e.g. up to the previous day for a backtest). Returns the result dict, or None
+    if there isn't enough data / volume is too low.
+
+    Reused by both the live EOD analysis and the backtest's daily watchlist.
+    """
+    if hist is None or hist.empty or len(hist) < 30:
+        return None
+
+    close = hist["Close"]
+    high = hist["High"]
+    low = hist["Low"]
+    volume = hist["Volume"]
+
+    current_close = close.iloc[-1]
+    current_volume = volume.iloc[-1]
+    volume_tl = current_volume * current_close
+    if volume_tl < trend_filters.get("min_volume_tl", 0):
+        return None
+
+    # RSI (14) — Wilder smoothing
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = (-delta).where(delta < 0, 0.0)
+    avg_gain = gain.ewm(alpha=1 / 14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / 14, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    current_rsi = rsi.iloc[-1]
+
+    # MACD (12/26/9)
+    macd = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+    signal = macd.ewm(span=9, adjust=False).mean()
+    histogram = macd - signal
+    macd_current, macd_prev = macd.iloc[-1], macd.iloc[-2]
+    hist_current, hist_prev = histogram.iloc[-1], histogram.iloc[-2]
+
+    # EMA 20/50
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    ema50 = close.ewm(span=50, adjust=False).mean()
+    ema20_c, ema50_c = ema20.iloc[-1], ema50.iloc[-1]
+    ema20_p, ema50_p = ema20.iloc[-2], ema50.iloc[-2]
+
+    # ADX / DMI (index-aligned)
+    tr = np.maximum(
+        high - low, np.maximum(abs(high - close.shift(1)), abs(low - close.shift(1)))
+    )
+    atr = tr.rolling(14).mean()
+    plus_dm = pd.Series(
+        np.where((high.diff() > low.diff().abs()) & (high.diff() > 0), high.diff(), 0),
+        index=close.index,
+    )
+    minus_dm = pd.Series(
+        np.where((low.diff().abs() > high.diff()) & (low.diff() < 0), low.diff().abs(), 0),
+        index=close.index,
+    )
+    plus_di = 100 * (plus_dm.rolling(14).mean() / atr)
+    minus_di = 100 * (minus_dm.rolling(14).mean() / atr)
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    adx = dx.rolling(14).mean()
+    adx_c = adx.iloc[-1] if not np.isnan(adx.iloc[-1]) else 0
+    plus_di_c = plus_di.iloc[-1] if not np.isnan(plus_di.iloc[-1]) else 0
+    minus_di_c = minus_di.iloc[-1] if not np.isnan(minus_di.iloc[-1]) else 0
+
+    # Volume trend + relative volume (today vs previous ~10 bars)
+    vol_sma5 = volume.rolling(5).mean()
+    vol_sma20 = volume.rolling(20).mean()
+    vol_ratio = (
+        vol_sma5.iloc[-1] / vol_sma20.iloc[-1] if vol_sma20.iloc[-1] > 0 else 1
+    )
+    price_up = close.iloc[-1] > close.iloc[-5]
+    prev_vol = volume.iloc[-11:-1]
+    avg_vol10 = prev_vol.mean() if len(prev_vol) > 0 else current_volume
+    relative_volume = round(current_volume / avg_vol10, 2) if avg_vol10 > 0 else 0
+
+    # Bollinger position
+    sma20 = close.rolling(20).mean()
+    std20 = close.rolling(20).std()
+    upper_band = sma20 + (2 * std20)
+    lower_band = sma20 - (2 * std20)
+    bb_position = (current_close - lower_band.iloc[-1]) / (
+        upper_band.iloc[-1] - lower_band.iloc[-1]
+    )
+
+    # Stochastic %K (14)
+    lowest_low = low.rolling(14).min()
+    highest_high = high.rolling(14).max()
+    stoch_k = 100 * (close - lowest_low) / (highest_high - lowest_low)
+    stoch_k_c, stoch_k_p = stoch_k.iloc[-1], stoch_k.iloc[-2]
+
+    # EMA200 gate
+    ema200 = close.ewm(
+        span=200 if len(close) >= 200 else len(close), adjust=False
+    ).mean()
+    ema200_c = ema200.iloc[-1]
+    above_ema200 = current_close > ema200_c
+    price_vs_ema200 = (current_close - ema200_c) / ema200_c * 100
+
+    # TREND score
+    t = 0
+    if macd_current > 0 and hist_current > hist_prev:
+        t += 20
+    elif macd_current > macd_prev:
+        t += 14
+    elif hist_current > hist_prev:
+        t += 6
+    if ema20_c > ema50_c:
+        t += 20 if ema20_p <= ema50_p else 14
+    if adx_c > 25 and plus_di_c > minus_di_c:
+        t += 15
+    elif adx_c > 20:
+        t += 8
+    if vol_ratio > 1.5 and price_up:
+        t += 15
+    elif vol_ratio > 1.2 and price_up:
+        t += 10
+    elif vol_ratio > 1.0:
+        t += 5
+    if above_ema200:
+        t += 15 if price_vs_ema200 <= 5 else 10
+    if 50 <= current_rsi <= 70:
+        t += 15
+    elif 40 <= current_rsi < 50:
+        t += 8
+    trend_score = int(t)
+
+    # REVERSAL score (gated above EMA200)
+    r = 0
+    if above_ema200:
+        if current_rsi < 30:
+            r += 40
+        elif current_rsi < 40:
+            r += 25
+        elif current_rsi < 45:
+            r += 10
+        if bb_position < 0.15:
+            r += 25
+        elif bb_position < 0.30:
+            r += 15
+        elif bb_position < 0.45:
+            r += 5
+        if stoch_k_c < 20:
+            r += 20
+        elif stoch_k_c > stoch_k_p and stoch_k_c < 30:
+            r += 14
+        elif stoch_k_c < 50:
+            r += 6
+        if hist_current > hist_prev:
+            r += 15
+    reversal_score = int(r)
+
+    trend_min = trend_filters.get("trend_min", 60)
+    reversal_min = trend_filters.get("reversal_min", 55)
+    if trend_score >= trend_min and reversal_score >= 50:
+        ttype = "both"
+    elif trend_score >= trend_min:
+        ttype = "trend"
+    elif reversal_score >= reversal_min and above_ema200:
+        ttype = "reversal"
+    else:
+        ttype = "neutral"
+
+    prev_close = close.iloc[-2]
+    daily_change = ((current_close - prev_close) / prev_close) * 100
+    five_day_change = (
+        ((current_close - close.iloc[-6]) / close.iloc[-6]) * 100
+        if len(close) > 5
+        else 0
+    )
+
+    return {
+        "ticker": ticker,
+        "symbol": ticker.replace(".IS", ""),
+        "close": round(current_close, 2),
+        "change_percent": round(daily_change, 2),
+        "five_day_change": round(five_day_change, 2),
+        "trend_score": trend_score,
+        "reversal_score": reversal_score,
+        "type": ttype,
+        "volume_tl": round(volume_tl, 0),
+        "relative_volume": relative_volume,
+        "rsi": round(current_rsi, 1),
+        "adx": round(adx_c, 1),
+        "bb_position": round(bb_position * 100, 0),
+        "scores": {"trend": trend_score, "reversal": reversal_score},
+        "direction": "bullish"
+        if ttype in ("trend", "both")
+        else "reversal"
+        if ttype == "reversal"
+        else "neutral",
+    }
 
 
 class EODAnalysisService:
@@ -520,218 +717,11 @@ Bu rapor otomatik olarak oluşturulmuştur.
             errors = []
 
             def calculate_trend_score(ticker: str) -> Optional[Dict]:
-                """Calculate trend score for a single ticker using multiple indicators."""
+                """Fetch daily candles and score (delegates to module score_daily)."""
                 try:
                     stock = yf.Ticker(ticker)
-                    # Need more history for indicator calculations
                     hist = stock.history(period="60d", interval="1d")
-
-                    if hist.empty or len(hist) < 30:
-                        return None
-
-                    close = hist["Close"]
-                    high = hist["High"]
-                    low = hist["Low"]
-                    volume = hist["Volume"]
-
-                    # Current values
-                    current_close = close.iloc[-1]
-                    current_volume = volume.iloc[-1]
-
-                    # Volume in TL
-                    volume_tl = current_volume * current_close
-
-                    # Skip if volume too low
-                    if volume_tl < self.trend_filters.get("min_volume_tl", 0):
-                        return None
-
-                    # ===== Indicators =====
-                    # RSI (14) — Wilder smoothing (RMA), matches the rest of the project
-                    delta = close.diff()
-                    gain = delta.where(delta > 0, 0.0)
-                    loss = (-delta).where(delta < 0, 0.0)
-                    avg_gain = gain.ewm(alpha=1 / 14, adjust=False).mean()
-                    avg_loss = loss.ewm(alpha=1 / 14, adjust=False).mean()
-                    rs = avg_gain / avg_loss
-                    rsi = 100 - (100 / (1 + rs))
-                    current_rsi = rsi.iloc[-1]
-
-                    # MACD (12/26/9)
-                    macd = (
-                        close.ewm(span=12, adjust=False).mean()
-                        - close.ewm(span=26, adjust=False).mean()
-                    )
-                    signal = macd.ewm(span=9, adjust=False).mean()
-                    histogram = macd - signal
-                    macd_current, macd_prev = macd.iloc[-1], macd.iloc[-2]
-                    hist_current, hist_prev = histogram.iloc[-1], histogram.iloc[-2]
-
-                    # EMA 20/50
-                    ema20 = close.ewm(span=20, adjust=False).mean()
-                    ema50 = close.ewm(span=50, adjust=False).mean()
-                    ema20_c, ema50_c = ema20.iloc[-1], ema50.iloc[-1]
-                    ema20_p, ema50_p = ema20.iloc[-2], ema50.iloc[-2]
-
-                    # ADX / DMI (keep index aligned, otherwise division -> NaN)
-                    tr = np.maximum(
-                        high - low,
-                        np.maximum(
-                            abs(high - close.shift(1)), abs(low - close.shift(1))
-                        ),
-                    )
-                    atr = tr.rolling(14).mean()
-                    plus_dm = pd.Series(
-                        np.where(
-                            (high.diff() > low.diff().abs()) & (high.diff() > 0),
-                            high.diff(),
-                            0,
-                        ),
-                        index=close.index,
-                    )
-                    minus_dm = pd.Series(
-                        np.where(
-                            (low.diff().abs() > high.diff()) & (low.diff() < 0),
-                            low.diff().abs(),
-                            0,
-                        ),
-                        index=close.index,
-                    )
-                    plus_di = 100 * (plus_dm.rolling(14).mean() / atr)
-                    minus_di = 100 * (minus_dm.rolling(14).mean() / atr)
-                    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
-                    adx = dx.rolling(14).mean()
-                    adx_c = adx.iloc[-1] if not np.isnan(adx.iloc[-1]) else 0
-                    plus_di_c = plus_di.iloc[-1] if not np.isnan(plus_di.iloc[-1]) else 0
-                    minus_di_c = (
-                        minus_di.iloc[-1] if not np.isnan(minus_di.iloc[-1]) else 0
-                    )
-
-                    # Volume trend
-                    vol_sma5 = volume.rolling(5).mean()
-                    vol_sma20 = volume.rolling(20).mean()
-                    vol_ratio = (
-                        vol_sma5.iloc[-1] / vol_sma20.iloc[-1]
-                        if vol_sma20.iloc[-1] > 0
-                        else 1
-                    )
-                    price_up = close.iloc[-1] > close.iloc[-5]
-
-                    # Bollinger position (0 = lower band, 1 = upper band)
-                    sma20 = close.rolling(20).mean()
-                    std20 = close.rolling(20).std()
-                    upper_band = sma20 + (2 * std20)
-                    lower_band = sma20 - (2 * std20)
-                    bb_position = (current_close - lower_band.iloc[-1]) / (
-                        upper_band.iloc[-1] - lower_band.iloc[-1]
-                    )
-
-                    # Stochastic %K (14)
-                    lowest_low = low.rolling(14).min()
-                    highest_high = high.rolling(14).max()
-                    stoch_k = 100 * (close - lowest_low) / (highest_high - lowest_low)
-                    stoch_k_c, stoch_k_p = stoch_k.iloc[-1], stoch_k.iloc[-2]
-
-                    # EMA200 (long-term trend gate)
-                    ema200 = close.ewm(
-                        span=200 if len(close) >= 200 else len(close), adjust=False
-                    ).mean()
-                    ema200_c = ema200.iloc[-1]
-                    above_ema200 = current_close > ema200_c
-                    price_vs_ema200 = (current_close - ema200_c) / ema200_c * 100
-
-                    # ===== TREND (continuation) score, max 100 =====
-                    t = 0
-                    if macd_current > 0 and hist_current > hist_prev:
-                        t += 20
-                    elif macd_current > macd_prev:
-                        t += 14
-                    elif hist_current > hist_prev:
-                        t += 6
-                    if ema20_c > ema50_c:
-                        t += 20 if ema20_p <= ema50_p else 14
-                    if adx_c > 25 and plus_di_c > minus_di_c:
-                        t += 15
-                    elif adx_c > 20:
-                        t += 8
-                    if vol_ratio > 1.5 and price_up:
-                        t += 15
-                    elif vol_ratio > 1.2 and price_up:
-                        t += 10
-                    elif vol_ratio > 1.0:
-                        t += 5
-                    if above_ema200:
-                        t += 15 if price_vs_ema200 <= 5 else 10
-                    if 50 <= current_rsi <= 70:
-                        t += 15
-                    elif 40 <= current_rsi < 50:
-                        t += 8
-                    trend_score = int(t)
-
-                    # ===== REVERSAL (bounce) score, max 100 — GATE: only above EMA200 =====
-                    r = 0
-                    if above_ema200:
-                        if current_rsi < 30:
-                            r += 40
-                        elif current_rsi < 40:
-                            r += 25
-                        elif current_rsi < 45:
-                            r += 10
-                        if bb_position < 0.15:
-                            r += 25
-                        elif bb_position < 0.30:
-                            r += 15
-                        elif bb_position < 0.45:
-                            r += 5
-                        if stoch_k_c < 20:
-                            r += 20
-                        elif stoch_k_c > stoch_k_p and stoch_k_c < 30:
-                            r += 14
-                        elif stoch_k_c < 50:
-                            r += 6
-                        if hist_current > hist_prev:
-                            r += 15
-                    reversal_score = int(r)
-
-                    # ===== Classify =====
-                    trend_min = self.trend_filters.get("trend_min", 60)
-                    reversal_min = self.trend_filters.get("reversal_min", 55)
-                    if trend_score >= trend_min and reversal_score >= 50:
-                        ttype = "both"
-                    elif trend_score >= trend_min:
-                        ttype = "trend"
-                    elif reversal_score >= reversal_min and above_ema200:
-                        ttype = "reversal"
-                    else:
-                        ttype = "neutral"
-
-                    prev_close = close.iloc[-2]
-                    daily_change = ((current_close - prev_close) / prev_close) * 100
-                    five_day_change = (
-                        ((current_close - close.iloc[-6]) / close.iloc[-6]) * 100
-                        if len(close) > 5
-                        else 0
-                    )
-
-                    return {
-                        "ticker": ticker,
-                        "symbol": ticker.replace(".IS", ""),
-                        "close": round(current_close, 2),
-                        "change_percent": round(daily_change, 2),
-                        "five_day_change": round(five_day_change, 2),
-                        "trend_score": trend_score,
-                        "reversal_score": reversal_score,
-                        "type": ttype,
-                        "volume_tl": round(volume_tl, 0),
-                        "rsi": round(current_rsi, 1),
-                        "adx": round(adx_c, 1),
-                        "bb_position": round(bb_position * 100, 0),
-                        "scores": {"trend": trend_score, "reversal": reversal_score},
-                        "direction": "bullish"
-                        if ttype in ("trend", "both")
-                        else "reversal"
-                        if ttype == "reversal"
-                        else "neutral",
-                    }
+                    return score_daily(ticker, hist, self.trend_filters)
                 except Exception as e:
                     return {"ticker": ticker, "error": str(e)}
 

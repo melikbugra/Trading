@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from financia.strategies import get_strategy_class
 from financia.strategies.base import StrategyResult, to_python_native
+from financia.eod_service import score_daily, eod_service
 from financia.web_api.database import (
     SimStrategy,
     SimWatchlistItem,
@@ -64,6 +65,14 @@ class SimulationScanner:
 
         # Data cache to avoid repeated API calls
         self._data_cache: Dict[str, pd.DataFrame] = {}
+
+        # Daily candles per ticker (for EOD-based daily watchlist in backtest)
+        self._daily_cache: Dict[str, pd.DataFrame] = {}
+        # When True, the backtest trades only the EOD-selected stocks each day
+        # (computed as-of the previous trading day). Set from the start request.
+        self.use_eod_watchlist = True
+        # Current day's tradeable universe: {"trend": set, "reversal": set}
+        self._day_universe: Optional[Dict[str, set]] = None
 
         # Progress tracking for scans
         self.scan_progress = 0
@@ -351,18 +360,40 @@ class SimulationScanner:
 
         print(f"[Backtest] Starting automated run: {total_days} trading days")
 
+        # Prefetch daily candles once for the EOD-based daily watchlist
+        self._day_universe = None
+        if self.use_eod_watchlist:
+            pdb = SessionLocal()
+            try:
+                tickers = [
+                    t[0]
+                    for t in pdb.query(SimWatchlistItem.ticker)
+                    .filter(SimWatchlistItem.is_active == True)
+                    .distinct()
+                    .all()
+                ]
+            finally:
+                pdb.close()
+            await self._prefetch_daily(tickers)
+
         while self.is_running and simulation_time_manager.is_active:
             try:
                 sim_time = simulation_time_manager.current_time
                 if not sim_time:
                     break
 
-                # Count the day at its start
+                # Count the day at its start + refresh the EOD daily universe
                 if sim_time.hour == 9 and sim_time.minute == 30:
                     current_day += 1
                     print(
                         f"[Backtest] Day {current_day}/{total_days}: {sim_time.strftime('%Y-%m-%d')}"
                     )
+                    if self.use_eod_watchlist:
+                        self._day_universe = self._compute_day_universe(sim_time.date())
+                        print(
+                            f"[Backtest]   EOD universe: trend={len(self._day_universe['trend'])} "
+                            f"reversal={len(self._day_universe['reversal'])}"
+                        )
 
                 # Broadcast progress every hour for a smooth bar
                 await self._broadcast_backtest_progress(
@@ -1005,6 +1036,25 @@ class SimulationScanner:
             if not watchlist:
                 return
 
+            # Restrict to the EOD daily universe, routed by strategy category
+            if self.use_eod_watchlist and self._day_universe is not None:
+                strat_ids = {it.strategy_id for it in watchlist}
+                cat_map = {}
+                for sid in strat_ids:
+                    sdb = (
+                        db.query(SimStrategy).filter(SimStrategy.id == sid).first()
+                    )
+                    cls = get_strategy_class(sdb.strategy_type) if sdb else None
+                    cat_map[sid] = getattr(cls, "category", "trend") if cls else "trend"
+                watchlist = [
+                    it
+                    for it in watchlist
+                    if it.ticker
+                    in self._day_universe.get(cat_map.get(it.strategy_id, "trend"), set())
+                ]
+                if not watchlist:
+                    return
+
             # Mark scanning started
             simulation_time_manager.is_scanning = True
             self.scan_progress = 0
@@ -1366,6 +1416,105 @@ class SimulationScanner:
         except asyncio.TimeoutError:
             print(f"[SimScanner] Timeout fetching data for {ticker}")
             return pd.DataFrame()
+
+    # ================= EOD-based daily watchlist (backtest) =================
+    async def _get_daily_data(self, ticker, need_start, need_end):
+        """Daily candles for a ticker (cached: memory -> disk -> network)."""
+        interval = "1d"
+        key = f"{ticker}_1d"
+        if key in self._data_cache:
+            return self._data_cache[key]
+        disk = self._load_disk_cache(ticker, interval, need_start, need_end)
+        if disk is not None:
+            self._data_cache[key] = disk
+            return disk
+        loop = asyncio.get_event_loop()
+
+        def fetch():
+            try:
+                import time
+
+                time.sleep(0.1)
+                stock = yf.Ticker(ticker)
+                d = stock.history(start=need_start, end=need_end, interval="1d")
+                if isinstance(d.columns, pd.MultiIndex):
+                    d.columns = d.columns.get_level_values(0)
+                return d
+            except Exception as e:
+                print(f"[SimScanner] Failed daily fetch {ticker}: {e}")
+                return pd.DataFrame()
+
+        try:
+            data = await asyncio.wait_for(
+                loop.run_in_executor(_executor, fetch), timeout=30.0
+            )
+            if not data.empty:
+                self._data_cache[key] = data
+                self._save_disk_cache(ticker, interval, data, need_start, need_end)
+            return data
+        except asyncio.TimeoutError:
+            return pd.DataFrame()
+
+    async def _prefetch_daily(self, tickers):
+        """Prefetch daily candles for all tickers once (EOD daily watchlist)."""
+        tz = "Europe/Istanbul"
+        stm = simulation_time_manager
+        if not (stm.start_date and stm.end_date):
+            return
+        need_start = pd.Timestamp(stm.start_date, tz=tz) - pd.Timedelta(days=90)
+        need_end = pd.Timestamp(stm.end_date, tz=tz) + pd.Timedelta(days=1)
+        self._daily_cache = {}
+        batch = 15
+        for i in range(0, len(tickers), batch):
+            chunk = tickers[i : i + batch]
+            results = await asyncio.gather(
+                *[self._get_daily_data(t, need_start, need_end) for t in chunk],
+                return_exceptions=True,
+            )
+            for t, df in zip(chunk, results):
+                if isinstance(df, Exception) or df is None or df.empty:
+                    continue
+                self._daily_cache[t] = df
+        print(
+            f"[Backtest] Prefetched daily data: {len(self._daily_cache)}/{len(tickers)} tickers"
+        )
+
+    def _compute_day_universe(self, as_of_date):
+        """
+        EOD-style selection as-of the previous trading day. Returns
+        {"trend": set, "reversal": set}, up to top_n each, volume-confirmed first.
+        Uses only daily bars strictly before `as_of_date` (no look-ahead).
+        """
+        top_n = int(eod_service.trend_filters.get("top_n", 20))
+        min_rel_vol = eod_service.filters.get("min_relative_volume", 2.0)
+        tf = eod_service.trend_filters
+        trend_c, reversal_c = [], []
+        for ticker, daily in self._daily_cache.items():
+            try:
+                sub = daily[daily.index.date < as_of_date]
+                if len(sub) < 30:
+                    continue
+                sc = score_daily(ticker, sub.tail(60), tf)
+            except Exception:
+                sc = None
+            if not sc or sc.get("type") == "neutral":
+                continue
+            sc["_vc"] = (sc.get("relative_volume", 0) or 0) >= min_rel_vol
+            if sc["type"] in ("trend", "both"):
+                trend_c.append(sc)
+            if sc["type"] in ("reversal", "both"):
+                reversal_c.append(sc)
+
+        def pick(cands, key):
+            ordered = sorted(cands, key=lambda x: x.get(key, 0), reverse=True)
+            confirmed = [c["ticker"] for c in ordered if c["_vc"]]
+            rest = [c["ticker"] for c in ordered if not c["_vc"]]
+            return set((confirmed + rest)[:top_n])
+
+        return {
+            "trend": pick(trend_c, "trend_score"),
+            "reversal": pick(reversal_c, "reversal_score"),
+        }
 
     async def _process_result(
         self,
