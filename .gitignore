@@ -201,3 +201,7 @@ data/
 binance_data
 bist100_data
 results
+
+# Secrets / local notification config
+financia/telegram_config.py
+financia/email_config.py

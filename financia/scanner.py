@@ -14,7 +14,11 @@ from sqlalchemy.orm import Session
 
 from financia.analyzer import StockAnalyzer
 from financia.strategies import get_strategy_class, STRATEGY_REGISTRY
-from financia.strategies.base import StrategyResult, to_python_native
+from financia.strategies.base import (
+    StrategyResult,
+    to_python_native,
+    preserve_plan_keys,
+)
 from financia.web_api.database import (
     Strategy,
     WatchlistItem,
@@ -26,7 +30,7 @@ from financia.web_api.database import (
     Base,
     now_turkey,
 )
-from financia.notification_service import EmailService
+from financia.notification_service import TelegramService
 
 # Thread pool for running blocking operations - increased for parallel scanning
 _executor = ThreadPoolExecutor(max_workers=10)
@@ -55,10 +59,10 @@ class ScannerService:
         self.scan_progress = 0
         self.scan_total = 0
         self.current_ticker = ""
-        # Email notification settings (in-memory, configurable via API)
-        self.email_notifications = {
-            "triggered": True,  # Send email when signal is triggered
-            "entryReached": True,  # Send email when entry price is reached
+        # Telegram notification settings (in-memory, configurable via API)
+        self.notifications = {
+            "triggered": True,  # Notify when a signal is triggered
+            "entryReached": True,  # Notify when entry price is reached
         }
 
     def set_ws_manager(self, manager):
@@ -634,6 +638,12 @@ class ScannerService:
         last_trough = to_python_native(result.last_trough)
         extra_data = to_python_native(result.extra_data)
 
+        # Preserve the trade plan (entry zone / partial TP / trailing) across bars.
+        # Without this a triggered signal loses its plan on any bar where the main
+        # condition no longer holds, before it is ever entered.
+        if existing_signal and existing_signal.extra_data:
+            extra_data = preserve_plan_keys(existing_signal.extra_data, extra_data)
+
         # Entered positions are managed by levels every scan, independent of whether
         # the entry condition still holds. Preserve the original trade plan in
         # extra_data; only refresh the decision-bar timestamp.
@@ -735,8 +745,8 @@ class ScannerService:
                         f"[Scanner] 🎯 NEW SIGNAL: {item.ticker} {result.direction.upper()} @ {entry_price}"
                     )
 
-                # Send email only for actionable (triggered) signals
-                if signal_status == "triggered" and self.email_notifications.get(
+                # Notify only for actionable (triggered) signals
+                if signal_status == "triggered" and self.notifications.get(
                     "triggered", True
                 ):
                     strategy = (
@@ -745,7 +755,7 @@ class ScannerService:
                         .first()
                     )
                     strategy_name = strategy.name if strategy else ""
-                    EmailService.send_signal_triggered(
+                    TelegramService.send_signal_triggered(
                         ticker=item.ticker,
                         market=item.market,
                         direction=result.direction,
@@ -837,9 +847,9 @@ class ScannerService:
                     f"[Scanner] 📍 ENTRY REACHED: {signal.ticker} LONG @ {current_price} - Awaiting user confirmation"
                 )
 
-                # Send email notification - user should confirm entry (if enabled)
-                if self.email_notifications.get("entryReached", True):
-                    EmailService.send_signal_entered(
+                # Notify - user should confirm entry (if enabled)
+                if self.notifications.get("entryReached", True):
+                    TelegramService.send_signal_entered(
                         ticker=signal.ticker,
                         market=signal.market,
                         direction=signal.direction,
@@ -870,9 +880,9 @@ class ScannerService:
                     f"[Scanner] 📍 ENTRY REACHED: {signal.ticker} SHORT @ {current_price} - Awaiting user confirmation"
                 )
 
-                # Send email notification - user should confirm entry (if enabled)
-                if self.email_notifications.get("entryReached", True):
-                    EmailService.send_signal_entered(
+                # Notify - user should confirm entry (if enabled)
+                if self.notifications.get("entryReached", True):
+                    TelegramService.send_signal_entered(
                         ticker=signal.ticker,
                         market=signal.market,
                         direction=signal.direction,

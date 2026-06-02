@@ -151,7 +151,7 @@ class TradeHistoryResponse(BaseModel):
 class ScannerConfigUpdate(BaseModel):
     scan_interval_minutes: Optional[int] = None
     is_running: Optional[bool] = None
-    email_notifications: Optional[Dict[str, bool]] = (
+    notifications: Optional[Dict[str, bool]] = (
         None  # {"triggered": bool, "entryReached": bool}
     )
 
@@ -161,7 +161,7 @@ class ScannerConfigResponse(BaseModel):
     is_running: bool
     is_scanning: bool  # True while actively scanning
     last_scan_at: Optional[datetime]
-    email_notifications: Dict[str, bool]  # {"triggered": bool, "entryReached": bool}
+    notifications: Dict[str, bool]  # {"triggered": bool, "entryReached": bool}
 
     class Config:
         from_attributes = True
@@ -676,7 +676,7 @@ def get_scanner_config(db: Session = Depends(get_db)):
         is_running=scanner.is_running,
         is_scanning=scanner.is_scanning,
         last_scan_at=config.last_scan_at,
-        email_notifications=scanner.email_notifications,
+        notifications=scanner.notifications,
     )
 
 
@@ -701,9 +701,9 @@ async def update_scanner_config(
             await scanner.stop()
         config.is_running = update.is_running
 
-    # Update email notification settings
-    if update.email_notifications is not None:
-        scanner.email_notifications.update(update.email_notifications)
+    # Update notification settings
+    if update.notifications is not None:
+        scanner.notifications.update(update.notifications)
 
     config.updated_at = now_turkey()
     db.commit()
@@ -714,8 +714,21 @@ async def update_scanner_config(
         is_running=scanner.is_running,
         is_scanning=scanner.is_scanning,
         last_scan_at=config.last_scan_at,
-        email_notifications=scanner.email_notifications,
+        notifications=scanner.notifications,
     )
+
+
+@router.post("/notifications/test")
+async def test_notification():
+    """Send a test Telegram message to verify bot setup."""
+    from financia.notification_service import TelegramService
+
+    if not TelegramService.is_configured():
+        raise HTTPException(
+            400, "Telegram yapılandırılmamış (telegram_config.py: BOT_TOKEN/CHAT_ID)"
+        )
+    TelegramService._send_sync("✅ Test mesajı — Telegram bildirimleri çalışıyor.")
+    return {"status": "sent"}
 
 
 @router.post("/scanner/scan-now")

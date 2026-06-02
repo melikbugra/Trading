@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import pandas as pd
 
-from financia.notification_service import EmailService
+from financia.notification_service import TelegramService
 from financia.web_api.database import now_turkey
 
 
@@ -445,8 +445,8 @@ Dashboard: http://localhost:5173
 Bu rapor otomatik olarak oluşturulmuştur.
 """
 
-        EmailService.send_email(subject, body)
-        print(f"[EOD] Email summary sent")
+        TelegramService.send_message(subject, body)
+        print(f"[EOD] Telegram summary sent")
 
     def _format_volume(self, vol: float) -> str:
         """Format volume for display."""
@@ -854,8 +854,8 @@ Yatırım kararı vermeden önce kendi araştırmanızı yapın.
 Dashboard: http://localhost:5173
 """
 
-        EmailService.send_email(subject, body)
-        print(f"[EOD-Trend] Email summary sent")
+        TelegramService.send_message(subject, body)
+        print(f"[EOD-Trend] Telegram summary sent")
 
 
 # Global EOD service instance

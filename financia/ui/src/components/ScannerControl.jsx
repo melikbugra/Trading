@@ -103,16 +103,16 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
         );
     }
 
-    // Email notification settings (synced with backend via config prop)
-    const emailNotifications = config.email_notifications || {
+    // Telegram notification settings (synced with backend via config prop)
+    const notifications = config.notifications || {
         triggered: true,
         entryReached: true
     };
 
-    // Update email notification settings via API
-    const updateEmailNotifications = (key, value) => {
-        const updated = { ...emailNotifications, [key]: value };
-        onUpdate({ email_notifications: updated });
+    // Update notification settings via API
+    const updateNotifications = (key, value) => {
+        const updated = { ...notifications, [key]: value };
+        onUpdate({ notifications: updated });
     };
 
     const toggleScanner = () => {
@@ -240,29 +240,29 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                     )}
                 </div>
 
-                {/* Email Notification Settings */}
+                {/* Telegram Notification Settings */}
                 <div className="flex items-center gap-2 sm:gap-3 ml-auto">
-                    <span className="text-gray-400 text-xs sm:text-sm hidden lg:inline">📧</span>
+                    <span className="text-gray-400 text-xs sm:text-sm hidden lg:inline" title="Telegram bildirimleri">✈️</span>
                     <button
-                        onClick={() => updateEmailNotifications('triggered', !emailNotifications.triggered)}
-                        className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1 ${emailNotifications.triggered
+                        onClick={() => updateNotifications('triggered', !notifications.triggered)}
+                        className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1 ${notifications.triggered
                             ? 'bg-orange-600/80 text-white'
                             : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
                             }`}
-                        title="Sinyal tetiklendiğinde e-posta bildirimi"
+                        title="Sinyal tetiklendiğinde Telegram bildirimi"
                     >
-                        <span>{emailNotifications.triggered ? '🔔' : '🔕'}</span>
+                        <span>{notifications.triggered ? '🔔' : '🔕'}</span>
                         <span className="hidden sm:inline">Tetiklenen</span>
                     </button>
                     <button
-                        onClick={() => updateEmailNotifications('entryReached', !emailNotifications.entryReached)}
-                        className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1 ${emailNotifications.entryReached
+                        onClick={() => updateNotifications('entryReached', !notifications.entryReached)}
+                        className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1 ${notifications.entryReached
                             ? 'bg-green-600/80 text-white'
                             : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
                             }`}
-                        title="Giriş fiyatına ulaşıldığında e-posta bildirimi"
+                        title="Giriş fiyatına ulaşıldığında Telegram bildirimi"
                     >
-                        <span>{emailNotifications.entryReached ? '🔔' : '🔕'}</span>
+                        <span>{notifications.entryReached ? '🔔' : '🔕'}</span>
                         <span className="hidden sm:inline">Giriş</span>
                     </button>
                 </div>

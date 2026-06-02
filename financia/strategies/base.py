@@ -10,6 +10,33 @@ import pandas as pd
 import numpy as np
 
 
+# Trade-plan keys that must survive across bars where a fresh evaluate (no main
+# condition) would otherwise drop them, e.g. a triggered signal waiting for entry.
+PLAN_KEYS = (
+    "entry_zone",
+    "partial_tp",
+    "trailing",
+    "tp1_hit",
+    "tp1_done",
+    "trailing_stop_current",
+)
+
+
+def preserve_plan_keys(old_extra, fresh_extra):
+    """
+    Merge fresh extra_data with the trade-plan keys from the previous extra_data.
+    A fresh value wins when present; otherwise the prior plan key is preserved so
+    the limit-entry zone / partial-TP / trailing config survive until the signal
+    is entered and closed.
+    """
+    merged = dict(fresh_extra or {})
+    old = old_extra or {}
+    for k in PLAN_KEYS:
+        if k in old and k not in merged:
+            merged[k] = old[k]
+    return merged
+
+
 def to_python_native(value):
     """Convert numpy types to native Python types for JSON serialization."""
     if isinstance(value, (np.integer, np.int64, np.int32)):

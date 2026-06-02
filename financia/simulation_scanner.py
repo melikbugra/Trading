@@ -4,8 +4,10 @@ Iterates through hourly bars and evaluates strategies as if in real-time.
 """
 
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 import pandas as pd
 import yfinance as yf
@@ -23,6 +25,9 @@ from financia.web_api.database import (
     SessionLocal,
     simulation_time_manager,
 )
+
+# Persistent on-disk cache for simulation/backtest historical data
+CACHE_DIR = Path("data/cache/sim")
 
 # Thread pool for running blocking operations - increased for parallel scanning
 _executor = ThreadPoolExecutor(max_workers=10)
@@ -378,8 +383,9 @@ class SimulationScanner:
                         # Backtest finished
                         break
 
-                    # Clear cache for new day
-                    self.clear_cache()
+                    # NOTE: cache is intentionally NOT cleared per day. The full
+                    # backtest range is fetched once per ticker and sliced by time,
+                    # so daily clearing would force a full re-fetch every day.
 
                 # Yield to event loop briefly to allow WS broadcasts and cancellation
                 await asyncio.sleep(0)
@@ -399,7 +405,7 @@ class SimulationScanner:
                         is_complete = simulation_time_manager.next_day()
                         if is_complete:
                             break
-                        self.clear_cache()
+                        # cache kept across days on purpose (see note above)
                 except Exception:
                     break
 
@@ -880,9 +886,9 @@ class SimulationScanner:
                 traceback.print_exc()
 
     def _send_backtest_email(self, stats: dict):
-        """Send backtest results summary via email."""
+        """Send backtest results summary via Telegram."""
         try:
-            from financia.notification_service import EmailService
+            from financia.notification_service import TelegramService
 
             # Get per-strategy breakdown
             db = SessionLocal()
@@ -949,14 +955,12 @@ class SimulationScanner:
                 emoji = "📈" if stats["total_profit"] >= 0 else "📉"
                 subject = f"{emoji} Backtest: {stats['profit_percent']:+.1f}% | {stats['total_trades']} işlem | {start_date} → {end_date}"
 
-                # Send directly bypassing simulation check
-                from financia.notification_service import RECIPIENT_EMAIL
-
-                EmailService._send_sync(subject, body, RECIPIENT_EMAIL)
+                # Send directly, bypassing the simulation-mode guard
+                TelegramService._send_sync(f"{subject}\n\n{body}")
             finally:
                 db.close()
 
-            print("[Backtest] Results email sent")
+            print("[Backtest] Results sent to Telegram")
         except Exception as e:
             print(f"[Backtest] Failed to send email: {e}")
 
@@ -1194,60 +1198,133 @@ class SimulationScanner:
         # Process result
         await self._process_result(db, item, strategy_db, result, existing_signal)
 
+    # --- Disk cache (parquet + JSON sidecar with the requested coverage range) ---
+    @staticmethod
+    def _safe_name(ticker: str, interval: str) -> str:
+        return f"{ticker.replace('.', '_').replace('/', '_')}_{interval}"
+
+    def _cache_path(self, ticker: str, interval: str) -> Path:
+        d = CACHE_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        return d / f"{self._safe_name(ticker, interval)}.parquet"
+
+    def _meta_path(self, ticker: str, interval: str) -> Path:
+        return CACHE_DIR / f"{self._safe_name(ticker, interval)}.meta.json"
+
+    def _load_disk_cache(self, ticker, interval, need_start, need_end):
+        """Return cached df if the disk file's recorded range covers [need_start, need_end]."""
+        try:
+            meta_p = self._meta_path(ticker, interval)
+            data_p = self._cache_path(ticker, interval)
+            if not meta_p.exists() or not data_p.exists():
+                return None
+            meta = json.loads(meta_p.read_text())
+            cached_start = pd.Timestamp(meta["start"])
+            cached_end = pd.Timestamp(meta["end"])
+            if cached_start <= need_start and cached_end >= need_end:
+                df = pd.read_parquet(data_p)
+                return df if not df.empty else None
+        except Exception as e:
+            print(f"[SimScanner] Disk cache read failed for {ticker}: {e}")
+        return None
+
+    def _save_disk_cache(self, ticker, interval, df, req_start, req_end):
+        """Persist df to parquet (merged with any existing) and record covered range."""
+        try:
+            data_p = self._cache_path(ticker, interval)
+            meta_p = self._meta_path(ticker, interval)
+
+            merged = df
+            new_start, new_end = req_start, req_end
+            if data_p.exists():
+                old = pd.read_parquet(data_p)
+                merged = pd.concat([old, df])
+                merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+            if meta_p.exists():
+                try:
+                    meta = json.loads(meta_p.read_text())
+                    new_start = min(req_start, pd.Timestamp(meta["start"]))
+                    new_end = max(req_end, pd.Timestamp(meta["end"]))
+                except Exception:
+                    pass
+
+            merged.to_parquet(data_p)
+            meta_p.write_text(
+                json.dumps({"start": str(new_start), "end": str(new_end)})
+            )
+        except Exception as e:
+            print(f"[SimScanner] Disk cache write failed for {ticker}: {e}")
+
     async def _get_historical_data(
         self, ticker: str, market: str, horizon: str, end_time: datetime
     ) -> pd.DataFrame:
-        """Get historical data up to the specified end time."""
+        """
+        Read-through cache: memory -> disk -> network.
 
-        cache_key = f"{ticker}_{market}_{horizon}"
+        In backtest mode the FULL date range is fetched once per ticker and then
+        sliced by `end_time` for every simulated hour, so there is no per-hour or
+        per-day re-fetch. Results are also persisted to disk so re-running the same
+        backtest hits the parquet cache instead of the network.
+        """
+        from financia.web_api.database import now_turkey
 
-        # Check cache first
+        interval = "1h"
+        cache_key = f"{ticker}_{market}_{horizon}_{interval}"
+
+        if market != "bist100":
+            return pd.DataFrame()  # Binance not supported in simulation
+
+        # --- Determine the range we need ---
+        tz = "Europe/Istanbul"
+        now_ts = pd.Timestamp(now_turkey())
+        if now_ts.tzinfo is None:
+            now_ts = now_ts.tz_localize(tz)
+        yahoo_limit_start = now_ts - pd.Timedelta(days=729)
+
+        stm = simulation_time_manager
+        if stm.is_backtest and stm.start_date and stm.end_date:
+            need_start = pd.Timestamp(stm.start_date, tz=tz) - pd.Timedelta(days=250)
+            need_end = pd.Timestamp(stm.end_date, tz=tz) + pd.Timedelta(days=1)
+        else:
+            end_ts = pd.Timestamp(end_time)
+            if end_ts.tzinfo is None:
+                end_ts = end_ts.tz_localize(tz)
+            need_start = end_ts - pd.Timedelta(days=200)
+            need_end = end_ts + pd.Timedelta(days=1)
+
+        if need_start < yahoo_limit_start:
+            need_start = yahoo_limit_start
+
+        def _slice(df):
+            return df[df.index <= end_time] if not df.empty else df
+
+        # --- L1: memory ---
         if cache_key in self._data_cache:
-            cached_data = self._data_cache[cache_key]
-            # Filter to data before end_time
-            if not cached_data.empty:
-                filtered = cached_data[cached_data.index <= end_time]
-                if not filtered.empty:
-                    return filtered
+            filtered = _slice(self._data_cache[cache_key])
+            if not filtered.empty:
+                return filtered
 
-        # Fetch fresh data (with minimal rate limiting since we have cache)
+        # --- L2: disk ---
+        disk_df = self._load_disk_cache(ticker, interval, need_start, need_end)
+        if disk_df is not None:
+            self._data_cache[cache_key] = disk_df
+            return _slice(disk_df)
+
+        # --- L3: network ---
         loop = asyncio.get_event_loop()
 
         def fetch_data():
             try:
-                # Minimal delay - cache handles most requests
                 import time
 
-                time.sleep(0.15)
-
-                # Calculate start date - need 200 days for EMA 200
-                # But Yahoo Finance limits 1h data to last 730 days from TODAY
-                from financia.web_api.database import now_turkey
-
-                today = now_turkey()
-                yahoo_limit_start = today - timedelta(days=729)  # Safe margin
-
-                desired_start = end_time - timedelta(days=200)
-                start_date = max(
-                    desired_start, yahoo_limit_start
-                )  # Don't exceed Yahoo limit
-
-                if market == "bist100":
-                    stock = yf.Ticker(ticker)
-                    data = stock.history(
-                        start=start_date,
-                        end=end_time + timedelta(days=1),  # Include end date
-                        interval="1h",
-                    )
-
-                    if isinstance(data.columns, pd.MultiIndex):
-                        data.columns = data.columns.get_level_values(0)
-
-                    return data
-                else:
-                    # Binance - not supported in simulation for now
-                    return pd.DataFrame()
-
+                time.sleep(0.15)  # be polite; one fetch per ticker per run
+                stock = yf.Ticker(ticker)
+                data = stock.history(
+                    start=need_start, end=need_end, interval=interval
+                )
+                if isinstance(data.columns, pd.MultiIndex):
+                    data.columns = data.columns.get_level_values(0)
+                return data
             except Exception as e:
                 print(f"[SimScanner] Failed to fetch data for {ticker}: {e}")
                 return pd.DataFrame()
@@ -1257,15 +1334,11 @@ class SimulationScanner:
                 loop.run_in_executor(_executor, fetch_data),
                 timeout=30.0,
             )
-
-            # Cache the full data
             if not data.empty:
                 self._data_cache[cache_key] = data
-                # Filter to end_time
-                data = data[data.index <= end_time]
-
+                self._save_disk_cache(ticker, interval, data, need_start, need_end)
+                data = _slice(data)
             return data
-
         except asyncio.TimeoutError:
             print(f"[SimScanner] Timeout fetching data for {ticker}")
             return pd.DataFrame()
@@ -1288,6 +1361,12 @@ class SimulationScanner:
         last_peak = to_python_native(result.last_peak)
         last_trough = to_python_native(result.last_trough)
         extra_data = to_python_native(result.extra_data)
+
+        # Preserve the trade plan (entry zone / partial TP / trailing) across bars so
+        # a triggered signal keeps it until entered, instead of losing it on bars
+        # where the main condition no longer holds.
+        if existing_signal and existing_signal.extra_data:
+            extra_data = self._preserve_plan(existing_signal.extra_data, extra_data)
 
         sim_time = simulation_time_manager.current_time
 
