@@ -469,14 +469,29 @@ export default function EODAnalysisPanel({ strategies }) {
     };
 
     const applyEodToWatchlist = async () => {
-        if (!window.confirm('Aktif tüm stratejilerin watchlist\'leri TEMİZLENİP EOD sonuçlarıyla (trend → kırılım stratejileri, toparlanma → VWAP) doldurulacak. Devam edilsin mi?')) return;
+        if (applyingWatchlist) return;
+        if (trendResults.length === 0) {
+            addToast('Önce analizi çalıştır (gösterilecek sonuç yok)', 'error');
+            return;
+        }
         setApplyingWatchlist(true);
+        addToast('Watchlist uygulanıyor...', 'info');
         try {
-            const res = await fetch(`${API_BASE}/strategies/eod-analysis/apply-to-watchlist`, { method: 'POST' });
+            const res = await fetch(`${API_BASE}/strategies/eod-analysis/apply-to-watchlist`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    results: trendResults,
+                    volume_tickers: Array.from(volumeTickerSet),
+                }),
+            });
             const data = await res.json();
             if (res.ok) {
-                const lines = (data.strategies || []).map((s) => `${s.strategy}: ${s.added}`).join(', ');
-                addToast(`Watchlist güncellendi (trend ${data.trend_count} / toparlanma ${data.reversal_count}). ${lines}`, 'success');
+                const lines = (data.strategies || []).map((s) => `${s.strategy}: ${s.added}`).join(' · ');
+                addToast(
+                    `✅ Watchlist güncellendi — trend ${data.trend_count} (🔥${data.trend_confirmed}) / toparlanma ${data.reversal_count} (🔥${data.reversal_confirmed}). ${lines}`,
+                    'success'
+                );
             } else {
                 addToast(data.detail || 'Watchlist uygulanamadı', 'error');
             }

@@ -1120,25 +1120,42 @@ async def run_all_eod_analysis():
     return {"status": result["status"]}
 
 
+class ApplyWatchlistRequest(BaseModel):
+    # The exact results the UI is showing (preferred — avoids server/UI drift).
+    results: Optional[List[Dict[str, Any]]] = None
+    volume_tickers: Optional[List[str]] = None
+
+
 @router.post("/eod-analysis/apply-to-watchlist")
-async def apply_eod_to_watchlist(db: Session = Depends(get_db)):
+async def apply_eod_to_watchlist(
+    payload: ApplyWatchlistRequest = ApplyWatchlistRequest(),
+    db: Session = Depends(get_db),
+):
     """
-    Replace every active strategy's watchlist with the latest EOD analysis
-    results, routed by type: trend strategies get the TREND list, reversal
-    strategies (e.g. VWAP) get the REVERSAL list. Top-N per category.
+    Replace every active strategy's watchlist with the EOD analysis results,
+    routed by type: trend strategies get the TREND list, reversal strategies
+    (e.g. VWAP) get the REVERSAL list. Top-N per category, volume-confirmed first.
+
+    Uses the results posted by the UI when provided (so the watchlist matches
+    exactly what the user sees); falls back to the server's last analysis.
     """
     from financia.eod_service import eod_service
 
-    results = eod_service.last_trend_results or []
+    results = (payload.results if payload and payload.results else None) or (
+        eod_service.last_trend_results or []
+    )
     if not results:
         raise HTTPException(
-            400, "Önce EOD trend analizi çalıştırın (kayıtlı sonuç yok)"
+            400, "Önce EOD trend analizi çalıştırın (gösterilecek sonuç yok)"
         )
 
     top_n = int(eod_service.trend_filters.get("top_n", 20))
 
     # Volume-confirmed tickers (also surfaced by today's volume analysis)
-    volume_set = {r.get("ticker") for r in (eod_service.last_results or [])}
+    if payload and payload.volume_tickers is not None:
+        volume_set = set(payload.volume_tickers)
+    else:
+        volume_set = {r.get("ticker") for r in (eod_service.last_results or [])}
 
     def pick(candidates, score_key):
         """Sort by score; volume-confirmed first, then fill with the rest, cap top_n."""

@@ -59,7 +59,9 @@ class VWAPBounceStrategy(BaseStrategy):
 
     name = "VWAP Bounce"
     description = "VWAP seviyesinden sıçrama tespiti. Gün içi 1 saatlik mumlar, hacim onaylı."
-    category = "reversal"
+    # VWAP bounce is an intraday trend-continuation entry (buy the pullback to VWAP
+    # in an uptrend), so it pairs best with the daily-TREND universe.
+    category = "trend"
 
     default_params = {
         "vwap_touch_threshold": 0.3,  # %0.3 yakınlık = dokunuş
