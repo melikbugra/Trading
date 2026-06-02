@@ -12,7 +12,6 @@ export default function EODAnalysisPanel({ strategies }) {
     const { isSimulationMode, simEodResults, simEodProgress, cancelEodAnalysis } = useSimulation();
 
     // Tab state
-    const [activeTab, setActiveTab] = useState('volume'); // 'volume' or 'trend'
 
     // Volume analysis state
     const [volumeResults, setVolumeResults] = useState([]);
@@ -379,6 +378,45 @@ export default function EODAnalysisPanel({ strategies }) {
         }
     }, [trendFilters, trendLoading, addToast, isSimulationMode]);
 
+    // Run BOTH analyses (volume + trend) with a single click
+    const runAllAnalysis = useCallback(async () => {
+        if (volumeLoading || trendLoading) return;
+        setVolumeLoading(true);
+        setTrendLoading(true);
+        setVolumeResults([]);
+        setTrendResults([]);
+        setVolumeStats({ count: 0, total_scanned: 0 });
+        setTrendStats({ count: 0, total_scanned: 0 });
+        try {
+            if (isSimulationMode) {
+                const res = await fetch(`${API_BASE}/simulation/eod-analysis`, { method: 'POST' });
+                if (res.ok) {
+                    addToast('Simülasyon EOD analizi başlatıldı...', 'info');
+                } else {
+                    const e = await res.json();
+                    addToast(e.detail || 'Analiz başlatılamadı', 'error');
+                    setVolumeLoading(false);
+                    setTrendLoading(false);
+                }
+                return;
+            }
+            const res = await fetch(`${API_BASE}/strategies/eod-analysis/run-all`, { method: 'POST' });
+            if (res.ok) {
+                const data = await res.json();
+                addToast(data.status === 'already_running' ? 'Analiz zaten çalışıyor...' : 'Analiz başlatıldı (hacim + trend)...', 'info');
+            } else {
+                addToast('Analiz başlatılamadı', 'error');
+                setVolumeLoading(false);
+                setTrendLoading(false);
+            }
+        } catch (err) {
+            console.error('Failed to start combined analysis:', err);
+            addToast('Bağlantı hatası', 'error');
+            setVolumeLoading(false);
+            setTrendLoading(false);
+        }
+    }, [volumeLoading, trendLoading, addToast, isSimulationMode]);
+
     // Sorting handlers
     const handleVolumeSort = (field) => {
         if (volumeSortBy === field) {
@@ -421,6 +459,8 @@ export default function EODAnalysisPanel({ strategies }) {
 
     const trendCount = trendResults.filter((r) => r.type === 'trend' || r.type === 'both').length;
     const reversalCount = trendResults.filter((r) => r.type === 'reversal' || r.type === 'both').length;
+    // Tickers also surfaced by today's volume analysis (for the 🔥 confirmation badge)
+    const volumeTickerSet = new Set(volumeResults.map((r) => r.ticker));
 
     const TYPE_BADGE = {
         trend: { label: '📈 Trend', cls: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
@@ -560,40 +600,39 @@ export default function EODAnalysisPanel({ strategies }) {
                 </div>
             </div>
 
-            {/* Tab Buttons */}
-            <div className="flex gap-2 mb-4 border-b border-gray-800 pb-2">
+            {/* Single combined run button (volume + trend together) */}
+            <div className="flex items-center gap-3 mb-4 border-b border-gray-800 pb-3">
                 <button
-                    onClick={() => setActiveTab('volume')}
-                    className={`px-4 py-2 rounded-t-lg font-medium transition-colors ${activeTab === 'volume'
-                        ? 'bg-purple-600 text-white'
-                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                    onClick={runAllAnalysis}
+                    disabled={volumeLoading || trendLoading}
+                    className={`px-5 py-2.5 font-bold rounded-lg transition-all flex items-center gap-2 ${(volumeLoading || trendLoading)
+                        ? 'bg-yellow-600 text-white cursor-wait'
+                        : 'bg-green-600 hover:bg-green-500 text-white'
                         }`}
                 >
-                    📊 Hacim Analizi
-                    {volumeResults.length > 0 && (
-                        <span className="ml-2 text-xs bg-purple-800 px-2 py-0.5 rounded">
-                            {volumeResults.length}
-                        </span>
+                    {(volumeLoading || trendLoading) ? (
+                        <><span className="animate-spin">🔄</span> Taranıyor...</>
+                    ) : (
+                        <>🎯 Analiz Et (Hacim + Trend)</>
                     )}
                 </button>
-                <button
-                    onClick={() => setActiveTab('trend')}
-                    className={`px-4 py-2 rounded-t-lg font-medium transition-colors ${activeTab === 'trend'
-                        ? 'bg-green-600 text-white'
-                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                        }`}
-                >
-                    🎯 Trend Tahmini
-                    {trendResults.length > 0 && (
-                        <span className="ml-2 text-xs bg-green-800 px-2 py-0.5 rounded">
-                            {trendResults.length}
-                        </span>
-                    )}
-                </button>
+                {(volumeLoading || trendLoading) && currentProgress && currentProgress.status === 'running' && (
+                    <button
+                        onClick={handleCancelAnalysis}
+                        className="px-3 py-2 font-bold rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm"
+                    >
+                        ❌ İptal
+                    </button>
+                )}
+                {trendResults.length > 0 && (
+                    <span className="text-xs text-gray-400 ml-auto">
+                        Trend: {trendResults.length} · Hacim: {volumeResults.length}
+                    </span>
+                )}
             </div>
 
-            {/* Volume Analysis Tab */}
-            {activeTab === 'volume' && (
+            {/* Volume Analysis (always shown) */}
+            {(
                 <div>
                     {/* Filters */}
                     <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-3 sm:p-4 mb-4">
@@ -630,29 +669,6 @@ export default function EODAnalysisPanel({ strategies }) {
                                     />
                                 </div>
                             </div>
-                            <button
-                                onClick={runVolumeAnalysis}
-                                disabled={volumeLoading}
-                                className={`px-4 py-2 font-bold rounded-lg transition-all flex items-center gap-2 text-sm whitespace-nowrap ${volumeLoading
-                                    ? 'bg-yellow-600 text-white cursor-wait'
-                                    : 'bg-purple-600 hover:bg-purple-500 text-white'
-                                    }`}
-                            >
-                                {volumeLoading ? (
-                                    <><span className="animate-spin">🔄</span> Taranıyor...</>
-                                ) : (
-                                    <>🔍 Analiz Et</>
-                                )}
-                            </button>
-                            {/* Cancel button */}
-                            {volumeLoading && currentProgress && currentProgress.status === 'running' && (
-                                <button
-                                    onClick={handleCancelAnalysis}
-                                    className="px-3 py-2 font-bold rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm whitespace-nowrap"
-                                >
-                                    ❌ İptal
-                                </button>
-                            )}
                         </div>
 
                         {/* Progress Bar */}
@@ -761,8 +777,8 @@ export default function EODAnalysisPanel({ strategies }) {
                 </div>
             )}
 
-            {/* Trend Analysis Tab */}
-            {activeTab === 'trend' && (
+            {/* Trend Analysis (always shown) */}
+            {(
                 <div>
                     {/* Filters */}
                     <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-3 sm:p-4 mb-4">
@@ -790,29 +806,6 @@ export default function EODAnalysisPanel({ strategies }) {
                                     />
                                 </div>
                             </div>
-                            <button
-                                onClick={runTrendAnalysis}
-                                disabled={trendLoading}
-                                className={`px-4 py-2 font-bold rounded-lg transition-all flex items-center gap-2 text-sm whitespace-nowrap ${trendLoading
-                                    ? 'bg-yellow-600 text-white cursor-wait'
-                                    : 'bg-green-600 hover:bg-green-500 text-white'
-                                    }`}
-                            >
-                                {trendLoading ? (
-                                    <><span className="animate-spin">🔄</span> Taranıyor...</>
-                                ) : (
-                                    <>🎯 Trend Analizi</>
-                                )}
-                            </button>
-                            {/* Cancel button */}
-                            {trendLoading && currentProgress && currentProgress.status === 'running' && (
-                                <button
-                                    onClick={handleCancelAnalysis}
-                                    className="px-3 py-2 font-bold rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm whitespace-nowrap"
-                                >
-                                    ❌ İptal
-                                </button>
-                            )}
                         </div>
 
                         {/* Progress Bar */}
@@ -934,14 +927,19 @@ export default function EODAnalysisPanel({ strategies }) {
                                                         {result.symbol}
                                                         <span className="text-xs text-gray-500">📊</span>
                                                     </button>
-                                                    {result.type && TYPE_BADGE[result.type] && (
-                                                        <div className="mt-1">
+                                                    <div className="mt-1 flex flex-wrap gap-1">
+                                                        {result.type && TYPE_BADGE[result.type] && (
                                                             <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold border ${TYPE_BADGE[result.type].cls}`}>
                                                                 {TYPE_BADGE[result.type].label}
                                                                 {typeof result.reversal_score === 'number' && (result.type === 'reversal' || result.type === 'both') ? ` ${result.reversal_score}` : ''}
                                                             </span>
-                                                        </div>
-                                                    )}
+                                                        )}
+                                                        {volumeTickerSet.has(result.ticker) && (
+                                                            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold border bg-red-500/20 text-red-300 border-red-500/40" title="Hacim analizinde de çıktı">
+                                                                🔥 Hacim
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </td>
                                                 <td className="px-3 py-2 text-center">
                                                     <div className="flex items-center justify-center gap-2">

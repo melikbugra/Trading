@@ -153,8 +153,8 @@ class EODAnalysisService:
                 # Wait until scheduled time
                 await asyncio.sleep(wait_seconds)
 
-                # Run the analysis
-                await self.run_analysis()
+                # Run both analyses (volume + trend) for next-day prep
+                await self.run_combined()
 
             except asyncio.CancelledError:
                 break
@@ -174,6 +174,24 @@ class EODAnalysisService:
         self._analysis_task = asyncio.create_task(
             self.run_analysis(send_email=send_email)
         )
+        return {"status": "started"}
+
+    async def run_combined(self):
+        """
+        Run volume analysis then trend analysis sequentially (they share the
+        is_analyzing lock so cannot run concurrently). Telegram summary is sent
+        once, from the trend step.
+        """
+        await self.run_analysis(send_email=False)
+        await self.run_trend_analysis(send_email=True)
+
+    async def start_combined(self):
+        """Start the combined (volume + trend) analysis in the background."""
+        if self.is_analyzing:
+            return {"status": "already_running"}
+        if self._analysis_task and not self._analysis_task.done():
+            self._analysis_task.cancel()
+        self._analysis_task = asyncio.create_task(self.run_combined())
         return {"status": "started"}
 
     async def run_analysis(self, send_email: bool = True) -> Dict:

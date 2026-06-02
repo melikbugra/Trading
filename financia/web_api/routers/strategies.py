@@ -1111,6 +1111,15 @@ async def get_trend_results():
     }
 
 
+@router.post("/eod-analysis/run-all")
+async def run_all_eod_analysis():
+    """Run both volume and trend analyses sequentially (single button)."""
+    from financia.eod_service import eod_service
+
+    result = await eod_service.start_combined()
+    return {"status": result["status"]}
+
+
 @router.post("/eod-analysis/apply-to-watchlist")
 async def apply_eod_to_watchlist(db: Session = Depends(get_db)):
     """
@@ -1127,22 +1136,26 @@ async def apply_eod_to_watchlist(db: Session = Depends(get_db)):
         )
 
     top_n = int(eod_service.trend_filters.get("top_n", 20))
-    trend_tickers = [
-        r["ticker"]
-        for r in sorted(
-            (r for r in results if r.get("type") in ("trend", "both")),
-            key=lambda x: x.get("trend_score", 0),
-            reverse=True,
-        )[:top_n]
-    ]
-    reversal_tickers = [
-        r["ticker"]
-        for r in sorted(
-            (r for r in results if r.get("type") in ("reversal", "both")),
-            key=lambda x: x.get("reversal_score", 0),
-            reverse=True,
-        )[:top_n]
-    ]
+
+    # Volume-confirmed tickers (also surfaced by today's volume analysis)
+    volume_set = {r.get("ticker") for r in (eod_service.last_results or [])}
+
+    def pick(candidates, score_key):
+        """Sort by score; volume-confirmed first, then fill with the rest, cap top_n."""
+        ordered = sorted(
+            candidates, key=lambda x: x.get(score_key, 0), reverse=True
+        )
+        confirmed = [r["ticker"] for r in ordered if r.get("ticker") in volume_set]
+        rest = [r["ticker"] for r in ordered if r.get("ticker") not in volume_set]
+        return (confirmed + rest)[:top_n], confirmed
+
+    trend_tickers, trend_confirmed = pick(
+        [r for r in results if r.get("type") in ("trend", "both")], "trend_score"
+    )
+    reversal_tickers, reversal_confirmed = pick(
+        [r for r in results if r.get("type") in ("reversal", "both")],
+        "reversal_score",
+    )
 
     active = db.query(Strategy).filter(Strategy.is_active == True).all()
     if not active:
@@ -1180,5 +1193,7 @@ async def apply_eod_to_watchlist(db: Session = Depends(get_db)):
         "status": "applied",
         "trend_count": len(trend_tickers),
         "reversal_count": len(reversal_tickers),
+        "trend_confirmed": len([t for t in trend_tickers if t in volume_set]),
+        "reversal_confirmed": len([t for t in reversal_tickers if t in volume_set]),
         "strategies": summary,
     }
