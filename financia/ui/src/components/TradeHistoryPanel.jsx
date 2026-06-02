@@ -82,7 +82,7 @@ export default function TradeHistoryPanel({ strategies }) {
         <div>
             {/* Stats Cards */}
             {stats && (
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-4 mb-4 sm:mb-6">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-4 mb-4 sm:mb-6">
                     <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-2 sm:p-4 text-center">
                         <div className="text-lg sm:text-2xl font-bold text-white">{stats.total_trades}</div>
                         <div className="text-gray-500 text-xs sm:text-sm">İşlem</div>
@@ -102,6 +102,12 @@ export default function TradeHistoryPanel({ strategies }) {
                     <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-2 sm:p-4 text-center">
                         <div className="text-lg sm:text-2xl font-bold text-purple-400">{stats.total_lots || 0}</div>
                         <div className="text-gray-500 text-xs sm:text-sm">Lot</div>
+                    </div>
+                    <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-2 sm:p-4 text-center">
+                        <div className={`text-lg sm:text-2xl font-bold ${(stats.avg_profit || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {(stats.avg_profit || 0) >= 0 ? '+' : ''}{stats.avg_profit || 0}%
+                        </div>
+                        <div className="text-gray-500 text-xs sm:text-sm">Ort. Kâr</div>
                     </div>
                     <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-2 sm:p-4 text-center">
                         <div className="text-lg sm:text-2xl font-bold text-blue-400">{stats.avg_rr}R</div>

@@ -24,9 +24,11 @@ const SimulationBanner = () => {
     const dateStr = currentTime?.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const timeStr = currentTime?.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 
-    // Backtest progress bar
+    // Backtest progress bar (use smooth intra-day percent from backend; fallback to day ratio)
     const progressPercent = backtestProgress
-        ? Math.round((backtestProgress.current_day / backtestProgress.total_days) * 100)
+        ? (typeof backtestProgress.progress_percent === 'number'
+            ? backtestProgress.progress_percent
+            : Math.round((backtestProgress.current_day / backtestProgress.total_days) * 100))
         : 0;
 
     return (

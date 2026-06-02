@@ -52,7 +52,7 @@ export default function ScannerControl({ config, onUpdate, onScanNow, isScanning
                         <span className="text-purple-300 font-medium text-sm sm:text-base">
                             Simülasyon Modu Aktif
                         </span>
-                        {isScanningNow && !isEodRunning && (
+                        {isScanningNow && !isEodRunning && !simStatus.is_backtest && (
                             <div className="flex items-center gap-2">
                                 <span className="bg-orange-800/50 px-2 py-1 rounded text-orange-200 text-xs sm:text-sm flex items-center gap-1">
                                     <span className="animate-spin">🔄</span> Taranıyor...
