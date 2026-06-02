@@ -42,8 +42,11 @@ class EODAnalysisService:
         }
         # Trend prediction filters
         self.trend_filters = {
-            "min_trend_score": 60,  # Minimum trend score (0-100)
-            "min_volume_tl": 50_000_000,  # Minimum daily volume in TL
+            "min_trend_score": 60,  # Backward-compat alias (= trend_min)
+            "trend_min": 60,  # Min TREND (continuation) score 0-100
+            "reversal_min": 55,  # Min REVERSAL (bounce) score 0-100
+            "min_volume_tl": 75_000_000,  # Min daily volume in TL (liquidity)
+            "top_n": 20,  # Per-category cap when applying to watchlists
         }
         # Schedule time (18:15 Turkey time)
         self.run_hour = 18
@@ -524,67 +527,34 @@ Bu rapor otomatik olarak oluşturulmuştur.
                     if volume_tl < self.trend_filters.get("min_volume_tl", 0):
                         return None
 
-                    scores = {}  # Individual indicator scores
-
-                    # === 1. RSI (14) - Momentum ===
+                    # ===== Indicators =====
+                    # RSI (14) — Wilder smoothing (RMA), matches the rest of the project
                     delta = close.diff()
-                    gain = delta.where(delta > 0, 0.0).rolling(14).mean()
-                    loss = (-delta).where(delta < 0, 0.0).rolling(14).mean()
-                    rs = gain / loss
+                    gain = delta.where(delta > 0, 0.0)
+                    loss = (-delta).where(delta < 0, 0.0)
+                    avg_gain = gain.ewm(alpha=1 / 14, adjust=False).mean()
+                    avg_loss = loss.ewm(alpha=1 / 14, adjust=False).mean()
+                    rs = avg_gain / avg_loss
                     rsi = 100 - (100 / (1 + rs))
                     current_rsi = rsi.iloc[-1]
 
-                    # RSI score: 30-50 = buying opportunity (bullish), >70 = overbought
-                    if 30 <= current_rsi <= 50:
-                        scores["rsi"] = 15  # Ideal buying zone
-                    elif 50 < current_rsi <= 70:
-                        scores["rsi"] = 10  # Still bullish
-                    elif current_rsi < 30:
-                        scores["rsi"] = 5  # Oversold, risky reversal
-                    else:
-                        scores["rsi"] = 0  # Overbought
-
-                    # === 2. MACD - Trend Direction ===
-                    ema12 = close.ewm(span=12, adjust=False).mean()
-                    ema26 = close.ewm(span=26, adjust=False).mean()
-                    macd = ema12 - ema26
+                    # MACD (12/26/9)
+                    macd = (
+                        close.ewm(span=12, adjust=False).mean()
+                        - close.ewm(span=26, adjust=False).mean()
+                    )
                     signal = macd.ewm(span=9, adjust=False).mean()
                     histogram = macd - signal
+                    macd_current, macd_prev = macd.iloc[-1], macd.iloc[-2]
+                    hist_current, hist_prev = histogram.iloc[-1], histogram.iloc[-2]
 
-                    macd_current = macd.iloc[-1]
-                    macd_prev = macd.iloc[-2]
-                    hist_current = histogram.iloc[-1]
-                    hist_prev = histogram.iloc[-2]
-
-                    # MACD score: Bullish cross or increasing histogram
-                    if macd_current > 0 and hist_current > hist_prev:
-                        scores["macd"] = 15  # Strong bullish
-                    elif macd_current > macd_prev:
-                        scores["macd"] = 10  # MACD rising
-                    elif hist_current > hist_prev:
-                        scores["macd"] = 5  # Histogram improving
-                    else:
-                        scores["macd"] = 0
-
-                    # === 3. EMA Cross (20/50) - Trend ===
+                    # EMA 20/50
                     ema20 = close.ewm(span=20, adjust=False).mean()
                     ema50 = close.ewm(span=50, adjust=False).mean()
+                    ema20_c, ema50_c = ema20.iloc[-1], ema50.iloc[-1]
+                    ema20_p, ema50_p = ema20.iloc[-2], ema50.iloc[-2]
 
-                    ema20_current = ema20.iloc[-1]
-                    ema50_current = ema50.iloc[-1]
-                    ema20_prev = ema20.iloc[-2]
-                    ema50_prev = ema50.iloc[-2]
-
-                    # Golden cross detection
-                    if ema20_current > ema50_current:
-                        if ema20_prev <= ema50_prev:
-                            scores["ema_cross"] = 15  # Fresh golden cross
-                        else:
-                            scores["ema_cross"] = 10  # Already bullish
-                    else:
-                        scores["ema_cross"] = 0
-
-                    # === 4. ADX - Trend Strength ===
+                    # ADX / DMI (keep index aligned, otherwise division -> NaN)
                     tr = np.maximum(
                         high - low,
                         np.maximum(
@@ -592,129 +562,132 @@ Bu rapor otomatik olarak oluşturulmuştur.
                         ),
                     )
                     atr = tr.rolling(14).mean()
-
-                    plus_dm = np.where(
-                        (high.diff() > low.diff().abs()) & (high.diff() > 0),
-                        high.diff(),
-                        0,
+                    plus_dm = pd.Series(
+                        np.where(
+                            (high.diff() > low.diff().abs()) & (high.diff() > 0),
+                            high.diff(),
+                            0,
+                        ),
+                        index=close.index,
                     )
-                    minus_dm = np.where(
-                        (low.diff().abs() > high.diff()) & (low.diff() < 0),
-                        low.diff().abs(),
-                        0,
+                    minus_dm = pd.Series(
+                        np.where(
+                            (low.diff().abs() > high.diff()) & (low.diff() < 0),
+                            low.diff().abs(),
+                            0,
+                        ),
+                        index=close.index,
                     )
-
-                    plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / atr)
-                    minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / atr)
-
+                    plus_di = 100 * (plus_dm.rolling(14).mean() / atr)
+                    minus_di = 100 * (minus_dm.rolling(14).mean() / atr)
                     dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
                     adx = dx.rolling(14).mean()
-
-                    adx_current = adx.iloc[-1] if not np.isnan(adx.iloc[-1]) else 0
-                    plus_di_current = (
-                        plus_di.iloc[-1] if not np.isnan(plus_di.iloc[-1]) else 0
-                    )
-                    minus_di_current = (
+                    adx_c = adx.iloc[-1] if not np.isnan(adx.iloc[-1]) else 0
+                    plus_di_c = plus_di.iloc[-1] if not np.isnan(plus_di.iloc[-1]) else 0
+                    minus_di_c = (
                         minus_di.iloc[-1] if not np.isnan(minus_di.iloc[-1]) else 0
                     )
 
-                    # ADX score: Strong trend + bullish DI
-                    if adx_current > 25 and plus_di_current > minus_di_current:
-                        scores["adx"] = 10  # Strong bullish trend
-                    elif adx_current > 20:
-                        scores["adx"] = 5  # Developing trend
-                    else:
-                        scores["adx"] = 0
-
-                    # === 5. Volume Trend ===
+                    # Volume trend
                     vol_sma5 = volume.rolling(5).mean()
                     vol_sma20 = volume.rolling(20).mean()
-
                     vol_ratio = (
                         vol_sma5.iloc[-1] / vol_sma20.iloc[-1]
                         if vol_sma20.iloc[-1] > 0
                         else 1
                     )
-
-                    # Volume increasing with price = bullish
                     price_up = close.iloc[-1] > close.iloc[-5]
-                    if vol_ratio > 1.5 and price_up:
-                        scores["volume"] = 15  # Strong volume with price increase
-                    elif vol_ratio > 1.2 and price_up:
-                        scores["volume"] = 10
-                    elif vol_ratio > 1.0:
-                        scores["volume"] = 5
-                    else:
-                        scores["volume"] = 0
 
-                    # === 6. Bollinger Bands Position ===
+                    # Bollinger position (0 = lower band, 1 = upper band)
                     sma20 = close.rolling(20).mean()
                     std20 = close.rolling(20).std()
                     upper_band = sma20 + (2 * std20)
                     lower_band = sma20 - (2 * std20)
-
                     bb_position = (current_close - lower_band.iloc[-1]) / (
                         upper_band.iloc[-1] - lower_band.iloc[-1]
                     )
 
-                    # Near lower band = potential bounce
-                    if bb_position < 0.2:
-                        scores["bb"] = 10  # Near lower band, potential bounce
-                    elif 0.2 <= bb_position < 0.5:
-                        scores["bb"] = 8  # Below middle, room to grow
-                    elif 0.5 <= bb_position < 0.8:
-                        scores["bb"] = 5  # Above middle
-                    else:
-                        scores["bb"] = 0  # Near upper band, limited upside
-
-                    # === 7. Stochastic (14,3,3) ===
+                    # Stochastic %K (14)
                     lowest_low = low.rolling(14).min()
                     highest_high = high.rolling(14).max()
                     stoch_k = 100 * (close - lowest_low) / (highest_high - lowest_low)
-                    stoch_d = stoch_k.rolling(3).mean()
+                    stoch_k_c, stoch_k_p = stoch_k.iloc[-1], stoch_k.iloc[-2]
 
-                    stoch_k_current = stoch_k.iloc[-1]
-                    stoch_k_prev = stoch_k.iloc[-2]
+                    # EMA200 (long-term trend gate)
+                    ema200 = close.ewm(
+                        span=200 if len(close) >= 200 else len(close), adjust=False
+                    ).mean()
+                    ema200_c = ema200.iloc[-1]
+                    above_ema200 = current_close > ema200_c
+                    price_vs_ema200 = (current_close - ema200_c) / ema200_c * 100
 
-                    # Stochastic crossing up from oversold
-                    if stoch_k_current < 30:
-                        scores["stoch"] = 10  # Oversold, ready to bounce
-                    elif stoch_k_current > stoch_k_prev and stoch_k_current < 50:
-                        scores["stoch"] = 8  # Rising from low
-                    elif stoch_k_current < 80:
-                        scores["stoch"] = 5
+                    # ===== TREND (continuation) score, max 100 =====
+                    t = 0
+                    if macd_current > 0 and hist_current > hist_prev:
+                        t += 20
+                    elif macd_current > macd_prev:
+                        t += 14
+                    elif hist_current > hist_prev:
+                        t += 6
+                    if ema20_c > ema50_c:
+                        t += 20 if ema20_p <= ema50_p else 14
+                    if adx_c > 25 and plus_di_c > minus_di_c:
+                        t += 15
+                    elif adx_c > 20:
+                        t += 8
+                    if vol_ratio > 1.5 and price_up:
+                        t += 15
+                    elif vol_ratio > 1.2 and price_up:
+                        t += 10
+                    elif vol_ratio > 1.0:
+                        t += 5
+                    if above_ema200:
+                        t += 15 if price_vs_ema200 <= 5 else 10
+                    if 50 <= current_rsi <= 70:
+                        t += 15
+                    elif 40 <= current_rsi < 50:
+                        t += 8
+                    trend_score = int(t)
+
+                    # ===== REVERSAL (bounce) score, max 100 — GATE: only above EMA200 =====
+                    r = 0
+                    if above_ema200:
+                        if current_rsi < 30:
+                            r += 40
+                        elif current_rsi < 40:
+                            r += 25
+                        elif current_rsi < 45:
+                            r += 10
+                        if bb_position < 0.15:
+                            r += 25
+                        elif bb_position < 0.30:
+                            r += 15
+                        elif bb_position < 0.45:
+                            r += 5
+                        if stoch_k_c < 20:
+                            r += 20
+                        elif stoch_k_c > stoch_k_p and stoch_k_c < 30:
+                            r += 14
+                        elif stoch_k_c < 50:
+                            r += 6
+                        if hist_current > hist_prev:
+                            r += 15
+                    reversal_score = int(r)
+
+                    # ===== Classify =====
+                    trend_min = self.trend_filters.get("trend_min", 60)
+                    reversal_min = self.trend_filters.get("reversal_min", 55)
+                    if trend_score >= trend_min and reversal_score >= 50:
+                        ttype = "both"
+                    elif trend_score >= trend_min:
+                        ttype = "trend"
+                    elif reversal_score >= reversal_min and above_ema200:
+                        ttype = "reversal"
                     else:
-                        scores["stoch"] = 0  # Overbought
+                        ttype = "neutral"
 
-                    # === 8. Price vs EMA200 ===
-                    ema200 = (
-                        close.ewm(span=200, adjust=False).mean()
-                        if len(close) >= 200
-                        else close.ewm(span=len(close), adjust=False).mean()
-                    )
-
-                    price_vs_ema200 = (
-                        (current_close - ema200.iloc[-1]) / ema200.iloc[-1] * 100
-                    )
-
-                    if current_close > ema200.iloc[-1]:
-                        if price_vs_ema200 < 5:
-                            scores["ema200"] = 10  # Just above EMA200, good support
-                        else:
-                            scores["ema200"] = 5  # Above EMA200
-                    else:
-                        scores["ema200"] = 0  # Below EMA200
-
-                    # === Calculate Total Trend Score ===
-                    max_possible = 15 + 15 + 15 + 10 + 15 + 10 + 10 + 10  # 100
-                    total_score = sum(scores.values())
-                    trend_score = int((total_score / max_possible) * 100)
-
-                    # Get previous day change
                     prev_close = close.iloc[-2]
                     daily_change = ((current_close - prev_close) / prev_close) * 100
-
-                    # Calculate 5-day momentum
                     five_day_change = (
                         ((current_close - close.iloc[-6]) / close.iloc[-6]) * 100
                         if len(close) > 5
@@ -728,16 +701,18 @@ Bu rapor otomatik olarak oluşturulmuştur.
                         "change_percent": round(daily_change, 2),
                         "five_day_change": round(five_day_change, 2),
                         "trend_score": trend_score,
+                        "reversal_score": reversal_score,
+                        "type": ttype,
                         "volume_tl": round(volume_tl, 0),
                         "rsi": round(current_rsi, 1),
-                        "adx": round(adx_current, 1),
+                        "adx": round(adx_c, 1),
                         "bb_position": round(bb_position * 100, 0),
-                        "scores": scores,
+                        "scores": {"trend": trend_score, "reversal": reversal_score},
                         "direction": "bullish"
-                        if trend_score >= 60
-                        else "neutral"
-                        if trend_score >= 40
-                        else "bearish",
+                        if ttype in ("trend", "both")
+                        else "reversal"
+                        if ttype == "reversal"
+                        else "neutral",
                     }
                 except Exception as e:
                     return {"ticker": ticker, "error": str(e)}
@@ -753,13 +728,16 @@ Bu rapor otomatik olarak oluşturulmuştur.
                     if result:
                         if "error" in result:
                             errors.append(result)
-                        elif result.get("trend_score", 0) >= self.trend_filters.get(
-                            "min_trend_score", 0
-                        ):
+                        elif result.get("type", "neutral") != "neutral":
                             results.append(result)
 
-            # Sort by trend score descending
-            results.sort(key=lambda x: x["trend_score"], reverse=True)
+            # Sort by the best of the two scores (descending)
+            results.sort(
+                key=lambda x: max(
+                    x.get("trend_score", 0), x.get("reversal_score", 0)
+                ),
+                reverse=True,
+            )
 
             self.last_run_at = now_turkey()
             self.last_trend_results = results
@@ -803,56 +781,45 @@ Bu rapor otomatik olarak oluşturulmuştur.
         now = now_turkey()
         date_str = now.strftime("%d.%m.%Y")
 
-        subject = f"🎯 BIST Trend Tahmin Raporu - {date_str} ({len(results)} aday)"
+        trend_list = [s for s in results if s.get("type") in ("trend", "both")]
+        reversal_list = [s for s in results if s.get("type") in ("reversal", "both")]
+        trend_list.sort(key=lambda x: x.get("trend_score", 0), reverse=True)
+        reversal_list.sort(key=lambda x: x.get("reversal_score", 0), reverse=True)
 
-        body = f"""
-BIST TREND TAHMİN RAPORU - YARIN İÇİN ADAYLAR
-{"=" * 50}
-Tarih: {date_str}
-Saat: {now.strftime("%H:%M")}
-Taranan: {total_scanned} hisse
-Bulunan: {len(results)} aday (skor >= {self.trend_filters.get("min_trend_score", 60)})
+        subject = (
+            f"🎯 BIST Yarın İçin Adaylar - {date_str} "
+            f"({len(trend_list)} trend / {len(reversal_list)} toparlanma)"
+        )
 
-{"=" * 50}
-EN YÜKSEK TREND SKORLU HİSSELER
-{"=" * 50}
-"""
-
-        # Top 15 by trend score
-        for i, stock in enumerate(results[:15], 1):
-            direction_emoji = (
-                "🟢"
-                if stock["direction"] == "bullish"
-                else "🟡"
-                if stock["direction"] == "neutral"
-                else "🔴"
+        def fmt(stock, score_key, label):
+            return (
+                f"{stock['symbol']} — {label} {stock[score_key]}/100 | "
+                f"₺{stock['close']:.2f} ({stock['change_percent']:+.2f}%) | "
+                f"RSI {stock['rsi']:.0f} ADX {stock['adx']:.0f} BB %{stock['bb_position']:.0f}"
             )
-            body += f"""
-{i}. {stock["symbol"]} - {direction_emoji} Skor: {stock["trend_score"]}/100
-   Kapanış: ₺{stock["close"]:.2f} ({stock["change_percent"]:+.2f}%)
-   5 Günlük: {stock["five_day_change"]:+.2f}%
-   RSI: {stock["rsi"]:.0f} | ADX: {stock["adx"]:.0f} | BB: %{stock["bb_position"]:.0f}
-"""
 
-        body += f"""
-{"=" * 50}
-SKOR BİLEŞENLERİ
-{"=" * 50}
-- RSI (30-50 ideal): Momentum göstergesi
-- MACD: Trend yönü ve gücü
-- EMA 20/50 Cross: Kısa vadeli trend
-- ADX: Trend gücü (>25 güçlü trend)
-- Hacim: Artan hacim + fiyat artışı
-- Bollinger Bands: Fiyat pozisyonu
-- Stochastic: Aşırı alım/satım
-- EMA200: Uzun vadeli trend
+        body = (
+            f"BIST YARIN İÇİN ADAYLAR — {date_str} {now.strftime('%H:%M')}\n"
+            f"Taranan: {total_scanned} hisse\n\n"
+            f"📈 TREND (devam/kırılım) — {len(trend_list)} hisse\n"
+        )
+        if trend_list:
+            for i, s in enumerate(trend_list[:15], 1):
+                body += f"{i}. {fmt(s, 'trend_score', 'Trend')}\n"
+        else:
+            body += "   (yok)\n"
 
-{"=" * 50}
-NOT: Bu tahminler sadece teknik analize dayanmaktadır.
-Yatırım kararı vermeden önce kendi araştırmanızı yapın.
+        body += f"\n🔄 TOPARLANMA (dip dönüşü, EMA200 üstü) — {len(reversal_list)} hisse\n"
+        if reversal_list:
+            for i, s in enumerate(reversal_list[:15], 1):
+                body += f"{i}. {fmt(s, 'reversal_score', 'Bounce')}\n"
+        else:
+            body += "   (yok)\n"
 
-Dashboard: http://localhost:5173
-"""
+        body += (
+            "\nNOT: Sadece teknik analiz. Trend listesi → kırılım stratejileri, "
+            "toparlanma listesi → VWAP için adaydır. Kendi araştırmanı yap."
+        )
 
         TelegramService.send_message(subject, body)
         print(f"[EOD-Trend] Telegram summary sent")

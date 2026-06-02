@@ -478,7 +478,10 @@ class SimulationScanner:
             "trailing_stop_current",
             "entry_zone",
         ):
-            if k in old and k not in merged:
+            # OLD always wins: freeze the plan from creation. A later re-trigger
+            # must not overwrite an open position's TP1/trailing with a fresh,
+            # higher-priced plan (which would push TP1 above the take-profit).
+            if k in old:
                 merged[k] = old[k]
         return merged
 

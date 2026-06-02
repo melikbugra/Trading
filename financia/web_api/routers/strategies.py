@@ -1063,7 +1063,7 @@ async def get_eod_status():
 @router.post("/trend-analysis/start")
 async def start_trend_analysis(
     min_trend_score: int = 60,
-    min_volume_tl: float = 50_000_000,
+    min_volume_tl: float = 75_000_000,
 ):
     """
     Start trend prediction analysis asynchronously (non-blocking).
@@ -1076,11 +1076,14 @@ async def start_trend_analysis(
     """
     from financia.eod_service import eod_service
 
-    # Update trend filters
-    eod_service.trend_filters = {
-        "min_trend_score": min_trend_score,
-        "min_volume_tl": min_volume_tl,
-    }
+    # Merge (don't clobber trend_min / reversal_min / top_n defaults)
+    eod_service.trend_filters.update(
+        {
+            "min_trend_score": min_trend_score,
+            "trend_min": min_trend_score,
+            "min_volume_tl": min_volume_tl,
+        }
+    )
 
     # Start analysis in background
     result = await eod_service.start_trend_analysis()
@@ -1105,4 +1108,77 @@ async def get_trend_results():
         "total_scanned": eod_service.total_scanned,
         "results_count": len(eod_service.last_trend_results),
         "results": eod_service.last_trend_results,
+    }
+
+
+@router.post("/eod-analysis/apply-to-watchlist")
+async def apply_eod_to_watchlist(db: Session = Depends(get_db)):
+    """
+    Replace every active strategy's watchlist with the latest EOD analysis
+    results, routed by type: trend strategies get the TREND list, reversal
+    strategies (e.g. VWAP) get the REVERSAL list. Top-N per category.
+    """
+    from financia.eod_service import eod_service
+
+    results = eod_service.last_trend_results or []
+    if not results:
+        raise HTTPException(
+            400, "Önce EOD trend analizi çalıştırın (kayıtlı sonuç yok)"
+        )
+
+    top_n = int(eod_service.trend_filters.get("top_n", 20))
+    trend_tickers = [
+        r["ticker"]
+        for r in sorted(
+            (r for r in results if r.get("type") in ("trend", "both")),
+            key=lambda x: x.get("trend_score", 0),
+            reverse=True,
+        )[:top_n]
+    ]
+    reversal_tickers = [
+        r["ticker"]
+        for r in sorted(
+            (r for r in results if r.get("type") in ("reversal", "both")),
+            key=lambda x: x.get("reversal_score", 0),
+            reverse=True,
+        )[:top_n]
+    ]
+
+    active = db.query(Strategy).filter(Strategy.is_active == True).all()
+    if not active:
+        raise HTTPException(400, "Aktif strateji yok")
+
+    summary = []
+    for strat in active:
+        cls = get_strategy_class(strat.strategy_type)
+        category = getattr(cls, "category", "trend") if cls else "trend"
+        tickers = trend_tickers if category == "trend" else reversal_tickers
+
+        # Clear this strategy's watchlist, then repopulate from the routed list
+        db.query(WatchlistItem).filter(
+            WatchlistItem.strategy_id == strat.id
+        ).delete()
+        for tk in tickers:
+            db.add(
+                WatchlistItem(
+                    ticker=tk,
+                    market="bist100",
+                    strategy_id=strat.id,
+                    is_active=True,
+                )
+            )
+        summary.append(
+            {
+                "strategy": strat.name,
+                "category": category,
+                "added": len(tickers),
+            }
+        )
+
+    db.commit()
+    return {
+        "status": "applied",
+        "trend_count": len(trend_tickers),
+        "reversal_count": len(reversal_tickers),
+        "strategies": summary,
     }

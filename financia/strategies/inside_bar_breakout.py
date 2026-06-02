@@ -53,6 +53,7 @@ class InsideBarBreakoutStrategy(BaseStrategy):
 
     name = "Inside Bar Breakout"
     description = "Inside Bar sıkışma paterni tespit edildiğinde kırılım yönünde işlem. Gün içi 1 saatlik mumlar için optimize."
+    category = "trend"
 
     default_params = {
         "ema_period": 50,  # 0 = trend filtresi kapalı

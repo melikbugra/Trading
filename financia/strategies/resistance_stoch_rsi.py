@@ -39,6 +39,7 @@ class ResistanceBreakoutStrategy(BaseStrategy):
 
     name = "Direnç Kırılımı + Stochastic RSI"
     description = "EMA200 üstünde, direnç kırılımı sonrası StochRSI momentum teyidi"
+    category = "trend"
 
     default_params = {
         "ema_period": 200,

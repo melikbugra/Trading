@@ -32,6 +32,8 @@ export default function EODAnalysisPanel({ strategies }) {
     const [trendStats, setTrendStats] = useState({ count: 0, total_scanned: 0 });
     const [trendSortBy, setTrendSortBy] = useState('trend_score');
     const [trendSortDir, setTrendSortDir] = useState('desc');
+    const [trendTypeFilter, setTrendTypeFilter] = useState('all'); // all | trend | reversal
+    const [applyingWatchlist, setApplyingWatchlist] = useState(false);
     const [trendFilters, setTrendFilters] = useState({
         min_trend_score: 60,
         min_volume_tl: 50000000,
@@ -403,11 +405,47 @@ export default function EODAnalysisPanel({ strategies }) {
         return volumeSortDir === 'desc' ? bVal - aVal : aVal - bVal;
     });
 
-    const sortedTrendResults = [...trendResults].sort((a, b) => {
-        const aVal = a[trendSortBy];
-        const bVal = b[trendSortBy];
-        return trendSortDir === 'desc' ? bVal - aVal : aVal - bVal;
-    });
+    const matchesTypeFilter = (r) => {
+        if (trendTypeFilter === 'all') return true;
+        if (trendTypeFilter === 'trend') return r.type === 'trend' || r.type === 'both';
+        return r.type === 'reversal' || r.type === 'both';
+    };
+
+    const sortedTrendResults = [...trendResults]
+        .filter(matchesTypeFilter)
+        .sort((a, b) => {
+            const aVal = a[trendSortBy];
+            const bVal = b[trendSortBy];
+            return trendSortDir === 'desc' ? bVal - aVal : aVal - bVal;
+        });
+
+    const trendCount = trendResults.filter((r) => r.type === 'trend' || r.type === 'both').length;
+    const reversalCount = trendResults.filter((r) => r.type === 'reversal' || r.type === 'both').length;
+
+    const TYPE_BADGE = {
+        trend: { label: '📈 Trend', cls: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
+        reversal: { label: '🔄 Toparlanma', cls: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+        both: { label: '⭐ İkisi', cls: 'bg-green-500/20 text-green-300 border-green-500/40' },
+    };
+
+    const applyEodToWatchlist = async () => {
+        if (!window.confirm('Aktif tüm stratejilerin watchlist\'leri TEMİZLENİP EOD sonuçlarıyla (trend → kırılım stratejileri, toparlanma → VWAP) doldurulacak. Devam edilsin mi?')) return;
+        setApplyingWatchlist(true);
+        try {
+            const res = await fetch(`${API_BASE}/strategies/eod-analysis/apply-to-watchlist`, { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+                const lines = (data.strategies || []).map((s) => `${s.strategy}: ${s.added}`).join(', ');
+                addToast(`Watchlist güncellendi (trend ${data.trend_count} / toparlanma ${data.reversal_count}). ${lines}`, 'success');
+            } else {
+                addToast(data.detail || 'Watchlist uygulanamadı', 'error');
+            }
+        } catch (e) {
+            addToast('Hata: ' + e.message, 'error');
+        } finally {
+            setApplyingWatchlist(false);
+        }
+    };
 
     // Helpers
     const openChartModal = (result) => {
@@ -798,11 +836,33 @@ export default function EODAnalysisPanel({ strategies }) {
                         </p>
                     </div>
 
-                    {/* Stats */}
+                    {/* Stats + type filter + apply-to-watchlist */}
                     {trendStats.count > 0 && (
-                        <div className="flex gap-2 mb-3 text-xs sm:text-sm">
-                            <span className="text-green-400">{trendStats.count} aday bulundu</span>
+                        <div className="flex flex-wrap items-center gap-2 mb-3 text-xs sm:text-sm">
+                            <span className="text-green-400">{trendStats.count} aday</span>
                             <span className="text-gray-500">/ {trendStats.total_scanned} taranan</span>
+                            <div className="flex gap-1 ml-1">
+                                <button
+                                    onClick={() => setTrendTypeFilter('all')}
+                                    className={`px-2 py-1 rounded border ${trendTypeFilter === 'all' ? 'bg-gray-600 text-white border-gray-500' : 'bg-gray-800 text-gray-400 border-gray-700'}`}
+                                >Hepsi ({trendResults.length})</button>
+                                <button
+                                    onClick={() => setTrendTypeFilter('trend')}
+                                    className={`px-2 py-1 rounded border ${trendTypeFilter === 'trend' ? 'bg-blue-600/40 text-blue-200 border-blue-500' : 'bg-gray-800 text-gray-400 border-gray-700'}`}
+                                >📈 Trend ({trendCount})</button>
+                                <button
+                                    onClick={() => setTrendTypeFilter('reversal')}
+                                    className={`px-2 py-1 rounded border ${trendTypeFilter === 'reversal' ? 'bg-amber-600/40 text-amber-200 border-amber-500' : 'bg-gray-800 text-gray-400 border-gray-700'}`}
+                                >🔄 Toparlanma ({reversalCount})</button>
+                            </div>
+                            <button
+                                onClick={applyEodToWatchlist}
+                                disabled={applyingWatchlist}
+                                className={`ml-auto px-3 py-1.5 rounded font-bold border ${applyingWatchlist ? 'bg-gray-700 text-gray-400 border-gray-600 cursor-wait' : 'bg-purple-600 hover:bg-purple-500 text-white border-purple-500'}`}
+                                title="Aktif stratejilerin watchlist'lerini temizleyip bu sonuçlarla doldur"
+                            >
+                                {applyingWatchlist ? '⏳ Uygulanıyor...' : '📥 Watchlist\'e Uygula'}
+                            </button>
                         </div>
                     )}
 
@@ -874,6 +934,14 @@ export default function EODAnalysisPanel({ strategies }) {
                                                         {result.symbol}
                                                         <span className="text-xs text-gray-500">📊</span>
                                                     </button>
+                                                    {result.type && TYPE_BADGE[result.type] && (
+                                                        <div className="mt-1">
+                                                            <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold border ${TYPE_BADGE[result.type].cls}`}>
+                                                                {TYPE_BADGE[result.type].label}
+                                                                {typeof result.reversal_score === 'number' && (result.type === 'reversal' || result.type === 'both') ? ` ${result.reversal_score}` : ''}
+                                                            </span>
+                                                        </div>
+                                                    )}
                                                 </td>
                                                 <td className="px-3 py-2 text-center">
                                                     <div className="flex items-center justify-center gap-2">

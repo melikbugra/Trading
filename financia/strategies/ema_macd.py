@@ -40,6 +40,7 @@ class EMAMACDStrategy(BaseStrategy):
 
     name = "EMA200 + MACD"
     description = "Fiyat EMA200 üzerindeyken MACD yukarı keserse LONG, EMA200 altındayken MACD aşağı keserse SHORT sinyali"
+    category = "trend"
 
     default_params = {
         "ema_period": 200,

@@ -24,15 +24,17 @@ PLAN_KEYS = (
 
 def preserve_plan_keys(old_extra, fresh_extra):
     """
-    Merge fresh extra_data with the trade-plan keys from the previous extra_data.
-    A fresh value wins when present; otherwise the prior plan key is preserved so
-    the limit-entry zone / partial-TP / trailing config survive until the signal
-    is entered and closed.
+    Merge fresh extra_data while FREEZING the trade-plan keys from the previous
+    extra_data. Once a signal's plan (limit-entry zone / partial-TP / trailing) is
+    set at creation, it must not change — a later re-trigger of the same ticker
+    (e.g. while already in a position) produces a fresh plan for a different,
+    higher-priced setup that would otherwise corrupt this signal's TP1/stop.
+    So the OLD value always wins when present.
     """
     merged = dict(fresh_extra or {})
     old = old_extra or {}
     for k in PLAN_KEYS:
-        if k in old and k not in merged:
+        if k in old:
             merged[k] = old[k]
     return merged
 
@@ -110,6 +112,9 @@ class BaseStrategy(ABC):
     # Strategy metadata
     name: str = "BaseStrategy"
     description: str = "Base strategy class"
+    # EOD routing category: "trend" (breakout/continuation) or "reversal" (bounce).
+    # Used to map EOD analysis results to the right strategies' watchlists.
+    category: str = "trend"
 
     # Default parameters
     default_params: Dict[str, Any] = {}

@@ -59,6 +59,7 @@ class VWAPBounceStrategy(BaseStrategy):
 
     name = "VWAP Bounce"
     description = "VWAP seviyesinden sıçrama tespiti. Gün içi 1 saatlik mumlar, hacim onaylı."
+    category = "reversal"
 
     default_params = {
         "vwap_touch_threshold": 0.3,  # %0.3 yakınlık = dokunuş

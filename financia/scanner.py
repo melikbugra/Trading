@@ -18,6 +18,7 @@ from financia.strategies.base import (
     StrategyResult,
     to_python_native,
     preserve_plan_keys,
+    PLAN_KEYS,
 )
 from financia.web_api.database import (
     Strategy,
@@ -695,8 +696,15 @@ class ScannerService:
                     ):
                         signal_status = "missed"
 
-                # Refresh an existing 'missed' signal in place to avoid churn
+                # Refresh an existing 'missed' signal in place to avoid churn.
+                # This redefines entry/stop/tp, so the trade plan must be the FRESH
+                # one (overlay fresh plan keys over the frozen/preserved base).
                 if existing_signal and existing_signal.status == "missed":
+                    fresh = to_python_native(result.extra_data) or {}
+                    refreshed_extra = {
+                        **extra_data,
+                        **{k: fresh[k] for k in PLAN_KEYS if k in fresh},
+                    }
                     existing_signal.status = signal_status
                     existing_signal.entry_price = entry_price
                     existing_signal.stop_loss = stop_loss
@@ -705,7 +713,7 @@ class ScannerService:
                     existing_signal.last_peak = last_peak
                     existing_signal.last_trough = last_trough
                     existing_signal.notes = result.notes
-                    existing_signal.extra_data = extra_data
+                    existing_signal.extra_data = refreshed_extra
                     if signal_status == "triggered" and not existing_signal.triggered_at:
                         existing_signal.triggered_at = now_turkey()
                     db.commit()
