@@ -115,6 +115,24 @@ class TelegramService:
         TelegramService.send(f"{subject}\n\n{body}".strip())
 
     @staticmethod
+    def _commission_note(market) -> str:
+        """A one-line broker-commission reminder for markets that charge a fee."""
+        try:
+            from financia.markets import get_market_config
+
+            cfg = get_market_config(market)
+            fee = cfg.get("trade_fee", 0.0)
+            if fee:
+                sym = cfg.get("currency_symbol", "")
+                return (
+                    f"🏦 Komisyon: {sym}{fee:g}/emir "
+                    f"(al-sat ~{sym}{fee * 2:g}) — net kâr için hedef bunu da aşmalı\n"
+                )
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
     def send_signal_triggered(
         ticker,
         market,
@@ -147,6 +165,7 @@ class TelegramService:
             f"Stop:   {stop_loss:.4f}\n"
             f"Hedef:  {take_profit:.4f}\n"
             f"Risk/Ödül: 1:{rr:.1f}\n"
+            f"{TelegramService._commission_note(market)}"
             f"\n"
             f"⏳ Fiyat giriş seviyesine geldiğinde pozisyona girilebilir."
         )
@@ -166,6 +185,7 @@ class TelegramService:
             f"Giriş:  {entry_price:.4f}\n"
             f"Stop:   {stop_loss:.4f}\n"
             f"Hedef:  {take_profit:.4f}\n"
+            f"{TelegramService._commission_note(market)}"
             f"\n"
             f"🚀 Pozisyona girilebilir. ⚠️ Stop loss'u unutma!"
         )

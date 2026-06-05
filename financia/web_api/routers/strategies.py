@@ -1188,11 +1188,15 @@ async def apply_eod_to_watchlist(
         db.query(WatchlistItem).filter(
             WatchlistItem.strategy_id == strat.id
         ).delete()
+        from financia.markets import infer_market
+
         for tk in tickers:
+            # US tickers (no .IS) get market "us"; BIST keeps legacy "bist100".
+            mkt = "bist100" if infer_market(tk) == "bist" else "us"
             db.add(
                 WatchlistItem(
                     ticker=tk,
-                    market="bist100",
+                    market=mkt,
                     strategy_id=strat.id,
                     is_active=True,
                 )

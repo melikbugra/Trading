@@ -37,6 +37,19 @@ CACHE_DIR = Path("data/cache/sim")
 # bottleneck, ~4x faster at 500 bars), not data fetching.
 MAX_EVAL_BARS = 500
 
+# Per-side slippage applied in backtest P/L (BIST intraday spread proxy). The
+# raw (slippage-free) figure is still reported alongside the net one.
+BACKTEST_SLIPPAGE_PCT = 0.001  # 0.1% one-way -> ~0.2% round-trip
+
+# Flat broker commission per order (Midas charges ~$1.50 per US trade; BIST is
+# commission-free). Charged once on entry and once on each exit (incl. partials).
+def _order_fee() -> float:
+    """Per-order broker fee for the market currently being simulated."""
+    from financia.markets import get_market_config
+
+    return get_market_config(simulation_time_manager.market).get("trade_fee", 0.0)
+
+
 # Thread pool for running blocking operations - increased for parallel scanning
 _executor = ThreadPoolExecutor(max_workers=10)
 
@@ -457,7 +470,11 @@ class SimulationScanner:
                 f"[Backtest] Completed in {elapsed:.1f}s | "
                 f"Trades: {stats['total_trades']} | "
                 f"Win Rate: {stats['win_rate']:.1f}% | "
-                f"P/L: {stats['total_profit']:+,.0f} TL ({stats['profit_percent']:+.1f}%)"
+                f"Gross: {stats['total_profit']:+,.0f} | "
+                f"Slippage: -{stats.get('total_slippage', 0):,.0f} | "
+                f"Commission: -{stats.get('total_commission', 0):,.0f} | "
+                f"Net: {stats.get('net_profit', 0):+,.0f} | "
+                f"MaxDD: -{stats.get('max_drawdown', 0):.1f}%"
             )
 
             # Mark session as completed
@@ -647,6 +664,10 @@ class SimulationScanner:
                 # Deduct from balance
                 simulation_time_manager.current_balance -= position_cost
 
+                # Broker commission on the buy order (US only)
+                simulation_time_manager.total_commission += _order_fee()
+                simulation_time_manager.update_drawdown()
+
                 # Enter position
                 signal.status = "entered"
                 signal.entered_at = sim_time
@@ -748,6 +769,13 @@ class SimulationScanner:
         position_value = exit_price * lots
         simulation_time_manager.current_balance += position_value
 
+        # Slippage (round-trip) + commission (sell order) + drawdown on net equity
+        simulation_time_manager.total_slippage += (
+            (entry_price + exit_price) * lots * BACKTEST_SLIPPAGE_PCT
+        )
+        simulation_time_manager.total_commission += _order_fee()
+        simulation_time_manager.update_drawdown()
+
         # Update stats
         simulation_time_manager.total_profit += profit_tl
         simulation_time_manager.total_trades += 1
@@ -821,6 +849,12 @@ class SimulationScanner:
         # Balance + aggregate profit (not the win/loss counters)
         simulation_time_manager.current_balance += exit_price * lots
         simulation_time_manager.total_profit += profit_tl
+        simulation_time_manager.total_slippage += (
+            (entry_price + exit_price) * lots * BACKTEST_SLIPPAGE_PCT
+        )
+        # Commission on the partial sell order (US only)
+        simulation_time_manager.total_commission += _order_fee()
+        simulation_time_manager.update_drawdown()
 
         signal.remaining_lots = round((signal.remaining_lots or 0) - lots, 4)
         signal.notes = (
@@ -836,9 +870,13 @@ class SimulationScanner:
         if self._ws_manager:
             try:
                 stats = simulation_time_manager.get_balance_stats()
-                # Fraction through the current trading day (09:30 -> 18:00)
+                # Fraction through the current trading day (session_start -> close)
+                stm = simulation_time_manager
+                open_val = stm.session_start.hour + stm.session_start.minute / 60.0
+                close_val = float(stm.session_end_hour)
                 hour_val = sim_time.hour + sim_time.minute / 60.0
-                day_frac = max(0.0, min(1.0, (hour_val - 9.5) / (18.0 - 9.5)))
+                span = max(0.5, close_val - open_val)
+                day_frac = max(0.0, min(1.0, (hour_val - open_val) / span))
                 completed = max(0, current_day - 1)
                 progress_percent = (
                     round(((completed + day_frac) / total_days) * 100)
@@ -958,15 +996,33 @@ class SimulationScanner:
                 # Build email body
                 start_date = simulation_time_manager.start_date
                 end_date = simulation_time_manager.end_date
+                from financia.markets import get_market_config
+
+                cur = get_market_config(
+                    simulation_time_manager.market
+                )["currency"]
                 lines = []
                 lines.append("=" * 50)
                 lines.append("⚡ BACKTEST SONUÇLARI")
                 lines.append("=" * 50)
                 lines.append(f"📅 Dönem: {start_date} → {end_date}")
-                lines.append(f"💰 Başlangıç: {stats['initial_balance']:,.0f} TL")
-                lines.append(f"💰 Son Bakiye: {stats['current_balance']:,.0f} TL")
+                lines.append(f"💰 Başlangıç: {stats['initial_balance']:,.0f} {cur}")
+                lines.append(f"💰 Son Bakiye: {stats['current_balance']:,.0f} {cur}")
                 lines.append(
-                    f"📈 Toplam K/Z: {stats['total_profit']:+,.0f} TL ({stats['profit_percent']:+.1f}%)"
+                    f"📈 Brüt K/Z (maliyetsiz): {stats['total_profit']:+,.0f} {cur} ({stats['profit_percent']:+.1f}%)"
+                )
+                lines.append(
+                    f"💸 Slippage: -{stats.get('total_slippage', 0):,.0f} {cur}"
+                )
+                if stats.get("total_commission", 0):
+                    lines.append(
+                        f"🏦 Komisyon: -{stats.get('total_commission', 0):,.0f} {cur}"
+                    )
+                lines.append(
+                    f"📉 Net K/Z: {stats.get('net_profit', 0):+,.0f} {cur} ({stats.get('net_profit_percent', 0):+.1f}%)"
+                )
+                lines.append(
+                    f"⚠️ Max Drawdown: -{stats.get('max_drawdown', 0):.1f}%"
                 )
                 lines.append(f"🔢 Toplam İşlem: {stats['total_trades']}")
                 lines.append(
@@ -993,7 +1049,7 @@ class SimulationScanner:
                             f"   İşlem: {len(trades)} | Kazanan: {len(wins)} | Kaybeden: {len(trades) - len(wins)}"
                         )
                         lines.append(f"   Kazanma Oranı: {win_rate:.1f}%")
-                        lines.append(f"   Toplam K/Z: {total_pl:+,.0f} TL")
+                        lines.append(f"   Toplam K/Z: {total_pl:+,.0f} {cur}")
                         lines.append(f"   Ort. Getiri: {avg_pct:+.2f}%")
                         lines.append(
                             f"   En İyi: {max(profits):+.2f}% | En Kötü: {min(profits):+.2f}%"
@@ -1006,8 +1062,12 @@ class SimulationScanner:
                 body = "\n".join(lines)
 
                 # Build subject
-                emoji = "📈" if stats["total_profit"] >= 0 else "📉"
-                subject = f"{emoji} Backtest: {stats['profit_percent']:+.1f}% | {stats['total_trades']} işlem | {start_date} → {end_date}"
+                emoji = "📈" if stats.get("net_profit", 0) >= 0 else "📉"
+                subject = (
+                    f"{emoji} Backtest: net {stats.get('net_profit_percent', 0):+.1f}% "
+                    f"(brüt {stats['profit_percent']:+.1f}%) | DD -{stats.get('max_drawdown', 0):.1f}% "
+                    f"| {stats['total_trades']} işlem | {start_date} → {end_date}"
+                )
 
                 # Send directly, bypassing the simulation-mode guard
                 TelegramService._send_sync(f"{subject}\n\n{body}")
@@ -1344,8 +1404,10 @@ class SimulationScanner:
         interval = "1h"
         cache_key = f"{ticker}_{market}_{horizon}_{interval}"
 
-        if market != "bist100":
-            return pd.DataFrame()  # Binance not supported in simulation
+        from financia.markets import normalize_market
+
+        if normalize_market(market) not in ("bist", "us"):
+            return pd.DataFrame()  # Binance/crypto not supported in simulation
 
         # --- Determine the range we need ---
         tz = "Europe/Istanbul"
@@ -1487,7 +1549,13 @@ class SimulationScanner:
         """
         top_n = int(eod_service.trend_filters.get("top_n", 20))
         min_rel_vol = eod_service.filters.get("min_relative_volume", 2.0)
-        tf = eod_service.trend_filters
+        # Per-market liquidity threshold (BIST in TL, US in USD dollar-volume).
+        from financia.markets import get_market_config
+
+        tf = dict(eod_service.trend_filters)
+        tf["min_volume_tl"] = get_market_config(
+            simulation_time_manager.market
+        )["min_volume"]
         trend_c, reversal_c = [], []
         for ticker, daily in self._daily_cache.items():
             try:

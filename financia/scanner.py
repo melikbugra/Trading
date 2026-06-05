@@ -30,6 +30,7 @@ from financia.web_api.database import (
     engine,
     Base,
     now_turkey,
+    TZ_TURKEY,
 )
 from financia.notification_service import TelegramService
 
@@ -194,26 +195,36 @@ class ScannerService:
         self.scan_interval = max(1, minutes)
         print(f"[Scanner] Interval set to {self.scan_interval} minutes")
 
+    def _now_tr_aware(self):
+        """Current Turkey time as a tz-aware datetime (now_turkey is naive live)."""
+        n = now_turkey()
+        if n.tzinfo is None:
+            n = TZ_TURKEY.localize(n)
+        return n
+
+    def _is_market_open(self, market: str) -> bool:
+        """Whether the given market's session is open right now (DST-correct)."""
+        from financia.markets import is_market_open
+
+        return is_market_open(market, self._now_tr_aware())
+
+    def _open_markets(self) -> list:
+        """List of markets whose session is currently open."""
+        from financia.markets import MARKET_CONFIG
+
+        return [m for m in MARKET_CONFIG if self._is_market_open(m)]
+
     def _is_bist_market_open(self) -> bool:
+        """Back-compat helper: True if BIST is currently open."""
+        return self._is_market_open("bist")
+
+    async def _cleanup_day_end_signals(self, market: str = None):
         """
-        Check if BIST100 market is open.
-        BIST100 hours: Monday-Friday, 10:00-18:00 Turkey time
-        With +-30 min buffer: 09:30-18:30
+        Clean up non-entered signals at end of day (keep only 'entered' positions).
+
+        When `market` is given, only cancels signals for that market (so closing
+        BIST at 18:30 TR doesn't wipe still-open US signals, and vice versa).
         """
-        now = now_turkey()
-
-        # Check if weekend (Saturday=5, Sunday=6)
-        if now.weekday() >= 5:
-            return False
-
-        # Check time (09:30 - 18:30 with buffer)
-        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        market_close = now.replace(hour=18, minute=30, second=0, microsecond=0)
-
-        return market_open <= now <= market_close
-
-    async def _cleanup_day_end_signals(self):
-        """Clean up non-entered signals at end of day (keep only 'entered' positions)."""
         db = SessionLocal()
         try:
             now = now_turkey()
@@ -224,6 +235,15 @@ class ScannerService:
                 .filter(Signal.status.in_(["pending", "triggered", "missed"]))
                 .all()
             )
+
+            if market:
+                from financia.markets import normalize_market
+
+                signals_to_cancel = [
+                    s
+                    for s in signals_to_cancel
+                    if normalize_market(s.market) == normalize_market(market)
+                ]
 
             if signals_to_cancel:
                 print(
@@ -244,44 +264,33 @@ class ScannerService:
             db.close()
 
     async def _scan_loop(self):
-        """Main scanning loop."""
-        _day_end_cleanup_done = None  # Track which day we did cleanup for
-        _was_market_open = False  # Track market state transitions
+        """Main scanning loop (multi-market: BIST + US, each on its own hours)."""
+        from financia.markets import MARKET_CONFIG
+
+        _cleanup_done = {}  # market -> date we ran day-end cleanup for
+        _was_open = {m: False for m in MARKET_CONFIG}  # per-market open state
 
         while self.is_running:
             try:
                 now = now_turkey()
                 today = now.date()
-                market_open = self._is_bist_market_open()
+                open_now = {m: self._is_market_open(m) for m in MARKET_CONFIG}
 
-                # Day-end cleanup: when market transitions from open to closed
-                if (
-                    _was_market_open
-                    and not market_open
-                    and _day_end_cleanup_done != today
-                ):
-                    print(f"[Scanner] Market just closed, running day-end cleanup...")
-                    await self._cleanup_day_end_signals()
-                    _day_end_cleanup_done = today
-
-                _was_market_open = market_open
-
-                # Check if BIST market is open
-                if not market_open:
-                    # Also do cleanup if we haven't yet today (e.g., scanner started after market close)
+                # Per-market day-end cleanup on the open -> closed transition.
+                for m in MARKET_CONFIG:
                     if (
-                        now.weekday() < 5
-                        and now.hour >= 18
-                        and _day_end_cleanup_done != today
+                        _was_open[m]
+                        and not open_now[m]
+                        and _cleanup_done.get(m) != today
                     ):
-                        print(
-                            f"[Scanner] Market already closed, running day-end cleanup..."
-                        )
-                        await self._cleanup_day_end_signals()
-                        _day_end_cleanup_done = today
+                        print(f"[Scanner] {m.upper()} just closed, day-end cleanup...")
+                        await self._cleanup_day_end_signals(market=m)
+                        _cleanup_done[m] = today
+                    _was_open[m] = open_now[m]
 
+                if not any(open_now.values()):
                     print(
-                        f"[Scanner] Market closed ({now.strftime('%H:%M')}), skipping scan..."
+                        f"[Scanner] All markets closed ({now.strftime('%H:%M')}), skipping scan..."
                     )
                     await asyncio.sleep(self.scan_interval * 60)
                     continue
@@ -314,10 +323,17 @@ class ScannerService:
             if config:
                 self.scan_interval = config.scan_interval_minutes
 
-            # Get active watchlist items
+            # Get active watchlist items, restricted to markets open right now.
             watchlist = (
                 db.query(WatchlistItem).filter(WatchlistItem.is_active == True).all()
             )
+
+            open_markets = set(self._open_markets())
+            from financia.markets import normalize_market
+
+            watchlist = [
+                it for it in watchlist if normalize_market(it.market) in open_markets
+            ]
 
             if not watchlist:
                 return
@@ -584,8 +600,8 @@ class ScannerService:
 
         def fetch_price():
             try:
-                if market == "bist100":
-                    # Use yfinance for BIST stocks
+                if market != "binance":
+                    # Use yfinance for BIST and US stocks
                     yf_ticker = yf.Ticker(ticker)
                     # Try fast_info first (faster), fallback to history
                     try:

@@ -437,6 +437,11 @@ INDICATOR_CONFIGS = {
     }
 }
 
+# US (NYSE/Nasdaq) equities use the same hourly-equity indicator profile as BIST.
+INDICATOR_CONFIGS['us'] = INDICATOR_CONFIGS['bist100']
+TIMEFRAME_INTERVALS['us'] = TIMEFRAME_INTERVALS['bist100']
+DATA_PERIODS['us'] = DATA_PERIODS['bist100']
+
 
 def get_config(market: str = 'bist100', horizon: str = 'short') -> dict:
     """

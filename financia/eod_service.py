@@ -245,6 +245,8 @@ class EODAnalysisService:
             "min_volume_tl": 75_000_000,  # Min daily volume in TL (liquidity)
             "top_n": 20,  # Per-category cap when applying to watchlists
         }
+        # Include US (S&P 100) in EOD scans alongside BIST.
+        self.scan_us = True
         # Schedule time (18:15 Turkey time)
         self.run_hour = 18
         self.run_minute = 15
@@ -555,11 +557,23 @@ class EODAnalysisService:
             self.is_analyzing = False
             await self._broadcast_status()  # Notify clients analysis finished
 
+    def _us_tickers(self) -> List[str]:
+        """US (S&P 100) tickers to include in EOD when scan_us is enabled."""
+        if not getattr(self, "scan_us", True):
+            return []
+        try:
+            from financia.us_tickers import get_us_tickers
+
+            return get_us_tickers("100")
+        except Exception:
+            return []
+
     async def _get_dynamic_tickers(self) -> List[str]:
         """
-        Get BIST tickers dynamically.
-        Tries to fetch from web, falls back to static list.
+        Get the EOD ticker universe: BIST (dynamic or static) plus, when
+        scan_us is enabled, the US S&P 100 (Midas-tradeable, real-time data).
         """
+        us = self._us_tickers()
         try:
             import requests
             from bs4 import BeautifulSoup
@@ -592,7 +606,7 @@ class EODAnalysisService:
 
                 if len(tickers) > 50:
                     print(f"[EOD] Fetched {len(tickers)} unique tickers dynamically")
-                    return list(tickers)
+                    return list(tickers) + us
 
         except Exception as e:
             print(f"[EOD] Dynamic fetch failed: {e}, using static list")
@@ -600,7 +614,7 @@ class EODAnalysisService:
         # Fallback to static list - also deduplicate
         from financia.bist100_tickers import get_bist_tickers
 
-        return list(set(get_bist_tickers("all")))
+        return list(set(get_bist_tickers("all"))) + us
 
     async def _send_email_summary(
         self, results: List[Dict], total_scanned: int, error_count: int
@@ -716,12 +730,21 @@ Bu rapor otomatik olarak oluşturulmuştur.
             results = []
             errors = []
 
+            from financia.markets import infer_market, get_market_config
+
             def calculate_trend_score(ticker: str) -> Optional[Dict]:
                 """Fetch daily candles and score (delegates to module score_daily)."""
                 try:
+                    market = infer_market(ticker)
+                    # Per-market liquidity threshold (BIST TL vs US dollar-volume).
+                    tf = dict(self.trend_filters)
+                    tf["min_volume_tl"] = get_market_config(market)["min_volume"]
                     stock = yf.Ticker(ticker)
                     hist = stock.history(period="60d", interval="1d")
-                    return score_daily(ticker, hist, self.trend_filters)
+                    res = score_daily(ticker, hist, tf)
+                    if res and "error" not in res:
+                        res["market"] = market
+                    return res
                 except Exception as e:
                     return {"ticker": ticker, "error": str(e)}
 

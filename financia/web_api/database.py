@@ -58,6 +58,13 @@ class SimulationTimeManager:
         self.end_date: Optional[date] = None
         self.seconds_per_hour: int = 30  # Default: 1 sim hour = 30 real seconds
 
+        # Market session (defaults to BIST). The sim clock runs in the market's
+        # own timezone so US DST never has to be reconciled with Turkey time.
+        self.market: str = "bist"
+        self.session_tz = TZ_TURKEY
+        self.session_start: time = time(9, 30)
+        self.session_end_hour: int = 18  # day done when current_time.hour >= this
+
         # Session tracking
         self.session_id: Optional[int] = None
 
@@ -68,6 +75,25 @@ class SimulationTimeManager:
         self.total_trades: int = 0
         self.winning_trades: int = 0
         self.losing_trades: int = 0
+        # Slippage cost (cumulative) and max drawdown (fraction) on net equity
+        self.total_slippage: float = 0.0
+        # Broker commission (cumulative, currency units) — e.g. Midas charges a
+        # flat per-order fee on US trades. BIST on Midas is commission-free.
+        self.total_commission: float = 0.0
+        self.peak_net_balance: float = 100000.0
+        self.max_drawdown: float = 0.0
+
+    def update_drawdown(self):
+        """Recompute max drawdown on the net (slippage + commission) equity curve."""
+        net_balance = (
+            self.current_balance - self.total_slippage - self.total_commission
+        )
+        if net_balance > self.peak_net_balance:
+            self.peak_net_balance = net_balance
+        if self.peak_net_balance > 0:
+            dd = (self.peak_net_balance - net_balance) / self.peak_net_balance
+            if dd > self.max_drawdown:
+                self.max_drawdown = dd
 
     def start(
         self,
@@ -76,6 +102,7 @@ class SimulationTimeManager:
         seconds_per_hour: int = 30,
         initial_balance: float = 100000.0,
         is_backtest: bool = False,
+        market: str = "bist",
     ):
         """Start a new simulation session."""
         self.is_active = True
@@ -87,6 +114,14 @@ class SimulationTimeManager:
         self.start_date = start_date
         self.end_date = end_date
         self.seconds_per_hour = seconds_per_hour
+        # Resolve the market session (tz + open/close hours).
+        from financia.markets import get_market_config, normalize_market
+
+        self.market = normalize_market(market)
+        _cfg = get_market_config(self.market)
+        self.session_tz = _cfg["tz"]
+        self.session_start = _cfg["session_start"]
+        self.session_end_hour = _cfg["session_end_hour"]
         # Balance initialization
         self.initial_balance = initial_balance
         self.current_balance = initial_balance
@@ -94,9 +129,14 @@ class SimulationTimeManager:
         self.total_trades = 0
         self.winning_trades = 0
         self.losing_trades = 0
-        # Start at 09:30 on the first trading day (timezone-aware)
-        naive_time = datetime.combine(start_date, time(9, 30))
-        self.current_time = TZ_TURKEY.localize(naive_time)
+        self.total_slippage = 0.0
+        self.total_commission = 0.0
+        self.peak_net_balance = initial_balance
+        self.max_drawdown = 0.0
+        # Start at the market's session open on the first trading day (tz-aware,
+        # in the market's own timezone).
+        naive_time = datetime.combine(start_date, self.session_start)
+        self.current_time = self.session_tz.localize(naive_time)
         # Skip to next trading day if weekend
         self._skip_weekend()
 
@@ -141,8 +181,8 @@ class SimulationTimeManager:
 
         self.current_time += timedelta(hours=1)
 
-        # Check if day is completed (18:00 - BIST closes)
-        if self.current_time.hour >= 18:
+        # Check if day is completed (market close hour)
+        if self.current_time.hour >= self.session_end_hour:
             self.day_completed = True
             return True
 
@@ -156,10 +196,10 @@ class SimulationTimeManager:
         if not self.is_active or not self.current_time:
             return True
 
-        # Move to next day at 09:30 (keep timezone-aware)
+        # Move to next day at the session open (keep timezone-aware)
         next_date = self.current_time.date() + timedelta(days=1)
-        naive_time = datetime.combine(next_date, time(9, 30))
-        self.current_time = TZ_TURKEY.localize(naive_time)
+        naive_time = datetime.combine(next_date, self.session_start)
+        self.current_time = self.session_tz.localize(naive_time)
 
         # Skip weekends
         self._skip_weekend()
@@ -179,8 +219,8 @@ class SimulationTimeManager:
             while self.current_time.weekday() >= 5:  # Saturday=5, Sunday=6
                 # Keep timezone when adding days
                 next_date = self.current_time.date() + timedelta(days=1)
-                naive_time = datetime.combine(next_date, time(9, 30))
-                self.current_time = TZ_TURKEY.localize(naive_time)
+                naive_time = datetime.combine(next_date, self.session_start)
+                self.current_time = self.session_tz.localize(naive_time)
 
     def get_time(self) -> datetime:
         """Get current simulation time or real time if not in simulation."""
@@ -212,11 +252,25 @@ class SimulationTimeManager:
             if self.total_trades > 0
             else 0
         )
+        net_profit = actual_profit - self.total_slippage - self.total_commission
+        net_profit_percent = (
+            (net_profit / self.initial_balance * 100)
+            if self.initial_balance > 0
+            else 0
+        )
+        from financia.markets import get_market_config
+
         return {
             "initial_balance": self.initial_balance,
             "current_balance": round(self.current_balance, 2),
-            "total_profit": round(actual_profit, 2),
+            "currency": get_market_config(self.market)["currency_symbol"],
+            "total_profit": round(actual_profit, 2),  # gross (no slippage/commission)
             "profit_percent": round(profit_percent, 2),
+            "total_slippage": round(self.total_slippage, 2),
+            "total_commission": round(self.total_commission, 2),
+            "net_profit": round(net_profit, 2),
+            "net_profit_percent": round(net_profit_percent, 2),
+            "max_drawdown": round(self.max_drawdown * 100, 2),
             "total_trades": self.total_trades,
             "winning_trades": self.winning_trades,
             "losing_trades": self.losing_trades,

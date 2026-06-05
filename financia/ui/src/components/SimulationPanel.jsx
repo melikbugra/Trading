@@ -25,6 +25,7 @@ const SimulationPanel = ({ onClose }) => {
     // Backtest mode
     const [isBacktest, setIsBacktest] = useState(false);
     const [useEodWatchlist, setUseEodWatchlist] = useState(true);
+    const [market, setMarket] = useState('bist'); // 'bist' (BIST100) or 'us' (S&P 100)
     const [strategyTypes, setStrategyTypes] = useState([]);
     const [selectedStrategyTypes, setSelectedStrategyTypes] = useState([]);
     const [loadingStrategies, setLoadingStrategies] = useState(false);
@@ -89,7 +90,7 @@ const SimulationPanel = ({ onClose }) => {
                 return;
             }
             try {
-                await startBacktest(startDate, endDate, initialBalance, selectedStrategyTypes, useEodWatchlist);
+                await startBacktest(startDate, endDate, initialBalance, selectedStrategyTypes, useEodWatchlist, market);
                 onClose?.();
             } catch (err) {
                 setLocalError(err.message);
@@ -142,6 +143,44 @@ const SimulationPanel = ({ onClose }) => {
                                 : 'Manuel kontrollü simülasyon'}
                         </span>
                     </div>
+
+                    {/* Market Selection (Backtest only) */}
+                    {isBacktest && (
+                        <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">
+                                🌍 Pazar
+                            </label>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setMarket('bist')}
+                                    className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                                        market === 'bist'
+                                            ? 'bg-blue-600 border-blue-500 text-white'
+                                            : 'bg-gray-700/40 border-gray-600 text-gray-300 hover:bg-gray-700'
+                                    }`}
+                                >
+                                    🇹🇷 BIST 100
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setMarket('us')}
+                                    className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                                        market === 'us'
+                                            ? 'bg-blue-600 border-blue-500 text-white'
+                                            : 'bg-gray-700/40 border-gray-600 text-gray-300 hover:bg-gray-700'
+                                    }`}
+                                >
+                                    🇺🇸 ABD (S&P 100)
+                                </button>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                                {market === 'us'
+                                    ? 'NYSE/Nasdaq — gerçek zamanlı veri, seans 16:30-23:00 (TR)'
+                                    : 'BIST — ~15dk gecikmeli veri, seans 09:30-18:00'}
+                            </p>
+                        </div>
+                    )}
 
                     {/* Strategy Selection (Backtest only) */}
                     {isBacktest && (

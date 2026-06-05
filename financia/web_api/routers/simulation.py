@@ -172,6 +172,9 @@ class BacktestStartRequest(BaseModel):
     # When True, each backtest day trades only the EOD-selected stocks (top 20,
     # computed as-of the previous trading day). When False, all watchlist tickers.
     use_eod_watchlist: bool = True
+    # Market to backtest: "bist" (BIST100) or "us" (S&P 100). The sim clock runs
+    # in the market's own timezone and uses its session hours.
+    market: str = "bist"
 
 
 class SimWatchlistResponse(BaseModel):
@@ -1334,15 +1337,25 @@ async def start_backtest(request: BacktestStartRequest, db: Session = Depends(ge
         db.flush()
         sim_strategy_ids.append(sim_s.id)
 
-    # Add all BIST100 tickers to each selected strategy
-    from financia.bist100_tickers import get_bist_tickers
+    # Add the selected market's tickers to each strategy. BIST100 for BIST,
+    # S&P 100 for US (Midas-tradeable, real-time Yahoo data).
+    from financia.markets import normalize_market, get_market_config
 
-    bist_tickers = get_bist_tickers("100")
+    market = normalize_market(request.market)
+    if market == "bist":
+        from financia.bist100_tickers import get_bist_tickers
+
+        market_tickers = get_bist_tickers("100")
+        item_market = "bist100"  # legacy id used by existing sim items
+    else:
+        market_tickers = get_market_config(market)["tickers"]()
+        item_market = market
+
     for sim_sid in sim_strategy_ids:
-        for ticker in bist_tickers:
+        for ticker in market_tickers:
             sim_item = SimWatchlistItem(
                 ticker=ticker,
-                market="bist100",
+                market=item_market,
                 strategy_id=sim_sid,
                 is_active=True,
             )
@@ -1370,6 +1383,7 @@ async def start_backtest(request: BacktestStartRequest, db: Session = Depends(ge
         seconds_per_hour=0,
         initial_balance=request.initial_balance,
         is_backtest=True,
+        market=market,
     )
     simulation_time_manager.session_id = session.id
 
@@ -1618,6 +1632,10 @@ def get_backtest_summary(db: Session = Depends(get_db)):
     overall_avg_r = round(all_total_r / all_trades_count, 3) if all_trades_count else 0
 
     overall = {
+        # Money stats first (gross/slippage/commission/net/drawdown/currency) so
+        # the REST summary matches the WS completion payload; the R-based counts
+        # below intentionally override balance_stats' trade counters.
+        **balance_stats,
         "total_trades": all_trades_count,
         "winning_trades": all_wins,
         "losing_trades": all_losses,

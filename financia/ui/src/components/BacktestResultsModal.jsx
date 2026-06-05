@@ -57,6 +57,8 @@ const BacktestResultsModal = ({ onClose, onGoToHistory }) => {
     const overall = summary.summary || summary.overall;
     const perStrategy = summary.per_strategy || [];
     const ranked = summary.ranked_strategies || [];
+    const cur = overall?.currency || '₺';
+    const hasCommission = (overall?.total_commission || 0) > 0;
 
     const getEVColor = (ev) => {
         if (ev > 0.5) return 'text-green-400';
@@ -111,6 +113,42 @@ const BacktestResultsModal = ({ onClose, onGoToHistory }) => {
                                 {(overall?.avg_r_per_trade || 0) >= 0 ? '+' : ''}{(overall?.avg_r_per_trade || 0).toFixed(3)}R
                             </div>
                             <div className="text-xs text-gray-400 mt-1">İşlem Başına R</div>
+                        </div>
+                    </div>
+
+                    {/* Money: gross / slippage / (commission) / net / max drawdown */}
+                    <div className={`grid grid-cols-2 ${hasCommission ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-3`}>
+                        <div className="bg-gray-700/50 rounded-lg p-3 text-center">
+                            <div className={`text-lg font-bold font-mono ${(overall?.total_profit || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {(overall?.total_profit || 0) >= 0 ? '+' : ''}{(overall?.total_profit || 0).toLocaleString('tr-TR')} {cur}
+                            </div>
+                            <div className="text-xs text-gray-400 mt-1">Brüt K/Z ({(overall?.profit_percent || 0) >= 0 ? '+' : ''}{(overall?.profit_percent || 0).toFixed(1)}%)</div>
+                        </div>
+                        <div className="bg-gray-700/50 rounded-lg p-3 text-center">
+                            <div className="text-lg font-bold font-mono text-orange-400">
+                                -{(overall?.total_slippage || 0).toLocaleString('tr-TR')} {cur}
+                            </div>
+                            <div className="text-xs text-gray-400 mt-1">Slippage</div>
+                        </div>
+                        {hasCommission && (
+                            <div className="bg-gray-700/50 rounded-lg p-3 text-center">
+                                <div className="text-lg font-bold font-mono text-orange-400">
+                                    -{(overall?.total_commission || 0).toLocaleString('tr-TR')} {cur}
+                                </div>
+                                <div className="text-xs text-gray-400 mt-1">Komisyon ($1.5/işlem)</div>
+                            </div>
+                        )}
+                        <div className="bg-gray-700/50 rounded-lg p-3 text-center">
+                            <div className={`text-lg font-bold font-mono ${(overall?.net_profit || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {(overall?.net_profit || 0) >= 0 ? '+' : ''}{(overall?.net_profit || 0).toLocaleString('tr-TR')} {cur}
+                            </div>
+                            <div className="text-xs text-gray-400 mt-1">Net K/Z ({(overall?.net_profit_percent || 0) >= 0 ? '+' : ''}{(overall?.net_profit_percent || 0).toFixed(1)}%)</div>
+                        </div>
+                        <div className="bg-gray-700/50 rounded-lg p-3 text-center">
+                            <div className="text-lg font-bold font-mono text-red-400">
+                                -{(overall?.max_drawdown || 0).toFixed(1)}%
+                            </div>
+                            <div className="text-xs text-gray-400 mt-1">Max Drawdown</div>
                         </div>
                     </div>
 

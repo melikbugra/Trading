@@ -254,7 +254,7 @@ export const SimulationProvider = ({ children }) => {
         }
     };
 
-    const startBacktest = async (startDate, endDate, initialBalance, strategyTypes, useEodWatchlist = true) => {
+    const startBacktest = async (startDate, endDate, initialBalance, strategyTypes, useEodWatchlist = true, market = 'bist') => {
         setIsLoading(true);
         setError(null);
         setBacktestResults(null);
@@ -270,6 +270,7 @@ export const SimulationProvider = ({ children }) => {
                     initial_balance: initialBalance,
                     strategy_types: strategyTypes,
                     use_eod_watchlist: useEodWatchlist,
+                    market: market,
                 }),
             });
             if (!res.ok) {
