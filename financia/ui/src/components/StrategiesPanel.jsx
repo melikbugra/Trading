@@ -31,6 +31,20 @@ const TOP_CRYPTO_TICKERS = [
     'BTC', 'ETH', 'BNB', 'XRP', 'SOL', 'ADA', 'DOGE', 'AVAX', 'DOT', 'LINK'
 ];
 
+// S&P 100 hisse listesi (ABD - Midas'tan işlem yapılabilir)
+const SP100_TICKERS = [
+    'AAPL', 'ABBV', 'ABT', 'ACN', 'ADBE', 'AIG', 'AMD', 'AMGN', 'AMT', 'AMZN',
+    'AVGO', 'AXP', 'BA', 'BAC', 'BK', 'BKNG', 'BLK', 'BMY', 'BRK-B', 'C',
+    'CAT', 'CHTR', 'CL', 'CMCSA', 'COF', 'COP', 'COST', 'CRM', 'CSCO', 'CVS',
+    'CVX', 'DE', 'DHR', 'DIS', 'DOW', 'DUK', 'EMR', 'F', 'FDX', 'GD',
+    'GE', 'GILD', 'GM', 'GOOG', 'GOOGL', 'GS', 'HD', 'HON', 'IBM', 'INTC',
+    'INTU', 'JNJ', 'JPM', 'KHC', 'KO', 'LIN', 'LLY', 'LMT', 'LOW', 'MA',
+    'MCD', 'MDLZ', 'MDT', 'MET', 'META', 'MMM', 'MO', 'MRK', 'MS', 'MSFT',
+    'NEE', 'NFLX', 'NKE', 'NVDA', 'ORCL', 'PEP', 'PFE', 'PG', 'PM', 'PYPL',
+    'QCOM', 'RTX', 'SBUX', 'SCHW', 'SO', 'SPG', 'T', 'TGT', 'TMO', 'TMUS',
+    'TSLA', 'TXN', 'UNH', 'UNP', 'UPS', 'USB', 'V', 'VZ', 'WFC', 'WMT', 'XOM'
+];
+
 export default function StrategiesPanel({ strategies, onRefresh }) {
     const { addToast } = useToast();
     const { isSimulationMode, isStatusLoaded } = useSimulation();
@@ -42,6 +56,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
     const [addingAllBist, setAddingAllBist] = useState(false); // bulk add loading state
     const [addingBist30, setAddingBist30] = useState(false); // BIST30 bulk add loading
     const [addingCrypto, setAddingCrypto] = useState(false); // Crypto bulk add loading
+    const [addingSp100, setAddingSp100] = useState(false); // S&P 100 bulk add loading
     const [deletingAllTickers, setDeletingAllTickers] = useState(null); // strategy id being cleared
     const [chartModal, setChartModal] = useState(null); // { ticker, market, strategyId }
     const [confirmModal, setConfirmModal] = useState(null); // { title, message, onConfirm }
@@ -314,6 +329,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
     const addAllBist100 = () => bulkAddTickers(BIST100_TICKERS, 'bist100', 'BIST100', setAddingAllBist);
     const addAllBist30 = () => bulkAddTickers(BIST30_TICKERS, 'bist100', 'BIST30', setAddingBist30);
     const addTopCrypto = () => bulkAddTickers(TOP_CRYPTO_TICKERS.map(t => t + 'TRY'), 'binance', 'Top 10 Crypto', setAddingCrypto);
+    const addAllSp100 = () => bulkAddTickers(SP100_TICKERS, 'us', 'S&P 100', setAddingSp100);
 
     const deleteAllTickers = async (strategyId, confirmed = false) => {
         const tickers = getWatchlistForStrategy(strategyId);
@@ -520,9 +536,9 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                                             : 'bg-gray-900 border-gray-800 opacity-50'
                                                             }`}
                                                     >
-                                                        <span className={`text-xs ${item.market === 'bist100' ? 'text-red-400' : 'text-yellow-400'
+                                                        <span className={`text-xs ${item.market === 'bist100' ? 'text-red-400' : item.market === 'us' ? 'text-blue-400' : 'text-yellow-400'
                                                             }`}>
-                                                            {item.market === 'bist100' ? '🇹🇷' : '₿'}
+                                                            {item.market === 'bist100' ? '🇹🇷' : item.market === 'us' ? '🇺🇸' : '₿'}
                                                         </span>
                                                         <button
                                                             onClick={() => openChartModal(item.ticker, item.market, strategy.id)}
@@ -737,6 +753,16 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                         </button>
                                         <button
                                             type="button"
+                                            onClick={() => setNewMarket('us')}
+                                            className={`flex-1 px-4 py-2 rounded font-bold text-sm transition-colors ${newMarket === 'us'
+                                                ? 'bg-blue-600 text-white'
+                                                : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                                                }`}
+                                        >
+                                            🇺🇸 ABD
+                                        </button>
+                                        <button
+                                            type="button"
                                             onClick={() => setNewMarket('binance')}
                                             className={`flex-1 px-4 py-2 rounded font-bold text-sm transition-colors ${newMarket === 'binance'
                                                 ? 'bg-yellow-600 text-white'
@@ -754,7 +780,7 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                         type="text"
                                         value={newTicker}
                                         onChange={(e) => setNewTicker(e.target.value)}
-                                        placeholder={newMarket === 'bist100' ? 'THYAO' : 'BTC'}
+                                        placeholder={newMarket === 'bist100' ? 'THYAO' : newMarket === 'us' ? 'AAPL' : 'BTC'}
                                         className="w-full bg-gray-800 border border-gray-700 text-white px-4 py-2 rounded font-mono uppercase"
                                         autoFocus
                                     />
@@ -798,6 +824,24 @@ export default function StrategiesPanel({ strategies, onRefresh }) {
                                             )}
                                         </button>
                                     </div>
+                                ) : newMarket === 'us' ? (
+                                    <button
+                                        type="button"
+                                        onClick={addAllSp100}
+                                        disabled={addingSp100}
+                                        className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 disabled:from-gray-600 disabled:to-gray-700 text-white rounded font-bold text-sm transition-all flex items-center justify-center gap-2"
+                                    >
+                                        {addingSp100 ? (
+                                            <>
+                                                <span className="animate-spin">⏳</span>
+                                                S&P 100 ekleniyor...
+                                            </>
+                                        ) : (
+                                            <>
+                                                🇺🇸 Tüm S&P 100'ü Ekle ({SP100_TICKERS.length} hisse)
+                                            </>
+                                        )}
+                                    </button>
                                 ) : (
                                     <button
                                         type="button"

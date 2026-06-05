@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { createChart, CandlestickSeries, LineSeries, HistogramSeries, AreaSeries } from 'lightweight-charts';
 import { useSimulation } from '../contexts/SimulationContext';
+import { currencySymbol, marketFlag } from '../utils/market';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export default function ChartModal({ ticker, market, strategyId, onClose }) {
     const { isSimulationMode } = useSimulation();
+    const cur = currencySymbol(market);
     const chartContainerRef = useRef(null);
     const indicatorContainerRef = useRef(null);
     const chartAreaRef = useRef(null);
@@ -481,12 +483,12 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
                 <div className="flex items-center justify-between p-2 sm:p-3 border-b border-gray-700 bg-gray-800/50">
                     <div className="flex items-center gap-2 sm:gap-4">
                         <span className={`text-base sm:text-lg ${market === 'bist100' ? 'text-red-400' : 'text-yellow-400'}`}>
-                            {market === 'bist100' ? '🇹🇷' : '₿'}
+                            {marketFlag(market)}
                         </span>
                         <h2 className="text-lg sm:text-xl font-bold text-white">{displayTicker}</h2>
                         {data?.current_price && (
                             <span className="text-lg sm:text-2xl font-mono text-purple-400">
-                                ₺{data.current_price.toFixed(2)}
+                                {cur}{data.current_price.toFixed(2)}
                             </span>
                         )}
                     </div>
@@ -533,19 +535,19 @@ export default function ChartModal({ ticker, market, strategyId, onClose }) {
                             {data.signal.entry_price && (
                                 <div className="text-xs sm:text-sm">
                                     <span className="text-gray-400">G: </span>
-                                    <span className="text-blue-400 font-mono font-bold">₺{data.signal.entry_price.toFixed(2)}</span>
+                                    <span className="text-blue-400 font-mono font-bold">{cur}{data.signal.entry_price.toFixed(2)}</span>
                                 </div>
                             )}
                             {data.signal.stop_loss && (
                                 <div className="text-xs sm:text-sm">
                                     <span className="text-gray-400">SL: </span>
-                                    <span className="text-red-400 font-mono font-bold">₺{data.signal.stop_loss.toFixed(2)}</span>
+                                    <span className="text-red-400 font-mono font-bold">{cur}{data.signal.stop_loss.toFixed(2)}</span>
                                 </div>
                             )}
                             {data.signal.take_profit && (
                                 <div className="text-xs sm:text-sm">
                                     <span className="text-gray-400">TP: </span>
-                                    <span className="text-green-400 font-mono font-bold">₺{data.signal.take_profit.toFixed(2)}</span>
+                                    <span className="text-green-400 font-mono font-bold">{cur}{data.signal.take_profit.toFixed(2)}</span>
                                 </div>
                             )}
                         </div>

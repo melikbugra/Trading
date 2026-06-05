@@ -314,7 +314,7 @@ export default function SignalsPanel({ strategies }) {
 
                 {/* Market Filters */}
                 <div className="flex gap-1 sm:gap-2 shrink-0">
-                    {[{ key: 'all', label: 'Tümü', shortLabel: 'Tümü' }, { key: 'bist100', label: '🇹🇷 BIST', shortLabel: '🇹🇷' }, { key: 'binance', label: '₿ Binance', shortLabel: '₿' }].map(m => (
+                    {[{ key: 'all', label: 'Tümü', shortLabel: 'Tümü' }, { key: 'bist100', label: '🇹🇷 BIST', shortLabel: '🇹🇷' }, { key: 'us', label: '🇺🇸 ABD', shortLabel: '🇺🇸' }, { key: 'binance', label: '₿ Binance', shortLabel: '₿' }].map(m => (
                         <button
                             key={m.key}
                             onClick={() => setMarketFilter(m.key)}
@@ -387,7 +387,7 @@ export default function SignalsPanel({ strategies }) {
                                             {signal.ticker.replace('.IS', '').replace('TRY', '')}
                                             <span className="text-xs sm:text-sm">📊</span>
                                         </button>
-                                        <span className="text-gray-500 text-xs sm:text-sm">{signal.market === 'bist100' ? 'BIST' : 'Binance'}</span>
+                                        <span className="text-gray-500 text-xs sm:text-sm">{signal.market === 'bist100' ? 'BIST' : signal.market === 'us' ? 'ABD' : 'Binance'}</span>
                                         {getDirectionBadge(signal.direction)}
                                         {getStatusBadge(signal)}
                                     </div>
