@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import ListFilters, { uniqueSectors } from './ListFilters';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -7,6 +8,8 @@ const fmt = (v, d = 2) => (v == null ? '—' : Number(v).toLocaleString('tr-TR',
 export default function DividendCalendarPanel() {
   const [data, setData] = useState({ holdings: [], projected_annual_income: [] });
   const [loading, setLoading] = useState(true);
+  const [marketFilter, setMarketFilter] = useState('all');
+  const [sectorFilter, setSectorFilter] = useState('all');
 
   const load = async () => {
     setLoading(true);
@@ -19,6 +22,10 @@ export default function DividendCalendarPanel() {
   useEffect(() => { load(); }, []);
 
   const needsScan = data.holdings?.some((h) => !h.has_snapshot);
+  const sectors = uniqueSectors(data.holdings, (h) => h.sector);
+  const filtered = data.holdings.filter(
+    (h) => (marketFilter === 'all' || h.market === marketFilter) && (sectorFilter === 'all' || h.sector === sectorFilter)
+  );
 
   return (
     <div>
@@ -44,20 +51,27 @@ export default function DividendCalendarPanel() {
       ) : data.holdings.length === 0 ? (
         <div className="text-gray-500 text-center py-16 border border-dashed border-gray-800 rounded-lg">Portföyünde hisse yok.</div>
       ) : (
+        <>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs text-gray-500">{filtered.length} hisse</span>
+          <ListFilters market={marketFilter} setMarket={setMarketFilter} sector={sectorFilter} setSector={setSectorFilter} sectors={sectors} />
+        </div>
         <div className="overflow-x-auto border border-gray-800 rounded-lg">
           <table className="w-full text-sm">
             <thead className="bg-gray-900 text-gray-500">
               <tr>
                 <th className="text-left px-3 py-2">Hisse</th>
+                <th className="text-left px-3 py-2 hidden lg:table-cell">Sektör</th>
                 <th className="text-right px-3 py-2">Adet</th>
                 <th className="text-right px-3 py-2">Temettü Verimi</th>
                 <th className="text-right px-3 py-2">Tahmini Yıllık Gelir</th>
               </tr>
             </thead>
             <tbody>
-              {data.holdings.map((h) => (
+              {filtered.map((h) => (
                 <tr key={h.ticker} className="border-t border-gray-800 hover:bg-gray-800/30">
                   <td className="px-3 py-2 font-mono font-bold text-white">{h.market === 'us' ? '🇺🇸' : '🇹🇷'} {h.symbol}</td>
+                  <td className="px-3 py-2 hidden lg:table-cell text-gray-400 text-xs max-w-[150px] truncate">{h.sector || '—'}</td>
                   <td className="px-3 py-2 text-right font-mono text-gray-300">{fmt(h.shares, 0)}</td>
                   <td className="px-3 py-2 text-right font-mono text-gray-300">{h.dividend_yield == null ? '—' : `${fmt(h.dividend_yield)}%`}</td>
                   <td className="px-3 py-2 text-right font-mono text-yellow-400 font-bold">{h.annual_income == null ? '—' : `${h.currency}${fmt(h.annual_income)}`}</td>
@@ -66,6 +80,7 @@ export default function DividendCalendarPanel() {
             </tbody>
           </table>
         </div>
+        </>
       )}
     </div>
   );

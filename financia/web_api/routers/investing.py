@@ -212,6 +212,7 @@ def _snapshot_summary(snap: FundamentalSnapshot) -> dict:
 def list_holdings(db: Session = Depends(get_db)):
     """All long-term holdings with live valuation, P/L and per-currency weight."""
     holdings = db.query(LongTermHolding).order_by(LongTermHolding.created_at.desc()).all()
+    snaps = {s.ticker: s for s in db.query(FundamentalSnapshot).all()}
 
     rows = []
     # value totals per currency symbol so BIST (₺) and US ($) stay separate
@@ -222,6 +223,8 @@ def list_holdings(db: Session = Depends(get_db)):
             price_cache[h.ticker] = _live_price(h.ticker)
         price = price_cache[h.ticker]
         cur = get_market_config(h.market)["currency_symbol"]
+        snap = snaps.get(h.ticker)
+        sector = (snap.metrics or {}).get("sector") if snap else None
         cost_value = h.shares * h.cost_basis
         market_value = h.shares * price if price is not None else None
         pnl = (market_value - cost_value) if market_value is not None else None
@@ -233,6 +236,7 @@ def list_holdings(db: Session = Depends(get_db)):
             "ticker": h.ticker,
             "symbol": h.ticker.replace(".IS", ""),
             "market": h.market,
+            "sector": sector,
             "currency": cur,
             "shares": h.shares,
             "cost_basis": h.cost_basis,
@@ -625,6 +629,7 @@ def dividends_calendar(db: Session = Depends(get_db)):
             "ticker": h.ticker,
             "symbol": h.ticker.replace(".IS", ""),
             "market": h.market,
+            "sector": (snap.metrics or {}).get("sector") if snap else None,
             "currency": cur,
             "shares": h.shares,
             "dividend_yield": yield_pct,

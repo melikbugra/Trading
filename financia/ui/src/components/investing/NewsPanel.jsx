@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import { dateTag } from '../../utils/dates';
+import ListFilters from './ListFilters';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -43,6 +44,7 @@ const flag = (m) => (m === 'us' ? '🇺🇸' : '🇹🇷');
 export default function NewsPanel() {
   const { addToast } = useToast();
   const [scope, setScope] = useState('all');
+  const [marketFilter, setMarketFilter] = useState('all');
   const [data, setData] = useState({ tickers: 0, news: [], events: [] });
   const [loading, setLoading] = useState(true);
 
@@ -60,6 +62,10 @@ export default function NewsPanel() {
 
   useEffect(() => { load(scope); /* eslint-disable-next-line */ }, [scope]);
 
+  const mf = (x) => marketFilter === 'all' || x.market === marketFilter;
+  const events = (data.events || []).filter(mf);
+  const news = (data.news || []).filter(mf);
+
   return (
     <div>
       {/* Controls */}
@@ -75,7 +81,10 @@ export default function NewsPanel() {
             </button>
           ))}
         </div>
-        <button onClick={() => load()} className="ml-auto px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm">↻ Yenile</button>
+        <div className="ml-auto flex items-center gap-2">
+          <ListFilters market={marketFilter} setMarket={setMarketFilter} />
+          <button onClick={() => load()} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm">↻ Yenile</button>
+        </div>
       </div>
 
       {loading ? (
@@ -89,7 +98,7 @@ export default function NewsPanel() {
           {/* Upcoming events */}
           <div>
             <h3 className="text-sm font-bold text-gray-300 mb-2">📅 Yaklaşan Tarihler (Bilanço / Temettü)</h3>
-            {data.events.length === 0 ? (
+            {events.length === 0 ? (
               <p className="text-gray-500 text-sm">Yaklaşan tarih bulunamadı.</p>
             ) : (
               <div className="overflow-x-auto border border-gray-800 rounded-lg">
@@ -103,7 +112,7 @@ export default function NewsPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.events.map((e) => (
+                    {events.map((e) => (
                       <tr key={e.ticker} className="border-t border-gray-800">
                         <td className="px-3 py-2 font-mono font-bold text-white">{flag(e.market)} {e.symbol}</td>
                         <td className="px-3 py-2 text-gray-300"><DateCell value={e.earnings_date} /></td>
@@ -119,12 +128,12 @@ export default function NewsPanel() {
 
           {/* News */}
           <div>
-            <h3 className="text-sm font-bold text-gray-300 mb-2">📰 Haberler ({data.news.length})</h3>
-            {data.news.length === 0 ? (
+            <h3 className="text-sm font-bold text-gray-300 mb-2">📰 Haberler ({news.length})</h3>
+            {news.length === 0 ? (
               <p className="text-gray-500 text-sm">Haber bulunamadı.</p>
             ) : (
               <div className="space-y-2">
-                {data.news.map((n, i) => (
+                {news.map((n, i) => (
                   <a
                     key={`${n.ticker}-${i}`}
                     href={n.link || '#'}

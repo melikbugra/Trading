@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import StockReportModal from './StockReportModal';
+import ListFilters, { uniqueSectors } from './ListFilters';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -12,6 +13,8 @@ export default function WatchlistPanel() {
   const [items, setItems] = useState([]);
   const [form, setForm] = useState({ ticker: '', market: 'bist' });
   const [reportTicker, setReportTicker] = useState(null);
+  const [marketFilter, setMarketFilter] = useState('all');
+  const [sectorFilter, setSectorFilter] = useState('all');
 
   const load = async () => {
     try {
@@ -49,6 +52,11 @@ export default function WatchlistPanel() {
     load();
   };
 
+  const sectors = uniqueSectors(items, (it) => it.scores?.sector);
+  const filtered = items.filter(
+    (it) => (marketFilter === 'all' || it.market === marketFilter) && (sectorFilter === 'all' || it.scores?.sector === sectorFilter)
+  );
+
   return (
     <div>
       <form onSubmit={add} className="flex flex-wrap gap-2 mb-4">
@@ -64,11 +72,17 @@ export default function WatchlistPanel() {
       {items.length === 0 ? (
         <div className="text-gray-500 text-center py-16 border border-dashed border-gray-800 rounded-lg">İzleme listen boş.</div>
       ) : (
+        <>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs text-gray-500">{filtered.length} hisse</span>
+          <ListFilters market={marketFilter} setMarket={setMarketFilter} sector={sectorFilter} setSector={setSectorFilter} sectors={sectors} />
+        </div>
         <div className="overflow-x-auto border border-gray-800 rounded-lg">
           <table className="w-full text-sm">
             <thead className="bg-gray-900 text-gray-500">
               <tr>
                 <th className="text-left px-3 py-2">Hisse</th>
+                <th className="text-left px-3 py-2 hidden lg:table-cell">Sektör</th>
                 <th className="text-left px-3 py-2 hidden sm:table-cell">Etiket</th>
                 <th className="text-right px-3 py-2">Temettü</th>
                 <th className="text-right px-3 py-2">Büyüme</th>
@@ -77,13 +91,14 @@ export default function WatchlistPanel() {
               </tr>
             </thead>
             <tbody>
-              {items.map((it) => {
+              {filtered.map((it) => {
                 const s = it.scores;
                 return (
                   <tr key={it.id} className="border-t border-gray-800 hover:bg-gray-800/30">
                     <td className="px-3 py-2 font-mono font-bold text-white cursor-pointer hover:text-blue-400" onClick={() => setReportTicker(it.ticker)}>
                       {it.market === 'us' ? '🇺🇸' : '🇹🇷'} {it.symbol} 📊
                     </td>
+                    <td className="px-3 py-2 hidden lg:table-cell text-gray-400 text-xs max-w-[150px] truncate">{s?.sector || '—'}</td>
                     <td className="px-3 py-2 hidden sm:table-cell text-gray-400 text-xs">{s?.label || '—'}</td>
                     <td className={`px-3 py-2 text-right font-mono font-bold ${scoreColor(s?.dividend_score)}`}>{s?.dividend_score == null ? '—' : Math.round(s.dividend_score)}</td>
                     <td className={`px-3 py-2 text-right font-mono font-bold ${scoreColor(s?.growth_score)}`}>{s?.growth_score == null ? '—' : Math.round(s.growth_score)}</td>
@@ -95,6 +110,7 @@ export default function WatchlistPanel() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {reportTicker && <StockReportModal ticker={reportTicker} onClose={() => { setReportTicker(null); load(); }} />}

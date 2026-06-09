@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import { useWebSocket } from '../../contexts/WebSocketContext';
 import StockReportModal from './StockReportModal';
+import ListFilters, { uniqueSectors } from './ListFilters';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -28,6 +29,7 @@ export default function ScreenerPanel() {
   const [singleTicker, setSingleTicker] = useState('');
   const [singleMarket, setSingleMarket] = useState('bist');
   const [sectorFilter, setSectorFilter] = useState('all');
+  const [marketFilter, setMarketFilter] = useState('all');
   const lastDoneRef = useRef(null);
 
   const openReport = (ticker, market) => {
@@ -94,8 +96,10 @@ export default function ScreenerPanel() {
     }
   };
 
-  const sectors = [...new Set(results.map((r) => r.sector).filter(Boolean))].sort();
-  const filtered = sectorFilter === 'all' ? results : results.filter((r) => r.sector === sectorFilter);
+  const sectors = uniqueSectors(results, (r) => r.sector);
+  const filtered = results.filter(
+    (r) => (marketFilter === 'all' || r.market === marketFilter) && (sectorFilter === 'all' || r.sector === sectorFilter)
+  );
   const sorted = [...filtered].sort((a, b) => (b[sortBy] ?? -1) - (a[sortBy] ?? -1));
 
   const SortBtn = ({ field, children }) => (
@@ -210,16 +214,7 @@ export default function ScreenerPanel() {
         <div className="flex items-center justify-between mb-2 gap-2">
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-500">{sorted.length} hisse</span>
-            {sectors.length > 0 && (
-              <select
-                value={sectorFilter}
-                onChange={(e) => setSectorFilter(e.target.value)}
-                className="bg-gray-800 border border-gray-700 text-gray-300 px-2 py-1 rounded text-xs"
-              >
-                <option value="all">Tüm sektörler</option>
-                {sectors.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            )}
+            <ListFilters market={marketFilter} setMarket={setMarketFilter} sector={sectorFilter} setSector={setSectorFilter} sectors={sectors} />
           </div>
           <button
             onClick={clearAll}

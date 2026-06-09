@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import StockReportModal from './StockReportModal';
 import DiversificationCard from './DiversificationCard';
+import ListFilters, { uniqueSectors } from './ListFilters';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -16,6 +17,8 @@ export default function PortfolioPanel() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [reportTicker, setReportTicker] = useState(null);
+  const [marketFilter, setMarketFilter] = useState('all');
+  const [sectorFilter, setSectorFilter] = useState('all');
 
   const load = async () => {
     setLoading(true);
@@ -71,6 +74,11 @@ export default function PortfolioPanel() {
       load();
     } catch { addToast('Silinemedi', 'error'); }
   };
+
+  const sectors = uniqueSectors(data.holdings, (h) => h.sector);
+  const visibleHoldings = data.holdings.filter(
+    (h) => (marketFilter === 'all' || h.market === marketFilter) && (sectorFilter === 'all' || h.sector === sectorFilter)
+  );
 
   return (
     <div>
@@ -131,11 +139,17 @@ export default function PortfolioPanel() {
       ) : data.holdings.length === 0 ? (
         <div className="text-gray-500 text-center py-16 border border-dashed border-gray-800 rounded-lg">Portföyün boş. "+ Hisse Ekle" ile başla.</div>
       ) : (
+        <>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs text-gray-500">{visibleHoldings.length} pozisyon</span>
+          <ListFilters market={marketFilter} setMarket={setMarketFilter} sector={sectorFilter} setSector={setSectorFilter} sectors={sectors} />
+        </div>
         <div className="overflow-x-auto border border-gray-800 rounded-lg">
           <table className="w-full text-sm">
             <thead className="bg-gray-900 text-gray-500">
               <tr>
                 <th className="text-left px-3 py-2">Hisse</th>
+                <th className="text-left px-3 py-2 hidden lg:table-cell">Sektör</th>
                 <th className="text-right px-3 py-2">Adet</th>
                 <th className="text-right px-3 py-2 hidden sm:table-cell">Maliyet</th>
                 <th className="text-right px-3 py-2">Fiyat</th>
@@ -146,11 +160,12 @@ export default function PortfolioPanel() {
               </tr>
             </thead>
             <tbody>
-              {data.holdings.map((h) => (
+              {visibleHoldings.map((h) => (
                 <tr key={h.id} className="border-t border-gray-800 hover:bg-gray-800/30">
                   <td className="px-3 py-2 font-mono font-bold text-white cursor-pointer hover:text-blue-400" onClick={() => setReportTicker(h.ticker)}>
                     {h.market === 'us' ? '🇺🇸' : '🇹🇷'} {h.symbol} 📊
                   </td>
+                  <td className="px-3 py-2 hidden lg:table-cell text-gray-400 text-xs max-w-[150px] truncate">{h.sector || '—'}</td>
                   <td className="px-3 py-2 text-right font-mono text-gray-300">{fmt(h.shares, 0)}</td>
                   <td className="px-3 py-2 text-right font-mono text-gray-400 hidden sm:table-cell">{h.currency}{fmt(h.cost_basis)}</td>
                   <td className="px-3 py-2 text-right font-mono text-gray-300">{h.price == null ? '—' : `${h.currency}${fmt(h.price)}`}</td>
@@ -167,6 +182,7 @@ export default function PortfolioPanel() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {reportTicker && (
