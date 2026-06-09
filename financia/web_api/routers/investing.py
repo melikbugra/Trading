@@ -537,6 +537,13 @@ def delete_snapshot(ticker: str, db: Session = Depends(get_db)):
 # ============= News & events feed =============
 
 
+@router.get("/chart-data/{ticker}")
+def chart_data(ticker: str, market: Optional[str] = None):
+    """Daily candles + EMA50/EMA200 + RSI + an entry-level technical score for one ticker."""
+    ticker = _normalize_ticker(ticker, market)
+    return fundamental_service.fetch_technical(ticker)
+
+
 @router.get("/news/{ticker}")
 def ticker_news(ticker: str, market: Optional[str] = None):
     """Recent news + upcoming earnings/dividend dates for a single ticker."""

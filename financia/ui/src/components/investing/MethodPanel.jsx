@@ -62,9 +62,25 @@ const STEPS = [
     tip: 'Bilanço açıklanmasına çok az kala büyük alım yapma; sonuç sürpriz çıkarsa fiyat sert oynayabilir.',
   },
   {
+    id: 'teknik',
+    icon: '📈',
+    title: '5. Teknik Analiz — Son Kontrol',
+    subtitle: 'Almadan önce grafiğe bak',
+    color: 'cyan',
+    what: 'Almaya karar vermeden hemen önce fiyatın grafiğine bak: şu an sert bir tepede (pahalı) mi, yoksa makul bir seviyede mi? Bu adım "hangi hisse" sorusunu değil, "ne zaman / hangi fiyattan" sorusunu yanıtlar.',
+    look: 'Fiyat 200 günlük ortalamanın üstünde mi (yükseliş trendi)? RSI aşırı alımda mı (pahalı, geri çekilebilir)? Son yükseliş çok mu sert? Teknik skor ne diyor?',
+    terms: [
+      { t: 'EMA200 (200 Günlük Ortalama)', d: 'Son 200 günün ortalama fiyatı. Fiyat bu çizginin ÜSTÜndeyse uzun vadeli yükseliş trendi, ALTındaysa düşüş trendi kabul edilir. En çok izlenen uzun vade trend göstergesidir.' },
+      { t: 'RSI (Göreceli Güç Endeksi)', d: '0–100 arası momentum göstergesi. 70 üstü "aşırı alım" = fiyat hızlı yükselmiş, pahalı/geri çekilebilir. 30 altı "aşırı satım" = fiyat hızlı düşmüş, ucuz/tepki gelebilir. 40–60 arası nötr.' },
+      { t: 'Teknik Skor', d: 'Trend ve momentum sinyallerini 0–100 arası tek bir özet puana çeviren gösterge. Yüksek = giriş için teknik olarak daha uygun bir an.' },
+    ],
+    where: 'Rapor → "📈 Teknik Analiz" butonu (grafik + EMA50/EMA200 + RSI + skor + okuma).',
+    tip: 'Uzun vadede teknik analiz şart değildir. Ama sert bir ralliden hemen sonra tek seferde almak yerine kademeli girersen bu adım giriş fiyatını iyileştirir.',
+  },
+  {
     id: 'karar',
     icon: '⚖️',
-    title: '5. Karar: Al / İzle / Geç',
+    title: '6. Karar: Al / İzle / Geç',
     subtitle: 'Bilgiyi birleştir, karar ver',
     color: 'yellow',
     what: 'Topladığın bilgiyi birleştirip karar ver. Uygulama sana puan ve uyarı verir, ama son kararı sen verirsin.',
@@ -75,7 +91,7 @@ const STEPS = [
   {
     id: 'boyut',
     icon: '🧩',
-    title: '6. Pozisyon & Çeşitlendirme',
+    title: '7. Pozisyon & Çeşitlendirme',
     subtitle: 'Ne kadar alınmalı?',
     color: 'pink',
     what: 'Almaya karar verdiysen, ne kadar alacağına karar ver. Paranın hepsini tek hisseye koyma.',
@@ -92,7 +108,7 @@ const STEPS = [
   {
     id: 'kademe',
     icon: '📉',
-    title: '7. Kademeli Alım',
+    title: '8. Kademeli Alım',
     subtitle: 'Tek seferde değil, parça parça al',
     color: 'green',
     what: 'Parayı tek seferde değil, birkaç parçaya bölüp farklı zamanlarda al.',
@@ -106,7 +122,7 @@ const STEPS = [
   {
     id: 'takip',
     icon: '🔁',
-    title: '8. Takip & Gözden Geçir',
+    title: '9. Takip & Gözden Geçir',
     subtitle: 'Aldıktan sonra izlemeyi sürdür',
     color: 'blue',
     what: 'Hisseyi aldıktan sonra ara sıra kontrol et. Şirketin durumu bozulduysa çıkmayı bil.',

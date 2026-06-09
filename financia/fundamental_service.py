@@ -422,6 +422,155 @@ def fetch_news_and_events(ticker: str, market: Optional[str] = None, max_news: i
     return out
 
 
+def _build_technical(sd: Optional[dict], price_vs_ema200: float, pos52: float, rsi_now: float) -> dict:
+    """Turn raw indicator readings into an entry-level technical score + Turkish notes."""
+    trend_score = sd.get("trend_score") if sd else None
+    reversal_score = sd.get("reversal_score") if sd else None
+    adx = sd.get("adx") if sd else None
+    rsi = sd.get("rsi") if sd else rsi_now
+
+    score = (
+        round((trend_score + reversal_score) / 2)
+        if (trend_score is not None and reversal_score is not None)
+        else None
+    )
+
+    if price_vs_ema200 > 1:
+        trend = "yükseliş"
+    elif price_vs_ema200 < -1:
+        trend = "düşüş"
+    else:
+        trend = "yatay"
+
+    if rsi is None:
+        momentum = "bilinmiyor"
+    elif rsi >= 70:
+        momentum = "aşırı alım (pahalı bölge)"
+    elif rsi <= 30:
+        momentum = "aşırı satım (ucuz bölge)"
+    else:
+        momentum = "nötr"
+
+    readings = []
+    yon = "üstünde" if price_vs_ema200 >= 0 else "altında"
+    readings.append(f"Fiyat 200 günlük ortalamanın %{abs(price_vs_ema200):.1f} {yon} → {trend} trendi")
+    if rsi is not None:
+        readings.append(f"RSI {rsi:.0f} → {momentum}")
+    readings.append(f"Fiyat son 1 yılın aralığında %{pos52:.0f} seviyesinde (0 = dip, 100 = zirve)")
+    if adx:
+        readings.append(f"ADX {adx:.0f} → {'güçlü trend' if adx > 25 else 'zayıf / yatay trend'}")
+
+    # plain-language verdict
+    if trend == "yükseliş" and momentum.startswith("aşırı alım"):
+        verdict = "Yükseliş trendinde ama RSI yüksek (pahalı bölge). Geri çekilmeyi beklemek ya da kademeli almak mantıklı."
+    elif trend == "yükseliş":
+        verdict = "Yükseliş trendinde, momentum aşırı değil — giriş için makul. Yine de kademeli al."
+    elif trend == "düşüş" and momentum.startswith("aşırı satım"):
+        verdict = "Düşüş trendinde ama aşırı satım — tepki gelebilir. Acele etme, dönüş teyidi bekle."
+    elif trend == "düşüş":
+        verdict = "Düşüş trendinde. Uzun vade için fırsat olabilir ama düşen bıçağı tutma; sabırlı ve kademeli ol."
+    else:
+        verdict = "Yatay seyir. Acele etmeye gerek yok, kademeli alım uygun."
+
+    return {
+        "score": score,
+        "trend": trend,
+        "momentum": momentum,
+        "price_vs_ema200": round(price_vs_ema200, 1),
+        "rsi": round(rsi, 1) if rsi is not None else None,
+        "adx": adx,
+        "pos52": round(pos52, 0),
+        "verdict": verdict,
+        "readings": readings,
+    }
+
+
+def fetch_technical(ticker: str, max_bars: int = 250) -> dict:
+    """Daily-candle technical view for one ticker: candles + EMA50/EMA200 + RSI
+    series, plus an entry-level technical score and plain-language readings.
+
+    Long-term timeframe: ~2y of daily data, last ~250 bars shown.
+    """
+    market = infer_market(ticker)
+    cfg = get_market_config(market)
+    out = {
+        "ticker": ticker,
+        "market": market,
+        "currency": cfg["currency_symbol"],
+        "candles": [],
+        "indicators": {"ema50": [], "ema200": [], "rsi": []},
+        "technical": None,
+        "valid": False,
+        "error": None,
+    }
+
+    try:
+        df = yf.Ticker(ticker).history(period="2y", interval="1d")
+    except Exception as e:
+        out["error"] = str(e)
+        return out
+    if df is None or df.empty or len(df) < 30:
+        return out
+    df = df.dropna(subset=["Close"])
+    close = df["Close"]
+
+    ema50 = close.ewm(span=50, adjust=False).mean()
+    ema200 = close.ewm(span=200 if len(close) >= 200 else len(close), adjust=False).mean()
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = (-delta).where(delta < 0, 0.0)
+    avg_gain = gain.ewm(alpha=1 / 14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / 14, adjust=False).mean()
+    rsi = 100 - (100 / (1 + (avg_gain / avg_loss)))
+
+    def _ms(idx):
+        return int(idx.timestamp() * 1000)
+
+    tail = df.tail(max_bars)
+    out["candles"] = [
+        {
+            "time": _ms(idx),
+            "open": round(float(row["Open"]), 2),
+            "high": round(float(row["High"]), 2),
+            "low": round(float(row["Low"]), 2),
+            "close": round(float(row["Close"]), 2),
+            "volume": int(row["Volume"]) if not pd.isna(row["Volume"]) else 0,
+        }
+        for idx, row in tail.iterrows()
+    ]
+
+    def _points(s, digits=2):
+        return [
+            {"time": _ms(i), "value": round(float(v), digits)}
+            for i, v in s.tail(max_bars).items()
+            if not pd.isna(v)
+        ]
+
+    out["indicators"]["ema50"] = _points(ema50)
+    out["indicators"]["ema200"] = _points(ema200)
+    out["indicators"]["rsi"] = _points(rsi, 1)
+
+    # readings + score (reuse score_daily; volume filter off so single tickers aren't rejected)
+    try:
+        from financia.eod_service import score_daily
+
+        sd = score_daily(ticker, df, {"min_volume_tl": 0})
+    except Exception:
+        sd = None
+
+    price = float(close.iloc[-1])
+    ema200_c = float(ema200.iloc[-1])
+    price_vs_ema200 = (price - ema200_c) / ema200_c * 100 if ema200_c else 0.0
+    win = close.tail(252)
+    lo, hi = float(win.min()), float(win.max())
+    pos52 = (price - lo) / (hi - lo) * 100 if hi > lo else 50.0
+    rsi_now = float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else None
+
+    out["technical"] = _build_technical(sd, price_vs_ema200, pos52, rsi_now)
+    out["valid"] = True
+    return out
+
+
 def analyze(ticker: str, override_fields: Optional[dict] = None, include_statements: bool = True) -> dict:
     """Full pipeline: fetch -> apply overrides -> score. Network-bound.
 

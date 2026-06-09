@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import { currencySymbol, marketFlag } from '../../utils/market';
 import { dateTag } from '../../utils/dates';
+import TechnicalModal from './TechnicalModal';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -177,6 +178,7 @@ export default function StockReportModal({ ticker, market, onClose }) {
   const [overrideDraft, setOverrideDraft] = useState({});
   const [saving, setSaving] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [showTechnical, setShowTechnical] = useState(false);
   const [showBuy, setShowBuy] = useState(false);
   const [buyShares, setBuyShares] = useState('');
   const [buyCost, setBuyCost] = useState('');
@@ -388,6 +390,12 @@ export default function StockReportModal({ ticker, market, onClose }) {
               >
                 💼 Portföye Ekle
               </button>
+              <button
+                onClick={() => setShowTechnical(true)}
+                className="px-3 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-sm font-bold transition-colors"
+              >
+                📈 Teknik Analiz
+              </button>
             </div>
 
             {showBuy && (
@@ -515,6 +523,10 @@ export default function StockReportModal({ ticker, market, onClose }) {
           </div>
         )}
       </div>
+
+      {showTechnical && (
+        <TechnicalModal ticker={tkr} market={mkt} onClose={() => setShowTechnical(false)} />
+      )}
     </div>
   );
 }
