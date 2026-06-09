@@ -3,6 +3,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { currencySymbol, marketFlag } from '../../utils/market';
 import { dateTag } from '../../utils/dates';
 import TechnicalModal from './TechnicalModal';
+import FlowPanel from './FlowPanel';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -179,7 +180,10 @@ export default function StockReportModal({ ticker, market, onClose }) {
   const [saving, setSaving] = useState(false);
   const [adding, setAdding] = useState(false);
   const [showTechnical, setShowTechnical] = useState(false);
+  const [activeFlow, setActiveFlow] = useState(null); // null | 'buy' | 'sell'
   const [showBuy, setShowBuy] = useState(false);
+
+  const toggleFlow = (f) => setActiveFlow((cur) => (cur === f ? null : f));
   const [buyShares, setBuyShares] = useState('');
   const [buyCost, setBuyCost] = useState('');
 
@@ -293,9 +297,9 @@ export default function StockReportModal({ ticker, market, onClose }) {
   const overrides = report?.overrides || {};
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-2 sm:p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/70 flex flex-col md:flex-row items-center md:items-stretch md:justify-center gap-3 z-50 p-2 sm:p-4 overflow-y-auto md:overflow-hidden" onClick={onClose}>
       <div
-        className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-4xl max-h-[92vh] overflow-y-auto"
+        className={`bg-gray-900 border border-gray-700 rounded-xl w-full max-h-[92vh] overflow-y-auto ${activeFlow ? 'max-w-3xl' : 'max-w-4xl'}`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -395,6 +399,18 @@ export default function StockReportModal({ ticker, market, onClose }) {
                 className="px-3 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-sm font-bold transition-colors"
               >
                 📈 Teknik Analiz
+              </button>
+              <button
+                onClick={() => toggleFlow('buy')}
+                className={`px-3 py-2 rounded text-sm font-bold transition-colors ${activeFlow === 'buy' ? 'bg-green-500 text-white ring-2 ring-green-300' : 'bg-green-600 hover:bg-green-500 text-white'}`}
+              >
+                📥 Alma Akışı
+              </button>
+              <button
+                onClick={() => toggleFlow('sell')}
+                className={`px-3 py-2 rounded text-sm font-bold transition-colors ${activeFlow === 'sell' ? 'bg-red-500 text-white ring-2 ring-red-300' : 'bg-red-600 hover:bg-red-500 text-white'}`}
+              >
+                📤 Satma Akışı
               </button>
             </div>
 
@@ -523,6 +539,9 @@ export default function StockReportModal({ ticker, market, onClose }) {
           </div>
         )}
       </div>
+
+      {/* Side flow window (buy/sell) — centers as a pair with the report */}
+      {activeFlow && <FlowPanel flow={activeFlow} onClose={() => setActiveFlow(null)} />}
 
       {showTechnical && (
         <TechnicalModal ticker={tkr} market={mkt} onClose={() => setShowTechnical(false)} />
