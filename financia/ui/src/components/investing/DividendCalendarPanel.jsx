@@ -56,6 +56,9 @@ export default function DividendCalendarPanel() {
           <span className="text-xs text-gray-500">{filtered.length} hisse</span>
           <ListFilters market={marketFilter} setMarket={setMarketFilter} sector={sectorFilter} setSector={setSectorFilter} sectors={sectors} />
         </div>
+        {filtered.length === 0 ? (
+          <div className="text-gray-500 text-center py-12 border border-dashed border-gray-800 rounded-lg">Bu filtreye uyan hisse yok.</div>
+        ) : (
         <div className="overflow-x-auto border border-gray-800 rounded-lg">
           <table className="w-full text-sm">
             <thead className="bg-gray-900 text-gray-500">
@@ -80,6 +83,7 @@ export default function DividendCalendarPanel() {
             </tbody>
           </table>
         </div>
+        )}
         </>
       )}
     </div>

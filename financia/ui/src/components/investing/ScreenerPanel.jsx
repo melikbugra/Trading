@@ -205,7 +205,7 @@ export default function ScreenerPanel() {
       </p>
 
       {/* Results table */}
-      {sorted.length === 0 ? (
+      {results.length === 0 ? (
         <div className="text-gray-500 text-center py-16 border border-dashed border-gray-800 rounded-lg">
           Henüz sonuç yok. Bir pazar tara ya da tek hisse analiz et.
         </div>
@@ -223,6 +223,11 @@ export default function ScreenerPanel() {
             🗑 Tümünü Sil
           </button>
         </div>
+        {sorted.length === 0 ? (
+          <div className="text-gray-500 text-center py-12 border border-dashed border-gray-800 rounded-lg">
+            Bu filtreye uyan hisse yok. Filtreyi değiştir veya "Tümü"ne dön.
+          </div>
+        ) : (
         <div className="overflow-x-auto border border-gray-800 rounded-lg">
           <table className="w-full text-sm">
             <thead className="bg-gray-900 text-gray-500">
@@ -277,6 +282,7 @@ export default function ScreenerPanel() {
             </tbody>
           </table>
         </div>
+        )}
         </>
       )}
 

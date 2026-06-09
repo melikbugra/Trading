@@ -144,6 +144,9 @@ export default function PortfolioPanel() {
           <span className="text-xs text-gray-500">{visibleHoldings.length} pozisyon</span>
           <ListFilters market={marketFilter} setMarket={setMarketFilter} sector={sectorFilter} setSector={setSectorFilter} sectors={sectors} />
         </div>
+        {visibleHoldings.length === 0 ? (
+          <div className="text-gray-500 text-center py-12 border border-dashed border-gray-800 rounded-lg">Bu filtreye uyan pozisyon yok.</div>
+        ) : (
         <div className="overflow-x-auto border border-gray-800 rounded-lg">
           <table className="w-full text-sm">
             <thead className="bg-gray-900 text-gray-500">
@@ -182,6 +185,7 @@ export default function PortfolioPanel() {
             </tbody>
           </table>
         </div>
+        )}
         </>
       )}
 
