@@ -649,6 +649,61 @@ PortfolioItemDB = BIST100PortfolioItem
 RecommendationDB = BIST100Recommendation
 
 
+# ============= Long-Term Investing Tables (second sub-app) =============
+class LongTermHolding(Base):
+    """A long-term portfolio position (manually entered)."""
+
+    __tablename__ = "lt_holdings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String, nullable=False)
+    market = Column(String, nullable=False)  # "bist" or "us"
+    shares = Column(Float, nullable=False)
+    cost_basis = Column(Float, nullable=False)  # avg buy price per share
+    purchase_date = Column(Date, nullable=True)
+    notes = Column(String, default="")
+    created_at = Column(DateTime, default=now_turkey)
+
+
+class LongTermWatchlistItem(Base):
+    """A long-term candidate being tracked (not yet owned)."""
+
+    __tablename__ = "lt_watchlist"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String, nullable=False)
+    market = Column(String, nullable=False)
+    notes = Column(String, default="")
+    added_at = Column(DateTime, default=now_turkey)
+
+
+class FundamentalSnapshot(Base):
+    """Cached fundamental analysis result for a ticker (slow-changing)."""
+
+    __tablename__ = "lt_fundamental_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String, nullable=False, unique=True)
+    market = Column(String, nullable=False)
+    metrics = Column(JSON, default={})
+    financials = Column(JSON, default={})
+    dividend_score = Column(Float, nullable=True)
+    growth_score = Column(Float, nullable=True)
+    overall_score = Column(Float, nullable=True)
+    label = Column(String, nullable=True)
+    fetched_at = Column(DateTime, default=now_turkey)
+
+
+class FundamentalOverride(Base):
+    """Manual overrides of fundamental fields (for BIST yfinance gaps)."""
+
+    __tablename__ = "lt_fundamental_overrides"
+
+    ticker = Column(String, primary_key=True)
+    fields = Column(JSON, default={})  # {field_name: value}
+    updated_at = Column(DateTime, default=now_turkey)
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
 

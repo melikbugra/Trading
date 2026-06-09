@@ -503,8 +503,14 @@ export default function EODAnalysisPanel({ strategies }) {
     };
 
     // Helpers
+    // EOD universe is BIST + US only: .IS suffix => BIST (legacy id "bist100"), else US.
+    const marketOf = (result) =>
+        (result?.market === 'us' || (!result?.ticker?.toUpperCase().endsWith('.IS') && result?.market !== 'bist'))
+            ? 'us'
+            : 'bist100';
+
     const openChartModal = (result) => {
-        setChartModal({ ticker: result.ticker, market: 'bist100' });
+        setChartModal({ ticker: result.ticker, market: marketOf(result) });
     };
 
     const openAddToStrategyModal = (result) => {
@@ -548,7 +554,7 @@ export default function EODAnalysisPanel({ strategies }) {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             ticker: addToStrategyModal.ticker,
-                            market: 'bist100',
+                            market: marketOf(addToStrategyModal),
                             strategy_id: strategyId,
                         }),
                     });
@@ -754,6 +760,7 @@ export default function EODAnalysisPanel({ strategies }) {
                                                         onClick={() => openChartModal(result)}
                                                         className="text-white font-mono font-bold hover:text-purple-400 transition-colors flex items-center gap-1 text-sm"
                                                     >
+                                                        <span className="text-xs">{marketOf(result) === 'us' ? '🇺🇸' : '🇹🇷'}</span>
                                                         {result.symbol}
                                                         <span className="text-xs text-gray-500">📊</span>
                                                     </button>
@@ -939,6 +946,7 @@ export default function EODAnalysisPanel({ strategies }) {
                                                         onClick={() => openChartModal(result)}
                                                         className="text-white font-mono font-bold hover:text-green-400 transition-colors flex items-center gap-1 text-sm"
                                                     >
+                                                        <span className="text-xs">{marketOf(result) === 'us' ? '🇺🇸' : '🇹🇷'}</span>
                                                         {result.symbol}
                                                         <span className="text-xs text-gray-500">📊</span>
                                                     </button>

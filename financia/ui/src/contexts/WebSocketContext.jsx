@@ -23,6 +23,7 @@ export const WebSocketProvider = ({ children }) => {
     });
     const [eodProgress, setEodProgress] = useState(null); // { status, current, total, ticker }
     const [scanProgress, setScanProgress] = useState(null); // { status, current, total, ticker } - live mode
+    const [investingScanProgress, setInvestingScanProgress] = useState(null); // long-term fundamental scan
     const [simScanProgress, setSimScanProgress] = useState(null); // { status, current, total, ticker } - simulation mode
     // Simulation-related state (managed by SimulationContext, but we pass raw messages)
     const [simStatus, setSimStatus] = useState(null);
@@ -66,6 +67,8 @@ export const WebSocketProvider = ({ children }) => {
                     setEodProgress(updatedData.data);
                 } else if (updatedData.type === 'scan_progress') {
                     setScanProgress(updatedData.data);
+                } else if (updatedData.type === 'investing_scan') {
+                    setInvestingScanProgress(updatedData.data);
                 } else if (updatedData.type === 'sim_scan_progress') {
                     setSimScanProgress(updatedData.data);
                 } else if (updatedData.type === 'SCAN_STARTED') {
@@ -102,7 +105,7 @@ export const WebSocketProvider = ({ children }) => {
     }, []);
 
     return (
-        <WebSocketContext.Provider value={{ lastMessage, isConnected, activeScans, scannerStatus, setScannerStatus, activeSignals, eodStatus, setEodStatus, eodProgress, setEodProgress, scanProgress, setScanProgress, simScanProgress, setSimScanProgress }}>
+        <WebSocketContext.Provider value={{ lastMessage, isConnected, activeScans, scannerStatus, setScannerStatus, activeSignals, eodStatus, setEodStatus, eodProgress, setEodProgress, scanProgress, setScanProgress, simScanProgress, setSimScanProgress, investingScanProgress, setInvestingScanProgress }}>
             {children}
         </WebSocketContext.Provider>
     );

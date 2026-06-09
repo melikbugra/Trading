@@ -19,6 +19,7 @@ from financia.simulation_scanner import simulation_scanner
 # Routers
 from financia.web_api.routers import strategies
 from financia.web_api.routers import simulation
+from financia.web_api.routers import investing
 
 
 @asynccontextmanager
@@ -96,6 +97,9 @@ app.include_router(strategies.router)
 
 # Include Simulation Router
 app.include_router(simulation.router)
+
+# Include Long-Term Investing Router
+app.include_router(investing.router)
 
 
 # -- WebSocket Endpoint --

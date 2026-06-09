@@ -17,6 +17,10 @@ export default defineConfig({
         target: `http://${apiHost}:8000`,
         changeOrigin: true
       },
+      '/investing': {
+        target: `http://${apiHost}:8000`,
+        changeOrigin: true
+      },
       '/ws': {
         target: `ws://${apiHost}:8000`,
         ws: true
