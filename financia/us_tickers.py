@@ -22,8 +22,36 @@ SP100_TICKERS = [
     "XOM",
 ]
 
+# Popular US growth / small-mid-cap names that retail investors track and that
+# are generally tradeable on Midas. High-growth themes (space, EV, fintech,
+# AI/semis, biotech, quantum, nuclear, consumer) often missed by the S&P 100 —
+# e.g. LUNR, RKLB, ASTS.
+GROWTH_TICKERS = [
+    # Space & defense-tech
+    "RKLB", "ASTS", "LUNR", "RDW", "PL", "BKSY", "ACHR", "JOBY", "KTOS", "AVAV",
+    # EV / mobility
+    "RIVN", "LCID", "NIO", "XPEV", "LI", "CHPT", "QS",
+    # Fintech / crypto-adjacent
+    "SOFI", "AFRM", "UPST", "HOOD", "COIN", "NU", "MSTR", "MARA", "RIOT", "CLSK", "XYZ",
+    # AI / software / semis (growth)
+    "PLTR", "SMCI", "ARM", "MRVL", "MU", "ON", "WOLF", "AI", "BBAI", "SOUN",
+    "PATH", "SNOW", "NET", "DDOG", "CRWD", "ZS", "PANW", "MDB", "S", "GTLB",
+    "ESTC", "CFLT", "U", "RBLX", "NOW", "ANET", "VRT", "DELL", "TSM", "ASML",
+    "IONQ", "RGTI", "QBTS",
+    # Energy / clean / nuclear
+    "ENPH", "FSLR", "RUN", "PLUG", "BE", "SHLS", "OKLO", "SMR", "CEG", "VST", "GEV",
+    # Biotech / health
+    "MRNA", "BNTX", "CRSP", "NTLA", "BEAM", "RXRX", "HIMS", "TDOC", "VKTX", "TEM",
+    "RVMD", "INSM", "NTRA", "EXAS", "ALNY", "TGTX",
+    # Consumer / internet growth
+    "SHOP", "SE", "MELI", "ABNB", "UBER", "LYFT", "DASH", "CPNG", "GRAB", "RDDT",
+    "PINS", "SNAP", "SPOT", "ROKU", "TTD", "DKNG", "CELH", "ELF", "DUOL", "CAVA",
+    "SG", "WING", "CROX", "DECK", "ONON", "GME",
+]
+
 # Deduplicate + stable sort
 US_ALL_TICKERS = sorted(set(SP100_TICKERS))
+US_EXT_TICKERS = sorted(set(SP100_TICKERS) | set(GROWTH_TICKERS))
 
 
 def get_us_tickers(index: str = "100") -> list:
@@ -31,9 +59,12 @@ def get_us_tickers(index: str = "100") -> list:
     Get US ticker list.
 
     Args:
-        index: "100" for S&P 100 (currently the only list).
+        index: "100" for S&P 100 (large caps), "ext" for S&P 100 + popular
+               growth / small-mid-cap names.
 
     Returns:
         List of ticker symbols in Yahoo Finance format.
     """
+    if index == "ext":
+        return US_EXT_TICKERS
     return US_ALL_TICKERS

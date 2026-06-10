@@ -30,6 +30,7 @@ export default function ScreenerPanel() {
   const [singleMarket, setSingleMarket] = useState('bist');
   const [sectorFilter, setSectorFilter] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
+  const [query, setQuery] = useState('');
   const lastDoneRef = useRef(null);
 
   const openReport = (ticker, market) => {
@@ -97,8 +98,12 @@ export default function ScreenerPanel() {
   };
 
   const sectors = uniqueSectors(results, (r) => r.sector);
+  const q = query.trim().toLowerCase();
   const filtered = results.filter(
-    (r) => (marketFilter === 'all' || r.market === marketFilter) && (sectorFilter === 'all' || r.sector === sectorFilter)
+    (r) =>
+      (marketFilter === 'all' || r.market === marketFilter) &&
+      (sectorFilter === 'all' || r.sector === sectorFilter) &&
+      (!q || (r.symbol || '').toLowerCase().includes(q) || (r.sector || '').toLowerCase().includes(q))
   );
   const sorted = [...filtered].sort((a, b) => (b[sortBy] ?? -1) - (a[sortBy] ?? -1));
 
@@ -142,25 +147,41 @@ export default function ScreenerPanel() {
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <button
-          onClick={() => runScan({ market: 'bist' }, 'BIST 100')}
+          onClick={() => runScan({ market: 'bist', universe: '100' }, 'BIST 100')}
           disabled={scanning}
           className="px-3 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-700 text-white rounded text-sm font-bold transition-colors"
         >
-          🇹🇷 BIST 100 Tara
+          🇹🇷 BIST 100
         </button>
         <button
-          onClick={() => runScan({ market: 'us' }, 'S&P 100')}
+          onClick={() => runScan({ market: 'bist', universe: 'all' }, 'Tüm BIST')}
+          disabled={scanning}
+          className="px-3 py-2 bg-red-700 hover:bg-red-600 disabled:bg-gray-700 text-white rounded text-sm font-bold transition-colors"
+          title="Tüm BIST (~500 hisse, birkaç dakika sürer)"
+        >
+          🇹🇷 Tüm BIST
+        </button>
+        <button
+          onClick={() => runScan({ market: 'us', universe: '100' }, 'S&P 100')}
           disabled={scanning}
           className="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white rounded text-sm font-bold transition-colors"
         >
-          🇺🇸 S&P 100 Tara
+          🇺🇸 S&P 100
+        </button>
+        <button
+          onClick={() => runScan({ market: 'us', universe: 'ext' }, 'ABD (Geniş)')}
+          disabled={scanning}
+          className="px-3 py-2 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-700 text-white rounded text-sm font-bold transition-colors"
+          title="S&P 100 + büyüme/küçük hisseler (LUNR, RKLB, ASTS…)"
+        >
+          🇺🇸 ABD Geniş
         </button>
         <button
           onClick={() => runScan({ use_watchlist: true }, 'İzleme listesi')}
           disabled={scanning}
           className="px-3 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-700 text-white rounded text-sm font-bold transition-colors"
         >
-          ⭐ İzleme Listesini Tara
+          ⭐ İzleme
         </button>
         <form onSubmit={analyzeSingle} className="ml-auto flex gap-2">
           <select
@@ -211,9 +232,20 @@ export default function ScreenerPanel() {
         </div>
       ) : (
         <>
-        <div className="flex items-center justify-between mb-2 gap-2">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-gray-500">{sorted.length} hisse</span>
+            <div className="relative">
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="🔎 Ara (sembol / sektör)"
+                className="bg-gray-800 border border-gray-700 text-white px-2 py-1 rounded text-xs w-44"
+              />
+              {query && (
+                <button onClick={() => setQuery('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white text-xs">✕</button>
+              )}
+            </div>
             <ListFilters market={marketFilter} setMarket={setMarketFilter} sector={sectorFilter} setSector={setSectorFilter} sectors={sectors} />
           </div>
           <button

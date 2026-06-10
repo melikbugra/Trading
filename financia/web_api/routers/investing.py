@@ -61,6 +61,7 @@ class WatchlistCreate(BaseModel):
 
 class ScanRequest(BaseModel):
     market: Optional[str] = None  # "bist" | "us" : scan that universe
+    universe: Optional[str] = None  # bist: "100"|"all" ; us: "100"|"ext"
     tickers: Optional[List[str]] = None  # explicit list
     use_watchlist: bool = False  # scan the long-term watchlist
     limit: Optional[int] = None  # cap number of tickers (full-market scans are slow)
@@ -415,39 +416,60 @@ async def _broadcast_scan(data: dict):
         print(f"[Investing] scan broadcast failed: {e}")
 
 
+# How many tickers to fetch from yfinance at once. The codebase already uses
+# 8-15 concurrent yfinance calls elsewhere (EOD/news) without rate-limit issues;
+# keep it moderate so Yahoo doesn't return 429.
+_SCAN_CONCURRENCY = 8
+
+
 async def _run_scan(tickers: List[str], label: str):
-    """Background bulk scan: score each ticker (.info only), cache, stream progress."""
+    """Background bulk scan: score each ticker (.info only), cache, stream progress.
+
+    yfinance fetches run in a bounded thread pool (concurrency-limited) so the
+    network work overlaps; DB writes and broadcasts happen back on the event loop
+    (single-threaded => safe for the one SQLite session).
+    """
     total = len(tickers)
     count = 0
     errors = 0
+    done = 0
     skipped: List[str] = []
-    print(f"[Investing] Scan started: {label} ({total} hisse)")
+    print(f"[Investing] Scan started: {label} ({total} hisse, {_SCAN_CONCURRENCY}x paralel)")
     await _broadcast_scan({"status": "started", "current": 0, "total": total, "ticker": None, "label": label})
 
     db = SessionLocal()
-    try:
-        for i, t in enumerate(tickers, 1):
-            try:
-                overrides = _get_override_fields(db, t)
-                # statements not needed for scoring -> fast .info-only fetch
+    # pre-load overrides once (avoid per-ticker DB reads inside workers)
+    overrides_map = {o.ticker: (o.fields or {}) for o in db.query(FundamentalOverride).all()}
+    sem = asyncio.Semaphore(_SCAN_CONCURRENCY)
+
+    async def _worker(t: str):
+        nonlocal count, errors, done
+        try:
+            async with sem:
+                # network + compute in a thread; statements off for speed
                 report = await asyncio.to_thread(
-                    fundamental_service.analyze, t, overrides, False
+                    fundamental_service.analyze, t, overrides_map.get(t), False
                 )
-                if report.get("valid"):
-                    _upsert_snapshot(db, report)
-                    db.commit()
-                    count += 1
-                else:
-                    skipped.append(t.replace(".IS", ""))
-            except Exception as e:
-                errors += 1
-                print(f"[Investing] {t} hata: {e}")
-            if i % 10 == 0 or i == total:
-                print(f"[Investing] {label}: {i}/{total} (skor={count}, atlanan={len(skipped)}, hata={errors})")
-            await _broadcast_scan({
-                "status": "running", "current": i, "total": total,
-                "ticker": t.replace(".IS", ""), "label": label,
-            })
+            # back on the event loop: DB + broadcast are serialized here
+            if report.get("valid"):
+                _upsert_snapshot(db, report)
+                db.commit()
+                count += 1
+            else:
+                skipped.append(t.replace(".IS", ""))
+        except Exception as e:
+            errors += 1
+            print(f"[Investing] {t} hata: {e}")
+        done += 1
+        if done % 10 == 0 or done == total:
+            print(f"[Investing] {label}: {done}/{total} (skor={count}, atlanan={len(skipped)}, hata={errors})")
+        await _broadcast_scan({
+            "status": "running", "current": done, "total": total,
+            "ticker": t.replace(".IS", ""), "label": label,
+        })
+
+    try:
+        await asyncio.gather(*(_worker(t) for t in tickers))
     finally:
         db.close()
         _scan_state["running"] = False
@@ -477,13 +499,25 @@ async def scan(body: ScanRequest, db: Session = Depends(get_db)):
         label = "Liste"
     elif body.market:
         mkt = normalize_market(body.market)
+        uni = body.universe
         if mkt == "bist":
-            # The screener targets the BIST 100 index, not the full ~538 universe.
             from financia.bist100_tickers import get_bist_tickers
-            tickers = get_bist_tickers("100")
+
+            if uni == "all":
+                tickers = get_bist_tickers("all")
+                label = "Tüm BIST"
+            else:
+                tickers = get_bist_tickers("100")
+                label = "BIST 100"
         else:
-            tickers = get_market_tickers(mkt)
-        label = get_market_config(mkt)["label"]
+            from financia.us_tickers import get_us_tickers
+
+            if uni == "ext":
+                tickers = get_us_tickers("ext")
+                label = "ABD (Geniş)"
+            else:
+                tickers = get_us_tickers("100")
+                label = "S&P 100"
     else:
         raise HTTPException(status_code=400, detail="market, tickers veya use_watchlist gerekli")
 
