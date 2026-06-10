@@ -20,6 +20,7 @@ export default function PortfolioPanel() {
   const [marketFilter, setMarketFilter] = useState('all');
   const [sectorFilter, setSectorFilter] = useState('all');
   const [query, setQuery] = useState('');
+  const [sortBy, setSortBy] = useState(null); // null = eklenme sırası
 
   const load = async () => {
     setLoading(true);
@@ -78,11 +79,22 @@ export default function PortfolioPanel() {
 
   const sectors = uniqueSectors(data.holdings, (h) => h.sector);
   const q = query.trim().toLowerCase();
-  const visibleHoldings = data.holdings.filter(
+  const filteredHoldings = data.holdings.filter(
     (h) =>
       (marketFilter === 'all' || h.market === marketFilter) &&
       (sectorFilter === 'all' || h.sector === sectorFilter) &&
       (!q || (h.symbol || '').toLowerCase().includes(q) || (h.sector || '').toLowerCase().includes(q))
+  );
+  const visibleHoldings = sortBy
+    ? [...filteredHoldings].sort((a, b) => (b[sortBy] ?? -Infinity) - (a[sortBy] ?? -Infinity))
+    : filteredHoldings;
+
+  const scoreColor = (s) =>
+    s == null ? 'text-gray-500' : s >= 70 ? 'text-green-400' : s >= 50 ? 'text-blue-400' : s >= 30 ? 'text-yellow-400' : 'text-red-400';
+  const SortBtn = ({ field, children }) => (
+    <button onClick={() => setSortBy((cur) => (cur === field ? null : field))} className={`hover:text-white ${sortBy === field ? 'text-white' : ''}`}>
+      {children}{sortBy === field ? ' ▼' : ''}
+    </button>
   );
 
   return (
@@ -162,9 +174,12 @@ export default function PortfolioPanel() {
                 <th className="text-right px-3 py-2">Adet</th>
                 <th className="text-right px-3 py-2 hidden sm:table-cell">Maliyet</th>
                 <th className="text-right px-3 py-2">Fiyat</th>
-                <th className="text-right px-3 py-2">Değer</th>
-                <th className="text-right px-3 py-2">K/Z</th>
-                <th className="text-right px-3 py-2 hidden md:table-cell">Ağırlık</th>
+                <th className="text-right px-3 py-2"><SortBtn field="market_value">Değer</SortBtn></th>
+                <th className="text-right px-3 py-2"><SortBtn field="pnl_pct">K/Z</SortBtn></th>
+                <th className="text-right px-3 py-2 hidden md:table-cell"><SortBtn field="weight">Ağırlık</SortBtn></th>
+                <th className="text-right px-3 py-2 hidden lg:table-cell"><SortBtn field="dividend_score">Temettü</SortBtn></th>
+                <th className="text-right px-3 py-2 hidden lg:table-cell"><SortBtn field="growth_score">Büyüme</SortBtn></th>
+                <th className="text-right px-3 py-2 hidden md:table-cell"><SortBtn field="overall_score">Genel</SortBtn></th>
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
@@ -183,6 +198,9 @@ export default function PortfolioPanel() {
                     {h.pnl == null ? '—' : `${h.pnl >= 0 ? '+' : ''}${fmt(h.pnl)} (${h.pnl_pct >= 0 ? '+' : ''}${fmt(h.pnl_pct)}%)`}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-400 hidden md:table-cell">{h.weight == null ? '—' : `${fmt(h.weight, 1)}%`}</td>
+                  <td className={`px-3 py-2 text-right font-mono font-bold hidden lg:table-cell ${scoreColor(h.dividend_score)}`}>{h.dividend_score == null ? '—' : Math.round(h.dividend_score)}</td>
+                  <td className={`px-3 py-2 text-right font-mono font-bold hidden lg:table-cell ${scoreColor(h.growth_score)}`}>{h.growth_score == null ? '—' : Math.round(h.growth_score)}</td>
+                  <td className={`px-3 py-2 text-right font-mono font-extrabold hidden md:table-cell ${scoreColor(h.overall_score)}`}>{h.overall_score == null ? '—' : Math.round(h.overall_score)}</td>
                   <td className="px-3 py-2 text-right">
                     <button onClick={() => removeHolding(h.id)} className="text-red-400 hover:text-red-300 text-xs">Sil</button>
                   </td>

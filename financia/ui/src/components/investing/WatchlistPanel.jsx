@@ -16,6 +16,7 @@ export default function WatchlistPanel() {
   const [marketFilter, setMarketFilter] = useState('all');
   const [sectorFilter, setSectorFilter] = useState('all');
   const [query, setQuery] = useState('');
+  const [sortBy, setSortBy] = useState(null); // null = eklenme sırası
 
   const load = async () => {
     try {
@@ -61,6 +62,15 @@ export default function WatchlistPanel() {
       (sectorFilter === 'all' || it.scores?.sector === sectorFilter) &&
       (!q || (it.symbol || '').toLowerCase().includes(q) || (it.scores?.sector || '').toLowerCase().includes(q))
   );
+  const sorted = sortBy
+    ? [...filtered].sort((a, b) => (b.scores?.[sortBy] ?? -1) - (a.scores?.[sortBy] ?? -1))
+    : filtered;
+
+  const SortBtn = ({ field, children }) => (
+    <button onClick={() => setSortBy((cur) => (cur === field ? null : field))} className={`hover:text-white ${sortBy === field ? 'text-white' : ''}`}>
+      {children}{sortBy === field ? ' ▼' : ''}
+    </button>
+  );
 
   return (
     <div>
@@ -93,14 +103,14 @@ export default function WatchlistPanel() {
                 <th className="text-left px-3 py-2">Hisse</th>
                 <th className="text-left px-3 py-2 hidden lg:table-cell">Sektör</th>
                 <th className="text-left px-3 py-2 hidden sm:table-cell">Etiket</th>
-                <th className="text-right px-3 py-2">Temettü</th>
-                <th className="text-right px-3 py-2">Büyüme</th>
-                <th className="text-right px-3 py-2">Genel</th>
+                <th className="text-right px-3 py-2"><SortBtn field="dividend_score">Temettü</SortBtn></th>
+                <th className="text-right px-3 py-2"><SortBtn field="growth_score">Büyüme</SortBtn></th>
+                <th className="text-right px-3 py-2"><SortBtn field="overall_score">Genel</SortBtn></th>
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((it) => {
+              {sorted.map((it) => {
                 const s = it.scores;
                 return (
                   <tr key={it.id} className="border-t border-gray-800 hover:bg-gray-800/30">
