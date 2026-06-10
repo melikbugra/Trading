@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import StockReportModal from './StockReportModal';
 import ListFilters, { uniqueSectors, SearchBox } from './ListFilters';
+import AnalyzeButton from './AnalyzeButton';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -92,6 +93,12 @@ export default function WatchlistPanel() {
           <span className="text-xs text-gray-500">{filtered.length} hisse</span>
           <SearchBox value={query} onChange={setQuery} />
           <ListFilters market={marketFilter} setMarket={setMarketFilter} sector={sectorFilter} setSector={setSectorFilter} sectors={sectors} />
+          <AnalyzeButton
+            getBody={() => ({ use_watchlist: true })}
+            label="🔄 Listeyi Analiz Et"
+            onDone={load}
+            className="px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 text-white rounded text-xs font-bold transition-colors"
+          />
         </div>
         {filtered.length === 0 ? (
           <div className="text-gray-500 text-center py-12 border border-dashed border-gray-800 rounded-lg">Bu filtreye uyan hisse yok.</div>
