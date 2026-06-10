@@ -73,6 +73,11 @@ export default function TechnicalModal({ ticker, market, onClose }) {
     addLine(priceChart, data.indicators?.ema50, '#3b82f6');
     addLine(priceChart, data.indicators?.ema200, '#f59e0b');
 
+    // support / resistance levels
+    const t = data.technical || {};
+    if (t.support) candle.createPriceLine({ price: t.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Destek' });
+    if (t.resistance) candle.createPriceLine({ price: t.resistance, color: '#ef4444', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Direnç' });
+
     // --- RSI pane ---
     const rsiChart = createChart(rsiRef.current, { width: rsiRef.current.clientWidth, height: 130, ...common });
     const rsiSeries = rsiChart.addSeries(LineSeries, {
@@ -135,6 +140,8 @@ export default function TechnicalModal({ ticker, market, onClose }) {
                 <div className="h-1.5 bg-gray-700 rounded-full mt-2 overflow-hidden">
                   <div className={`h-full ${tech?.score >= 70 ? 'bg-green-500' : tech?.score >= 50 ? 'bg-blue-500' : tech?.score >= 30 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${tech?.score || 0}%` }} />
                 </div>
+                {tech?.score_band && <div className="text-[11px] text-gray-400 mt-2 leading-snug">{tech.score_band}</div>}
+                <div className="text-[10px] text-gray-600 mt-1">60+ uygun · 40–60 nötr · 40 altı zayıf</div>
               </div>
               <div className="sm:col-span-2 bg-gray-800/60 rounded-lg p-3 space-y-1.5">
                 <div className="flex flex-wrap gap-2">
@@ -159,6 +166,8 @@ export default function TechnicalModal({ ticker, market, onClose }) {
               <div className="flex items-center gap-3 text-xs text-gray-400 mb-1">
                 <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#3b82f6]" /> EMA50</span>
                 <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#f59e0b]" /> EMA200 (200 günlük ort.)</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#22c55e]" /> Destek</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#ef4444]" /> Direnç</span>
               </div>
               <div ref={priceRef} className="w-full" />
             </div>

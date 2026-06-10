@@ -445,19 +445,35 @@ def fetch_news_and_events(ticker: str, market: Optional[str] = None, max_news: i
     return out
 
 
-def _build_technical(sd: Optional[dict], price_vs_ema200: float, pos52: float, rsi_now: float) -> dict:
-    """Turn raw indicator readings into an entry-level technical score + Turkish notes."""
+def _build_technical(sd: Optional[dict], ctx: dict) -> dict:
+    """Turn raw indicators into an entry-level technical score + clear Turkish notes.
+
+    `ctx` carries the precomputed values: price_vs_ema200, pos52, rsi_now,
+    drawdown (% below 1y high), support, resistance, rel_volume, currency.
+    """
+    price_vs_ema200 = ctx["price_vs_ema200"]
+    pos52 = ctx["pos52"]
+    drawdown = ctx.get("drawdown")
+    support = ctx.get("support")
+    resistance = ctx.get("resistance")
+    rel_volume = ctx.get("rel_volume")
+    cur = ctx.get("currency", "")
+
     trend_score = sd.get("trend_score") if sd else None
     reversal_score = sd.get("reversal_score") if sd else None
     adx = sd.get("adx") if sd else None
-    rsi = sd.get("rsi") if sd else rsi_now
+    rsi = sd.get("rsi") if sd else ctx.get("rsi_now")
 
-    score = (
-        round((trend_score + reversal_score) / 2)
-        if (trend_score is not None and reversal_score is not None)
-        else None
-    )
+    # Entry-suitability score (0-100): driven by trend strength, with a bonus for
+    # an oversold pullback (good dip entry) and a penalty when overbought (pahalı).
+    if trend_score is None or reversal_score is None:
+        score = None
+    else:
+        rsi_v = rsi if rsi is not None else ctx.get("rsi_now")
+        penalty = 20 if (rsi_v is not None and rsi_v >= 75) else 10 if (rsi_v is not None and rsi_v >= 70) else 0
+        score = int(max(0, min(100, round(trend_score + reversal_score * 0.4 - penalty))))
 
+    # Trend (relative to the 200-day average)
     if price_vs_ema200 > 1:
         trend = "yükseliş"
     elif price_vs_ema200 < -1:
@@ -465,44 +481,92 @@ def _build_technical(sd: Optional[dict], price_vs_ema200: float, pos52: float, r
     else:
         trend = "yatay"
 
+    # Momentum (RSI)
     if rsi is None:
         momentum = "bilinmiyor"
     elif rsi >= 70:
-        momentum = "aşırı alım (pahalı bölge)"
+        momentum = "aşırı alım"
     elif rsi <= 30:
-        momentum = "aşırı satım (ucuz bölge)"
+        momentum = "aşırı satım"
     else:
         momentum = "nötr"
 
+    def _price(v):
+        return f"{cur}{v:,.2f}" if v is not None else "—"
+
+    # --- clear, plain-language readings ---
     readings = []
     yon = "üstünde" if price_vs_ema200 >= 0 else "altında"
-    readings.append(f"Fiyat 200 günlük ortalamanın %{abs(price_vs_ema200):.1f} {yon} → {trend} trendi")
+    readings.append(
+        f"Fiyat, 200 günlük ortalamanın %{abs(price_vs_ema200):.1f} {yon}. "
+        f"Uzun vadeli trend {'yukarı' if trend == 'yükseliş' else 'aşağı' if trend == 'düşüş' else 'yatay'}."
+    )
     if rsi is not None:
-        readings.append(f"RSI {rsi:.0f} → {momentum}")
-    readings.append(f"Fiyat son 1 yılın aralığında %{pos52:.0f} seviyesinde (0 = dip, 100 = zirve)")
+        if momentum == "aşırı alım":
+            rsi_txt = "kısa vadede hızlı yükselmiş, pahalı bölge — geri çekilme gelebilir."
+        elif momentum == "aşırı satım":
+            rsi_txt = "kısa vadede sert düşmüş, ucuz bölge — tepki yükselişi gelebilir."
+        else:
+            rsi_txt = "dengeli — ne aşırı pahalı ne aşırı ucuz."
+        readings.append(f"RSI {rsi:.0f}: momentum {rsi_txt}")
+    if drawdown is not None:
+        if drawdown <= -1:
+            readings.append(f"Fiyat, son 1 yılın zirvesinin %{abs(drawdown):.0f} altında (geri çekilme).")
+        else:
+            readings.append("Fiyat, son 1 yılın zirvesine çok yakın.")
+    if support is not None or resistance is not None:
+        readings.append(
+            f"En yakın destek {_price(support)}, en yakın direnç {_price(resistance)}. "
+            "Desteğe yakın alım, dirence yakın alımdan daha avantajlıdır."
+        )
+    if rel_volume:
+        if rel_volume >= 1.3:
+            vtxt = "ortalamanın belirgin üstünde — hareket hacimle destekleniyor."
+        elif rel_volume >= 0.8:
+            vtxt = "normale yakın."
+        else:
+            vtxt = "ortalamanın altında — hareket zayıf hacimle, teyit güçsüz."
+        readings.append(f"İşlem hacmi son ortalamanın {rel_volume:.1f} katı: {vtxt}")
     if adx:
-        readings.append(f"ADX {adx:.0f} → {'güçlü trend' if adx > 25 else 'zayıf / yatay trend'}")
+        readings.append(
+            f"ADX {adx:.0f}: trend {'güçlü ve net' if adx > 25 else 'zayıf, fiyat yatay seyirde'}."
+        )
 
-    # plain-language verdict
-    if trend == "yükseliş" and momentum.startswith("aşırı alım"):
-        verdict = "Yükseliş trendinde ama RSI yüksek (pahalı bölge). Geri çekilmeyi beklemek ya da kademeli almak mantıklı."
-    elif trend == "yükseliş":
-        verdict = "Yükseliş trendinde, momentum aşırı değil — giriş için makul. Yine de kademeli al."
-    elif trend == "düşüş" and momentum.startswith("aşırı satım"):
-        verdict = "Düşüş trendinde ama aşırı satım — tepki gelebilir. Acele etme, dönüş teyidi bekle."
-    elif trend == "düşüş":
-        verdict = "Düşüş trendinde. Uzun vade için fırsat olabilir ama düşen bıçağı tutma; sabırlı ve kademeli ol."
+    # --- score band (entry suitability) ---
+    if score is None:
+        band = "Teknik veri yetersiz."
+    elif score >= 60:
+        band = "Giriş için uygun bir teknik tablo (yeşil ışık)."
+    elif score >= 40:
+        band = "Nötr — acele etme, kademeli al."
     else:
-        verdict = "Yatay seyir. Acele etmeye gerek yok, kademeli alım uygun."
+        band = "Giriş için ideal an değil. Temel güçlüyse yine de küçük ve kademeli alınabilir."
+
+    # --- one-line verdict ---
+    if trend == "yükseliş" and momentum == "aşırı alım":
+        verdict = "Trend yukarı ama fiyat kısa vadede ısınmış (pahalı). Geri çekilmeyi beklemek ya da kademeli almak daha güvenli."
+    elif trend == "yükseliş":
+        verdict = "Trend yukarı ve momentum aşırı değil — giriş için makul bir tablo. Yine de kademeli al."
+    elif trend == "düşüş" and momentum == "aşırı satım":
+        verdict = "Trend aşağı ama fiyat çok satılmış — tepki gelebilir. Acele etme, dönüş teyidi bekle."
+    elif trend == "düşüş":
+        verdict = "Trend aşağı. Uzun vade için fırsat olabilir ama düşen bıçağı tutma; sabırlı ve küçük adımlarla gir."
+    else:
+        verdict = "Fiyat yatay seyirde. Acele etmeye gerek yok; kademeli alım uygun."
 
     return {
         "score": score,
+        "score_band": band,
         "trend": trend,
         "momentum": momentum,
         "price_vs_ema200": round(price_vs_ema200, 1),
         "rsi": round(rsi, 1) if rsi is not None else None,
         "adx": adx,
         "pos52": round(pos52, 0),
+        "drawdown": round(drawdown, 1) if drawdown is not None else None,
+        "support": round(support, 2) if support is not None else None,
+        "resistance": round(resistance, 2) if resistance is not None else None,
+        "rel_volume": round(rel_volume, 2) if rel_volume else None,
         "verdict": verdict,
         "readings": readings,
     }
@@ -584,12 +648,34 @@ def fetch_technical(ticker: str, max_bars: int = 250) -> dict:
     price = float(close.iloc[-1])
     ema200_c = float(ema200.iloc[-1])
     price_vs_ema200 = (price - ema200_c) / ema200_c * 100 if ema200_c else 0.0
-    win = close.tail(252)
-    lo, hi = float(win.min()), float(win.max())
-    pos52 = (price - lo) / (hi - lo) * 100 if hi > lo else 50.0
+
+    win = close.tail(252)  # ~1 year
+    lo_52, hi_52 = float(win.min()), float(win.max())
+    pos52 = (price - lo_52) / (hi_52 - lo_52) * 100 if hi_52 > lo_52 else 50.0
+    drawdown = (price - hi_52) / hi_52 * 100 if hi_52 else 0.0  # <=0, % below 1y high
+
+    # Support/resistance from a small set of meaningful levels: 1y & 3-month
+    # extremes plus the 200-day average. Pick the nearest below / above price.
+    recent = close.tail(63)  # ~3 months
+    levels = [hi_52, lo_52, float(recent.max()), float(recent.min()), ema200_c]
+    below = [lv for lv in levels if lv < price * 0.997]
+    above = [lv for lv in levels if lv > price * 1.003]
+    support = max(below) if below else None
+    resistance = min(above) if above else None
+
+    rel_volume = sd.get("relative_volume") if sd else None
     rsi_now = float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else None
 
-    out["technical"] = _build_technical(sd, price_vs_ema200, pos52, rsi_now)
+    out["technical"] = _build_technical(sd, {
+        "price_vs_ema200": price_vs_ema200,
+        "pos52": pos52,
+        "drawdown": drawdown,
+        "support": support,
+        "resistance": resistance,
+        "rel_volume": rel_volume,
+        "rsi_now": rsi_now,
+        "currency": cfg["currency_symbol"],
+    })
     out["valid"] = True
     return out
 

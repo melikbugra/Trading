@@ -73,10 +73,12 @@ const BUY_STEPS = [
     terms: [
       { t: 'EMA200 (200 Günlük Ortalama)', d: 'Son 200 günün ortalama fiyatı. Fiyat bu çizginin ÜSTÜndeyse uzun vadeli yükseliş trendi, ALTındaysa düşüş trendi kabul edilir. En çok izlenen uzun vade trend göstergesidir.' },
       { t: 'RSI (Göreceli Güç Endeksi)', d: '0–100 arası momentum göstergesi. 70 üstü "aşırı alım" = fiyat hızlı yükselmiş, pahalı/geri çekilebilir. 30 altı "aşırı satım" = fiyat hızlı düşmüş, ucuz/tepki gelebilir. 40–60 arası nötr.' },
-      { t: 'Teknik Skor', d: 'Trend ve momentum sinyallerini 0–100 arası tek bir özet puana çeviren gösterge. Yüksek = giriş için teknik olarak daha uygun bir an.' },
+      { t: 'Teknik Skor — kaçta al?', d: '0–100 arası giriş uygunluğu. 60 ve üstü: trend yukarı, giriş için uygun (yeşil ışık). 40–60: nötr, acele etme, kademeli al. 40 altı: trend zayıf/aşağı, ideal an değil — temel güçlüyse yine de küçük ve kademeli girebilirsin.' },
+      { t: 'Destek / Direnç', d: 'Destek = fiyatın geçmişte düşüşten döndüğü seviye; direnç = yükselişin takıldığı seviye. Desteğe yakın almak, dirence yakın almaktan daha avantajlıdır.' },
+      { t: 'Geri çekilme (drawdown)', d: 'Fiyatın son 1 yılın zirvesinden yüzde kaç aşağıda olduğu. Kaliteli bir hisseyi zirveden makul bir geri çekilmeyle almak daha iyi giriş sağlar.' },
     ],
-    where: 'Rapor → "📈 Teknik Analiz" butonu (grafik + EMA50/EMA200 + RSI + skor + okuma).',
-    tip: 'Uzun vadede teknik analiz şart değildir. Ama sert bir ralliden hemen sonra tek seferde almak yerine kademeli girersen bu adım giriş fiyatını iyileştirir.',
+    where: 'Rapor → "📈 Teknik Analiz" butonu (grafik + EMA50/EMA200 + RSI + destek/direnç + skor + okuma).',
+    tip: 'Kural: teknik skor 60+ ise giriş elverişli; 40 altıysa temel güçlü olsa bile küçük ve kademeli başla. Uzun vadede teknik analiz şart değildir, sadece giriş fiyatını iyileştirir.',
   },
   {
     id: 'karar',
@@ -188,8 +190,9 @@ const SELL_STEPS = [
     terms: [
       { t: 'Aşırı değerleme', d: 'Fiyatın, şirketin kazanç ve büyümesinin haklı çıkardığından çok yukarıda olması.' },
       { t: 'Kâr realizasyonu (kâr al)', d: 'Kazancın bir kısmını satıp nakde çevirmek. Genelde tamamı değil, bir kısmı satılır (buna "trim" / azaltma denir).' },
+      { t: 'Teknik Skor — kaçta sat?', d: 'Teknik skor TEK BAŞINA satış sebebi değildir (uzun vadede satışı temeller belirler). Destekleyici işaret olarak: (1) Skor 30 ALTINA düşer ve fiyat 200 günlük ortalamanın altına geçerse trend aşağı dönmüştür — temeller de zayıflıyorsa çıkışı güçlendirir. (2) RSI 75 ÜSTÜ + çok yüksek skor + aşırı pahalıysa, kısa vadeli aşırı ısınma demektir; bir kısmını satıp (trim) kâr realize etmek için uygun an.' },
     ],
-    where: 'Rapor → Değer Skoru + "📈 Teknik Analiz" (RSI / aşırı alım).',
+    where: 'Rapor → Değer Skoru + "📈 Teknik Analiz" (RSI / aşırı alım / teknik skor).',
     tip: 'Aşırı pahalılıkta genelde hepsini değil bir kısmını sat. Yükseliş sürerse tamamen dışarıda kalmazsın.',
   },
   {
