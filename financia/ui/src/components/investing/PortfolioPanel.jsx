@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import StockReportModal from './StockReportModal';
 import DiversificationCard from './DiversificationCard';
-import ListFilters, { uniqueSectors } from './ListFilters';
+import ListFilters, { uniqueSectors, SearchBox } from './ListFilters';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -19,6 +19,7 @@ export default function PortfolioPanel() {
   const [reportTicker, setReportTicker] = useState(null);
   const [marketFilter, setMarketFilter] = useState('all');
   const [sectorFilter, setSectorFilter] = useState('all');
+  const [query, setQuery] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -76,8 +77,12 @@ export default function PortfolioPanel() {
   };
 
   const sectors = uniqueSectors(data.holdings, (h) => h.sector);
+  const q = query.trim().toLowerCase();
   const visibleHoldings = data.holdings.filter(
-    (h) => (marketFilter === 'all' || h.market === marketFilter) && (sectorFilter === 'all' || h.sector === sectorFilter)
+    (h) =>
+      (marketFilter === 'all' || h.market === marketFilter) &&
+      (sectorFilter === 'all' || h.sector === sectorFilter) &&
+      (!q || (h.symbol || '').toLowerCase().includes(q) || (h.sector || '').toLowerCase().includes(q))
   );
 
   return (
@@ -140,8 +145,9 @@ export default function PortfolioPanel() {
         <div className="text-gray-500 text-center py-16 border border-dashed border-gray-800 rounded-lg">Portföyün boş. "+ Hisse Ekle" ile başla.</div>
       ) : (
         <>
-        <div className="flex items-center gap-2 mb-2">
+        <div className="flex items-center gap-2 mb-2 flex-wrap">
           <span className="text-xs text-gray-500">{visibleHoldings.length} pozisyon</span>
+          <SearchBox value={query} onChange={setQuery} />
           <ListFilters market={marketFilter} setMarket={setMarketFilter} sector={sectorFilter} setSector={setSectorFilter} sectors={sectors} />
         </div>
         {visibleHoldings.length === 0 ? (

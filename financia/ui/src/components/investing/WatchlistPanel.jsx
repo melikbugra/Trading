@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import StockReportModal from './StockReportModal';
-import ListFilters, { uniqueSectors } from './ListFilters';
+import ListFilters, { uniqueSectors, SearchBox } from './ListFilters';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -15,6 +15,7 @@ export default function WatchlistPanel() {
   const [reportTicker, setReportTicker] = useState(null);
   const [marketFilter, setMarketFilter] = useState('all');
   const [sectorFilter, setSectorFilter] = useState('all');
+  const [query, setQuery] = useState('');
 
   const load = async () => {
     try {
@@ -53,8 +54,12 @@ export default function WatchlistPanel() {
   };
 
   const sectors = uniqueSectors(items, (it) => it.scores?.sector);
+  const q = query.trim().toLowerCase();
   const filtered = items.filter(
-    (it) => (marketFilter === 'all' || it.market === marketFilter) && (sectorFilter === 'all' || it.scores?.sector === sectorFilter)
+    (it) =>
+      (marketFilter === 'all' || it.market === marketFilter) &&
+      (sectorFilter === 'all' || it.scores?.sector === sectorFilter) &&
+      (!q || (it.symbol || '').toLowerCase().includes(q) || (it.scores?.sector || '').toLowerCase().includes(q))
   );
 
   return (
@@ -73,8 +78,9 @@ export default function WatchlistPanel() {
         <div className="text-gray-500 text-center py-16 border border-dashed border-gray-800 rounded-lg">İzleme listen boş.</div>
       ) : (
         <>
-        <div className="flex items-center gap-2 mb-2">
+        <div className="flex items-center gap-2 mb-2 flex-wrap">
           <span className="text-xs text-gray-500">{filtered.length} hisse</span>
+          <SearchBox value={query} onChange={setQuery} />
           <ListFilters market={marketFilter} setMarket={setMarketFilter} sector={sectorFilter} setSector={setSectorFilter} sectors={sectors} />
         </div>
         {filtered.length === 0 ? (

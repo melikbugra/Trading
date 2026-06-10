@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import { dateTag } from '../../utils/dates';
-import ListFilters from './ListFilters';
+import ListFilters, { SearchBox } from './ListFilters';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -45,6 +45,7 @@ export default function NewsPanel() {
   const { addToast } = useToast();
   const [scope, setScope] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
+  const [query, setQuery] = useState('');
   const [data, setData] = useState({ tickers: 0, news: [], events: [] });
   const [loading, setLoading] = useState(true);
 
@@ -62,7 +63,10 @@ export default function NewsPanel() {
 
   useEffect(() => { load(scope); /* eslint-disable-next-line */ }, [scope]);
 
-  const mf = (x) => marketFilter === 'all' || x.market === marketFilter;
+  const q = query.trim().toLowerCase();
+  const mf = (x) =>
+    (marketFilter === 'all' || x.market === marketFilter) &&
+    (!q || (x.symbol || '').toLowerCase().includes(q) || (x.title || '').toLowerCase().includes(q));
   const events = (data.events || []).filter(mf);
   const news = (data.news || []).filter(mf);
 
@@ -81,7 +85,8 @@ export default function NewsPanel() {
             </button>
           ))}
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2 flex-wrap">
+          <SearchBox value={query} onChange={setQuery} placeholder="🔎 Ara (sembol / başlık)" />
           <ListFilters market={marketFilter} setMarket={setMarketFilter} />
           <button onClick={() => load()} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm">↻ Yenile</button>
         </div>

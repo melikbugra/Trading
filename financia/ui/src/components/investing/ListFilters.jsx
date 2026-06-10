@@ -37,3 +37,25 @@ export default function ListFilters({ market, setMarket, sector, setSector, sect
 export function uniqueSectors(rows, getSector) {
   return [...new Set(rows.map(getSector).filter(Boolean))].sort();
 }
+
+// Type-as-you-go search box with a clear (✕) button.
+export function SearchBox({ value, onChange, placeholder = '🔎 Ara (sembol / sektör)' }) {
+  return (
+    <div className="relative">
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="bg-gray-800 border border-gray-700 text-white px-2 py-1 rounded text-xs w-44"
+      />
+      {value && (
+        <button
+          onClick={() => onChange('')}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white text-xs"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
