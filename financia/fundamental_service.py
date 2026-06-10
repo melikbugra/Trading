@@ -265,14 +265,37 @@ def score_fundamental(data: dict) -> dict:
     """
     m = data.get("metrics", {})
 
-    # Dividend quality: yield (up to ~6%), low leverage, sustainable payout, sane valuation.
-    dividend_components = [
-        _ramp(m.get("dividend_yield"), 0, 6),
-        _ramp_down(m.get("debt_to_equity"), 50, 200),
-        _ramp_down(m.get("payout_ratio"), 30, 90),
-        _ramp_down(m.get("trailing_pe"), 8, 30),
-    ]
-    dividend_score = _avg(dividend_components)
+    # Dividend score: ANCHORED on the dividend yield. A stock that pays little or
+    # no dividend cannot have a high dividend score — leverage/payout are only
+    # sustainability modifiers on top of an actual yield. (Valuation/P-E lives in
+    # the separate value score, not here.)
+    dy = m.get("dividend_yield")
+    payout = m.get("payout_ratio")
+    if dy is None:
+        # No yield data. If we know payout is ~0 it pays nothing -> 0; else unknown.
+        dividend_score = 0.0 if (payout is not None and payout <= 1) else None
+    elif dy < 0.1:
+        # Effectively pays no dividend.
+        dividend_score = 0.0
+    else:
+        yield_s = _ramp(dy, 0, 6)  # core: 0% -> 0, >=6% -> 100
+        mods = []
+        d = _ramp_down(m.get("debt_to_equity"), 50, 200)  # lower leverage = safer payout
+        if d is not None:
+            mods.append(d)
+        if payout is not None:
+            # Healthy payout ~30-70%; 0% means no dividend, >90% is unsustainable.
+            if payout <= 0:
+                ps = 0.0
+            elif payout <= 70:
+                ps = 100.0
+            elif payout >= 100:
+                ps = 0.0
+            else:
+                ps = (100.0 - payout) / 30.0 * 100.0
+            mods.append(max(0.0, min(100.0, ps)))
+        # Weight the yield twice as much as the sustainability modifiers.
+        dividend_score = round((yield_s * 2 + sum(mods)) / (2 + len(mods)), 1)
 
     # Growth quality: revenue & earnings growth, ROE, margins.
     growth_components = [
