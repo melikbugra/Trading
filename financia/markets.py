@@ -47,6 +47,7 @@ MARKET_CONFIG = {
         "trade_fee": 0.0,
         "tickers": _bist_tickers,
         "data_delayed": True,
+        "data_delay_minutes": 15,  # Yahoo BIST feed lags ~15 min behind real-time
     },
     "us": {
         "label": "ABD (S&P 100)",
@@ -64,6 +65,7 @@ MARKET_CONFIG = {
         "trade_fee": 1.5,
         "tickers": _us_tickers,
         "data_delayed": False,
+        "data_delay_minutes": 0,  # US (NYSE/Nasdaq) feed is real-time
     },
 }
 

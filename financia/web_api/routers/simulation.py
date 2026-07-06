@@ -530,10 +530,11 @@ def get_sim_signals(
 
 @router.get("/signals/active", response_model=List[SimSignalResponse])
 def get_active_sim_signals(db: Session = Depends(get_db)):
-    """Get active simulation signals (pending, triggered, entered)."""
+    """Get active simulation signals (pending, triggered, missed, entered).
+    'missed' is display-active (not closed) so it appears here."""
     return (
         db.query(SimSignal)
-        .filter(SimSignal.status.in_(["pending", "triggered", "entered"]))
+        .filter(SimSignal.status.in_(["pending", "triggered", "missed", "entered"]))
         .order_by(SimSignal.created_at.desc())
         .all()
     )
@@ -546,7 +547,7 @@ async def cancel_sim_signal(signal_id: int, db: Session = Depends(get_db)):
     if not signal:
         raise HTTPException(404, "Signal not found")
 
-    if signal.status in ["stopped", "target_hit", "cancelled"]:
+    if signal.status in ["stopped", "target_hit", "cancelled", "eod_close"]:
         raise HTTPException(400, "Signal already closed")
 
     signal.status = "cancelled"

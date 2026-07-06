@@ -1003,22 +1003,26 @@ class ScannerService:
 
         # Calculate profit/loss
         if signal.entered_at:  # Only if actually entered
+            # Use the actual (user-confirmed) fill price when available,
+            # falling back to the planned entry price (mirrors
+            # simulation_scanner._backtest_close_position).
+            entry_price = signal.actual_entry_price or signal.entry_price
             if signal.direction == "long":
                 profit_percent = (
-                    (exit_price - signal.entry_price) / signal.entry_price
+                    (exit_price - entry_price) / entry_price
                 ) * 100
             else:
                 profit_percent = (
-                    (signal.entry_price - exit_price) / signal.entry_price
+                    (entry_price - exit_price) / entry_price
                 ) * 100
 
             # Calculate achieved R:R
             if signal.direction == "long":
-                risk = signal.entry_price - signal.stop_loss
-                reward = exit_price - signal.entry_price
+                risk = entry_price - signal.stop_loss
+                reward = exit_price - entry_price
             else:
-                risk = signal.stop_loss - signal.entry_price
-                reward = signal.entry_price - exit_price
+                risk = signal.stop_loss - entry_price
+                reward = entry_price - exit_price
 
             rr_achieved = reward / risk if risk > 0 else 0
 
@@ -1035,7 +1039,7 @@ class ScannerService:
                 market=signal.market,
                 strategy_id=signal.strategy_id,
                 direction=signal.direction,
-                entry_price=signal.entry_price,
+                entry_price=entry_price,
                 exit_price=exit_price,
                 stop_loss=signal.stop_loss,
                 take_profit=signal.take_profit,

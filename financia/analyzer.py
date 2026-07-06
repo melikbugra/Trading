@@ -91,10 +91,19 @@ class StockAnalyzer:
         """
         Drop the last candle if it is still forming (not yet closed).
 
-        A bar starting at `t` for interval `d` is only closed once `t + d <= now`.
-        With delayed/live feeds yfinance/ccxt return the in-progress bar as the
-        last row; using it would make strategies repaint. This keeps decisions on
-        closed bars only.
+        A bar starting at `t` for interval `d` is only closed once
+        `t + d + delay <= now`. `delay` accounts for data feeds that publish
+        bars with a lag: the BIST Yahoo Finance feed is ~15 min delayed, so
+        even after a bar's nominal close time the published data is still
+        missing its final minutes and would cause strategies to repaint. The
+        delay is read from MARKET_CONFIG["data_delay_minutes"] and is only
+        applied when the market config has data_delayed=True. US and Binance
+        feeds are real-time (delay = 0).
+
+        NOTE: `binance` is handled as a special case because normalize_market()
+        maps any unknown market id (including "binance") to the "bist" default,
+        which would incorrectly add a 15-min delay. We skip the config lookup
+        for binance and leave delay at 0.
         """
         if self.data is None or self.data.empty:
             return
@@ -104,7 +113,21 @@ class StockAnalyzer:
         last_start = self.data.index[-1]
         tz = getattr(last_start, "tz", None) or getattr(last_start, "tzinfo", None)
         now = pd.Timestamp.now(tz=tz) if tz is not None else pd.Timestamp.now()
-        if last_start + delta > now:
+
+        # Determine the data-feed delay for this market.
+        # binance is excluded explicitly: normalize_market() would map it to
+        # "bist", wrongly adding a 15-min delay to a real-time crypto feed.
+        delay = pd.Timedelta(minutes=0)
+        if self.market != "binance":
+            try:
+                import financia.markets as _m
+                cfg = _m.get_market_config(self.market)
+                if cfg.get("data_delayed"):
+                    delay = pd.Timedelta(minutes=cfg.get("data_delay_minutes", 0))
+            except Exception:
+                pass
+
+        if last_start + delta + delay > now:
             self.data = self.data.iloc[:-1]
 
     def _fetch_yahoo_data(self, period, interval, start, end):

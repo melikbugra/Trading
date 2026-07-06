@@ -11,6 +11,8 @@ yfinance unit notes (observed on the installed version):
 - info["returnOnEquity"], ["profitMargins"], ["revenueGrowth"],
   ["earningsGrowth"], ["payoutRatio"] -> FRACTIONS (0.166 == 16.6%)
 - info["debtToEquity"] -> already a ratio number (79.5 == 79.5%); None for banks
+- Guard: if dividendYield is in (0, 0.5) AND raw*100 <= 25 it is treated as a
+  fraction and normalized to raw*100 (some yfinance versions flip the unit).
 """
 
 import logging
@@ -143,13 +145,24 @@ def fetch_fundamentals(ticker: str, include_statements: bool = True) -> dict:
     earn_g = _safe(info, "earningsGrowth")
     payout = _safe(info, "payoutRatio")
 
+    # Sanity-normalize dividendYield: yfinance reports it as a percent, but some
+    # versions emit a fraction instead. If the raw value is in (0, 0.5) and
+    # raw*100 <= 25 it almost certainly is a fraction — multiply by 100.
+    _raw_dy = _safe(info, "dividendYield")
+    if _raw_dy is not None and 0 < _raw_dy < 0.5 and (_raw_dy * 100) <= 25:
+        print(
+            f"[FundamentalService] {ticker}: dividendYield looks like a fraction "
+            f"({_raw_dy}); normalizing to {_raw_dy * 100:.4f}%"
+        )
+        _raw_dy = _raw_dy * 100
+
     result["metrics"] = {
         # sector / industry classification (kept in metrics so it persists in the
         # snapshot JSON without a schema migration)
         "sector": info.get("sector") or None,
         "industry": info.get("industry") or None,
-        # already a percent from yfinance
-        "dividend_yield": _safe(info, "dividendYield"),
+        # already a percent from yfinance (fraction guard applied above)
+        "dividend_yield": _raw_dy,
         "trailing_pe": _safe(info, "trailingPE"),
         "forward_pe": _safe(info, "forwardPE"),
         "price_to_book": _safe(info, "priceToBook"),
@@ -262,8 +275,33 @@ def score_fundamental(data: dict) -> dict:
     Each component contributes only if its underlying metric is present, so
     missing BIST fields just lower the confidence rather than crash. Scores are
     None when no component is available.
+
+    Scoring ramps are market-aware: BIST stocks report nominal TL figures that
+    dwarf US dollar values, so thresholds are scaled up for "bist". Default/US
+    thresholds are unchanged from the original implementation.
     """
     m = data.get("metrics", {})
+    market = data.get("market", "us")
+
+    # Per-market scoring thresholds. "default" mirrors the original US values so
+    # any unknown market falls back to the existing behavior.
+    _THRESHOLDS = {
+        "bist": {
+            "dy_hi": 15,           # dividend yield: 0% -> 0, >=15% -> 100 (TL inflation)
+            "rev_growth_hi": 60,   # revenue growth: 0% -> 0, >=60% -> 100
+            "earn_growth_hi": 60,  # earnings growth: 0% -> 0, >=60% -> 100
+            "roe_hi": 40,          # ROE: 0% -> 0, >=40% -> 100
+            "margin_hi": 25,       # profit margin: unchanged
+        },
+        "default": {
+            "dy_hi": 6,
+            "rev_growth_hi": 25,
+            "earn_growth_hi": 25,
+            "roe_hi": 30,
+            "margin_hi": 25,
+        },
+    }
+    th = _THRESHOLDS.get(market, _THRESHOLDS["default"])
 
     # Dividend score: ANCHORED on the dividend yield. A stock that pays little or
     # no dividend cannot have a high dividend score — leverage/payout are only
@@ -278,7 +316,7 @@ def score_fundamental(data: dict) -> dict:
         # Effectively pays no dividend.
         dividend_score = 0.0
     else:
-        yield_s = _ramp(dy, 0, 6)  # core: 0% -> 0, >=6% -> 100
+        yield_s = _ramp(dy, 0, th["dy_hi"])  # core: market-aware ramp
         mods = []
         d = _ramp_down(m.get("debt_to_equity"), 50, 200)  # lower leverage = safer payout
         if d is not None:
@@ -299,10 +337,10 @@ def score_fundamental(data: dict) -> dict:
 
     # Growth quality: revenue & earnings growth, ROE, margins.
     growth_components = [
-        _ramp(m.get("revenue_growth"), 0, 25),
-        _ramp(m.get("earnings_growth"), 0, 25),
-        _ramp(m.get("roe"), 0, 30),
-        _ramp(m.get("profit_margin"), 0, 25),
+        _ramp(m.get("revenue_growth"), 0, th["rev_growth_hi"]),
+        _ramp(m.get("earnings_growth"), 0, th["earn_growth_hi"]),
+        _ramp(m.get("roe"), 0, th["roe_hi"]),
+        _ramp(m.get("profit_margin"), 0, th["margin_hi"]),
     ]
     growth_score = _avg(growth_components)
 

@@ -60,23 +60,32 @@ def score_daily(ticker: str, hist: pd.DataFrame, trend_filters: dict) -> Optiona
     ema20_c, ema50_c = ema20.iloc[-1], ema50.iloc[-1]
     ema20_p, ema50_p = ema20.iloc[-2], ema50.iloc[-2]
 
-    # ADX / DMI (index-aligned)
+    # ADX / DMI (index-aligned, Wilder definition)
+    # up/down = raw directional moves for the current bar vs the previous bar.
+    # plus_dm is the upward move only when it exceeds the downward move AND is
+    # positive — this correctly gives a positive +DM even in steady uptrends
+    # where lows rise faster than highs (the old high.diff() > low.diff().abs()
+    # test erroneously returned 0 in that case).
     tr = np.maximum(
         high - low, np.maximum(abs(high - close.shift(1)), abs(low - close.shift(1)))
     )
-    atr = tr.rolling(14).mean()
+    up = high.diff()
+    down = -low.diff()  # prev_low - low (positive when low falls)
     plus_dm = pd.Series(
-        np.where((high.diff() > low.diff().abs()) & (high.diff() > 0), high.diff(), 0),
+        np.where((up > down) & (up > 0), up, 0),
         index=close.index,
     )
     minus_dm = pd.Series(
-        np.where((low.diff().abs() > high.diff()) & (low.diff() < 0), low.diff().abs(), 0),
+        np.where((down > up) & (down > 0), down, 0),
         index=close.index,
     )
-    plus_di = 100 * (plus_dm.rolling(14).mean() / atr)
-    minus_di = 100 * (minus_dm.rolling(14).mean() / atr)
+    # Wilder smoothing (ewm alpha=1/14) for TR, +DM and -DM — matches the
+    # reference implementation in analyzer.py `_calculate_dmi`.
+    atr = tr.ewm(alpha=1 / 14, adjust=False).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr)
+    minus_di = 100 * (minus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr)
     dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
-    adx = dx.rolling(14).mean()
+    adx = dx.ewm(alpha=1 / 14, adjust=False).mean()
     adx_c = adx.iloc[-1] if not np.isnan(adx.iloc[-1]) else 0
     plus_di_c = plus_di.iloc[-1] if not np.isnan(plus_di.iloc[-1]) else 0
     minus_di_c = minus_di.iloc[-1] if not np.isnan(minus_di.iloc[-1]) else 0
@@ -94,7 +103,7 @@ def score_daily(ticker: str, hist: pd.DataFrame, trend_filters: dict) -> Optiona
 
     # Bollinger position
     sma20 = close.rolling(20).mean()
-    std20 = close.rolling(20).std()
+    std20 = close.rolling(20).std(ddof=0)  # population std (TA convention)
     upper_band = sma20 + (2 * std20)
     lower_band = sma20 - (2 * std20)
     bb_position = (current_close - lower_band.iloc[-1]) / (

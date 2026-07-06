@@ -139,7 +139,7 @@ class SimulationScanner:
             try:
                 signals = (
                     db.query(SimSignal)
-                    .filter(SimSignal.status.in_(["pending", "triggered", "entered"]))
+                    .filter(SimSignal.status.in_(["pending", "triggered", "missed", "entered"]))
                     .order_by(SimSignal.created_at.desc())
                     .all()
                 )
@@ -204,10 +204,11 @@ class SimulationScanner:
         try:
             sim_time = simulation_time_manager.current_time
 
-            # Find all pending and triggered signals (not entered)
+            # Find all pending, triggered and missed signals (not entered).
+            # "missed" is included to mirror live scanner day-end cleanup behaviour.
             signals_to_cancel = (
                 db.query(SimSignal)
-                .filter(SimSignal.status.in_(["pending", "triggered"]))
+                .filter(SimSignal.status.in_(["pending", "triggered", "missed"]))
                 .all()
             )
 
@@ -565,7 +566,31 @@ class SimulationScanner:
                 cl = extra.get("last_candle_low")
                 long = signal.direction == "long"
 
-                # --- TP1: auto partial close + move stop to breakeven (once) ---
+                # FIX 1: Capture the stop in effect at the START of the bar before
+                # any modification this bar (breakeven move or trailing ratchet).
+                start_stop = signal.stop_loss
+
+                # --- Step 1: Stop-out vs start-of-bar stop (conservative) ---
+                # Check the stop FIRST against the unmodified level so a bar that
+                # touches both TP1 and the original stop books the full stop loss
+                # (not a partial win). The take-profit is NOT checked here: a bar
+                # sweeping up to TP must fill the TP1 limit on the way, so TP is
+                # only credited on the remainder after Step 2.
+                if ch is not None and cl is not None:
+                    if long:
+                        if start_stop and cl <= start_stop:
+                            await self._backtest_close_position(
+                                db, signal, start_stop, "stopped", sim_time
+                            )
+                            continue  # Skip remaining steps for this signal this bar
+                    else:
+                        if start_stop and ch >= start_stop:
+                            await self._backtest_close_position(
+                                db, signal, start_stop, "stopped", sim_time
+                            )
+                            continue
+
+                # --- Step 2: TP1 auto partial close + move stop to breakeven (once) ---
                 ptp = extra.get("partial_tp")
                 if (
                     ptp
@@ -597,7 +622,39 @@ class SimulationScanner:
                             signal.extra_data = extra
                             db.commit()
 
-                # --- Trailing stop (ratchet) after TP1 ---
+                # --- Step 2b: Remainder exit within the same bar ---
+                # After a TP1 fill the stop sits at breakeven; the order of the
+                # bar's extremes is unknowable, so conservatively assume the dip
+                # below breakeven came after the TP1 touch (stop the remainder)
+                # before crediting the full take-profit. Booking TP1 + remainder
+                # at TP in one bar is realistic: price must pass TP1 to reach TP.
+                if ch is not None and cl is not None:
+                    if long:
+                        if signal.stop_loss and cl <= signal.stop_loss:
+                            await self._backtest_close_position(
+                                db, signal, signal.stop_loss, "stopped", sim_time
+                            )
+                            continue
+                        elif signal.take_profit and ch >= signal.take_profit:
+                            await self._backtest_close_position(
+                                db, signal, signal.take_profit, "target_hit", sim_time
+                            )
+                            continue
+                    else:
+                        if signal.stop_loss and ch >= signal.stop_loss:
+                            await self._backtest_close_position(
+                                db, signal, signal.stop_loss, "stopped", sim_time
+                            )
+                            continue
+                        elif signal.take_profit and cl <= signal.take_profit:
+                            await self._backtest_close_position(
+                                db, signal, signal.take_profit, "target_hit", sim_time
+                            )
+                            continue
+
+                # FIX 2: Trailing ratchet runs LAST so the raised stop only applies
+                # from the next bar onward (not against the current bar's low).
+                # --- Step 3: Trailing stop (ratchet) after TP1 ---
                 trailing = extra.get("trailing")
                 if (
                     trailing
@@ -619,27 +676,6 @@ class SimulationScanner:
                             signal.stop_loss = round(new_sl, 4)
                             db.commit()
 
-                # --- Full exit of remainder on SL/TP (using bar High/Low) ---
-                if ch is not None and cl is not None:
-                    if long:
-                        if signal.stop_loss and cl <= signal.stop_loss:
-                            await self._backtest_close_position(
-                                db, signal, signal.stop_loss, "stopped", sim_time
-                            )
-                        elif signal.take_profit and ch >= signal.take_profit:
-                            await self._backtest_close_position(
-                                db, signal, signal.take_profit, "target_hit", sim_time
-                            )
-                    else:
-                        if signal.stop_loss and ch >= signal.stop_loss:
-                            await self._backtest_close_position(
-                                db, signal, signal.stop_loss, "stopped", sim_time
-                            )
-                        elif signal.take_profit and cl <= signal.take_profit:
-                            await self._backtest_close_position(
-                                db, signal, signal.take_profit, "target_hit", sim_time
-                            )
-
             # 2. Auto-enter: Enter triggered signals where entry price has been reached
             triggered_signals = (
                 db.query(SimSignal)
@@ -654,8 +690,13 @@ class SimulationScanner:
                 if not signal.entry_price:
                     continue
 
+                # FIX 3b: Use the realistic fill price stored by _check_entry_exit
+                # (bar_low or entry_price depending on where the bar traded).
+                extra_entry = dict(signal.extra_data or {})
+                fill_price = extra_entry.get("entry_fill_price") or signal.entry_price
+
                 lots = 1.0
-                position_cost = signal.entry_price * lots
+                position_cost = fill_price * lots
 
                 # Check balance
                 if position_cost > simulation_time_manager.current_balance:
@@ -671,11 +712,11 @@ class SimulationScanner:
                 # Enter position
                 signal.status = "entered"
                 signal.entered_at = sim_time
-                signal.actual_entry_price = signal.entry_price
+                signal.actual_entry_price = fill_price
                 signal.lots = lots
                 signal.remaining_lots = lots
                 signal.notes = (
-                    f"Backtest auto-entry @ {signal.entry_price} x {lots} lot"
+                    f"Backtest auto-entry @ {fill_price} x {lots} lot"
                 )
 
             db.commit()
@@ -698,8 +739,12 @@ class SimulationScanner:
             for signal in entered_signals:
                 # Use current_price as EOD price
                 eod_price = signal.current_price or signal.entry_price
+                # FIX 7: Use "eod_close" so EOD exits are not counted as "stopped"
+                # in status-based filtering. Win/loss classification in
+                # _backtest_close_position follows profit sign, so eod_close trades
+                # still increment winning/losing counters correctly.
                 await self._backtest_close_position(
-                    db, signal, eod_price, "stopped", sim_time
+                    db, signal, eod_price, "eod_close", sim_time
                 )
                 signal.notes = (
                     f"Backtest: EOD close @ {eod_price} | "
@@ -1262,13 +1307,15 @@ class SimulationScanner:
             result.extra_data["last_candle_high"] = float(data["High"].iloc[-1])
             result.extra_data["last_candle_low"] = float(data["Low"].iloc[-1])
 
-            # Check for existing signal - return only ID for main session to re-fetch
+            # Check for existing signal - return only ID for main session to re-fetch.
+            # "missed" is included so a previously missed signal is found and replaced
+            # when the strategy fires again (main_condition_met else-branch cancels it).
             existing_signal = (
                 db.query(SimSignal)
                 .filter(
                     SimSignal.ticker == item.ticker,
                     SimSignal.strategy_id == item.strategy_id,
-                    SimSignal.status.in_(["pending", "triggered", "entered"]),
+                    SimSignal.status.in_(["pending", "triggered", "missed", "entered"]),
                 )
                 .first()
             )
@@ -1317,13 +1364,15 @@ class SimulationScanner:
         # Evaluate strategy
         result = strategy.evaluate(data)
 
-        # Check for existing signal
+        # Check for existing signal.
+        # "missed" is included so a previously missed signal is found and replaced
+        # when the strategy fires again (main_condition_met else-branch cancels it).
         existing_signal = (
             db.query(SimSignal)
             .filter(
                 SimSignal.ticker == item.ticker,
                 SimSignal.strategy_id == item.strategy_id,
-                SimSignal.status.in_(["pending", "triggered", "entered"]),
+                SimSignal.status.in_(["pending", "triggered", "missed", "entered"]),
             )
             .first()
         )
@@ -1664,7 +1713,10 @@ class SimulationScanner:
                 existing_signal.extra_data = extra_data
                 await self._check_position_levels(db, existing_signal, result)
             else:
-                # Create new triggered signal
+                # Create new triggered signal.
+                # A "missed" existing_signal reaches here (status is neither
+                # "triggered" nor "entered") and is correctly cancelled so the
+                # fresh setup gets a clean triggered signal — acceptable per spec.
                 if existing_signal:
                     existing_signal.status = "cancelled"
                     existing_signal.notes = "Replaced by new signal"
@@ -1757,6 +1809,7 @@ class SimulationScanner:
         current_price = to_python_native(result.current_price)
         signal.current_price = current_price
 
+        # Pre-entry SL/TP close checks are kept at the top (unchanged).
         if signal.direction == "long":
             if current_price <= signal.stop_loss:
                 await self._close_signal(db, signal, "stopped", current_price)
@@ -1764,15 +1817,62 @@ class SimulationScanner:
             if current_price >= signal.take_profit:
                 await self._close_signal(db, signal, "target_hit", current_price)
                 return
-            if (
-                signal.status == "triggered"
-                and not signal.entry_reached
-                and current_price >= signal.entry_price
-            ):
-                signal.entry_reached = True
-                print(
-                    f"[SimScanner] 📍 ENTRY REACHED: {signal.ticker} LONG @ {current_price}"
-                )
+
+            # FIX 3a: Use bar High/Low for entry detection with zone bounds.
+            # _process_result assigns fresh extra_data (with last_candle_high/low)
+            # to the signal BEFORE calling _check_entry_exit, so we read from
+            # signal.extra_data here.
+            if signal.status == "triggered" and not signal.entry_reached:
+                bar_low = (signal.extra_data or {}).get("last_candle_low")
+                bar_high = (signal.extra_data or {}).get("last_candle_high")
+                entry_price = signal.entry_price
+
+                if bar_low is not None and bar_high is not None and entry_price is not None:
+                    # Determine fillable zone high (long: entry_zone.high or entry+tol)
+                    entry_zone = (signal.extra_data or {}).get("entry_zone")
+                    if entry_zone and entry_zone.get("high") is not None:
+                        zone_high = entry_zone["high"]
+                    elif result.entry_tolerance is not None:
+                        zone_high = entry_price + result.entry_tolerance
+                    else:
+                        zone_high = None
+
+                    if zone_high is not None:
+                        # Missed: entire bar is above the entry band (price ran away up)
+                        if bar_low > zone_high:
+                            signal.status = "missed"
+                            signal.notes = "price ran beyond entry band"
+                            print(
+                                f"[SimScanner] MISSED: {signal.ticker} LONG - price ran beyond entry band"
+                            )
+                            db.commit()
+                            await self._broadcast_signals(db)
+                            return
+                        # Fill: bar traded through the zone (bar_low in zone AND bar reached entry)
+                        if bar_low <= zone_high and bar_high >= entry_price:
+                            fill_price = entry_price if bar_low <= entry_price else bar_low
+                            signal.entry_reached = True
+                            extra = dict(signal.extra_data or {})
+                            extra["entry_fill_price"] = fill_price
+                            signal.extra_data = extra
+                            print(
+                                f"[SimScanner] ENTRY REACHED: {signal.ticker} LONG @ {fill_price}"
+                            )
+                    else:
+                        # No zone info: fall back to close-based behaviour
+                        if current_price >= entry_price:
+                            signal.entry_reached = True
+                            print(
+                                f"[SimScanner] ENTRY REACHED: {signal.ticker} LONG @ {current_price}"
+                            )
+                else:
+                    # No bar data: fall back to close-based behaviour
+                    if entry_price is not None and current_price >= entry_price:
+                        signal.entry_reached = True
+                        print(
+                            f"[SimScanner] ENTRY REACHED: {signal.ticker} LONG @ {current_price}"
+                        )
+
         else:  # short
             if current_price >= signal.stop_loss:
                 await self._close_signal(db, signal, "stopped", current_price)
@@ -1780,15 +1880,57 @@ class SimulationScanner:
             if current_price <= signal.take_profit:
                 await self._close_signal(db, signal, "target_hit", current_price)
                 return
-            if (
-                signal.status == "triggered"
-                and not signal.entry_reached
-                and current_price <= signal.entry_price
-            ):
-                signal.entry_reached = True
-                print(
-                    f"[SimScanner] 📍 ENTRY REACHED: {signal.ticker} SHORT @ {current_price}"
-                )
+
+            if signal.status == "triggered" and not signal.entry_reached:
+                bar_low = (signal.extra_data or {}).get("last_candle_low")
+                bar_high = (signal.extra_data or {}).get("last_candle_high")
+                entry_price = signal.entry_price
+
+                if bar_low is not None and bar_high is not None and entry_price is not None:
+                    # Determine fillable zone low (short: entry_zone.low or entry-tol)
+                    entry_zone = (signal.extra_data or {}).get("entry_zone")
+                    if entry_zone and entry_zone.get("low") is not None:
+                        zone_low = entry_zone["low"]
+                    elif result.entry_tolerance is not None:
+                        zone_low = entry_price - result.entry_tolerance
+                    else:
+                        zone_low = None
+
+                    if zone_low is not None:
+                        # Missed: entire bar is below the entry band (price ran down too fast)
+                        if bar_high < zone_low:
+                            signal.status = "missed"
+                            signal.notes = "price ran beyond entry band"
+                            print(
+                                f"[SimScanner] MISSED: {signal.ticker} SHORT - price ran beyond entry band"
+                            )
+                            db.commit()
+                            await self._broadcast_signals(db)
+                            return
+                        # Fill: bar traded through the zone (bar_high in zone AND bar reached entry)
+                        if bar_high >= zone_low and bar_low <= entry_price:
+                            fill_price = entry_price if bar_high >= entry_price else bar_high
+                            signal.entry_reached = True
+                            extra = dict(signal.extra_data or {})
+                            extra["entry_fill_price"] = fill_price
+                            signal.extra_data = extra
+                            print(
+                                f"[SimScanner] ENTRY REACHED: {signal.ticker} SHORT @ {fill_price}"
+                            )
+                    else:
+                        # No zone info: fall back to close-based behaviour
+                        if current_price <= entry_price:
+                            signal.entry_reached = True
+                            print(
+                                f"[SimScanner] ENTRY REACHED: {signal.ticker} SHORT @ {current_price}"
+                            )
+                else:
+                    # No bar data: fall back to close-based behaviour
+                    if entry_price is not None and current_price <= entry_price:
+                        signal.entry_reached = True
+                        print(
+                            f"[SimScanner] ENTRY REACHED: {signal.ticker} SHORT @ {current_price}"
+                        )
 
         db.commit()
         await self._broadcast_signals(db)
