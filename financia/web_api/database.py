@@ -665,6 +665,22 @@ class LongTermHolding(Base):
     created_at = Column(DateTime, default=now_turkey)
 
 
+class LongTermSale(Base):
+    """A manually recorded partial or full sale from a long-term holding."""
+
+    __tablename__ = "lt_sales"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    holding_id = Column(Integer, nullable=True)
+    ticker = Column(String, nullable=False)
+    market = Column(String, nullable=False)
+    shares = Column(Float, nullable=False)
+    sale_price = Column(Float, nullable=True)
+    sale_date = Column(Date, nullable=True)
+    notes = Column(String, default="")
+    created_at = Column(DateTime, default=now_turkey)
+
+
 class LongTermWatchlistItem(Base):
     """A long-term candidate being tracked (not yet owned)."""
 

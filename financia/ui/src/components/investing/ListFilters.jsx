@@ -38,6 +38,12 @@ export function uniqueSectors(rows, getSector) {
   return [...new Set(rows.map(getSector).filter(Boolean))].sort();
 }
 
+// Prefer yfinance's specific industry (e.g. Semiconductors) over its broad
+// sector (e.g. Technology), while keeping the broad sector as a fallback.
+export function specificSector(row) {
+  return row?.industry || row?.sector || '';
+}
+
 // Type-as-you-go search box with a clear (✕) button.
 export function SearchBox({ value, onChange, placeholder = '🔎 Ara (sembol / sektör)' }) {
   return (

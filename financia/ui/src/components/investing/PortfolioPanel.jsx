@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import StockReportModal from './StockReportModal';
 import DiversificationCard from './DiversificationCard';
-import ListFilters, { uniqueSectors, SearchBox } from './ListFilters';
+import ListFilters, { uniqueSectors, specificSector, SearchBox } from './ListFilters';
 import AnalyzeButton from './AnalyzeButton';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
@@ -18,6 +18,10 @@ export default function PortfolioPanel() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [reportTicker, setReportTicker] = useState(null);
+  const [sellHolding, setSellHolding] = useState(null);
+  const [sellShares, setSellShares] = useState('');
+  const [sellPrice, setSellPrice] = useState('');
+  const [sellNotes, setSellNotes] = useState('');
   const [marketFilter, setMarketFilter] = useState('all');
   const [sectorFilter, setSectorFilter] = useState('all');
   const [query, setQuery] = useState('');
@@ -78,13 +82,58 @@ export default function PortfolioPanel() {
     } catch { addToast('Silinemedi', 'error'); }
   };
 
-  const sectors = uniqueSectors(data.holdings, (h) => h.sector);
+  const openSell = (holding) => {
+    setSellHolding(holding);
+    setSellShares('');
+    setSellPrice(holding.price == null ? '' : String(holding.price));
+    setSellNotes('');
+  };
+
+  const sell = async (e) => {
+    e.preventDefault();
+    const shares = parseFloat(sellShares);
+    if (!sellHolding || !Number.isFinite(shares) || shares <= 0) {
+      addToast('Geçerli bir satış adedi gir', 'error');
+      return;
+    }
+    if (shares > sellHolding.shares) {
+      addToast('Satış adedi mevcut adetten fazla olamaz', 'error');
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/investing/holdings/${sellHolding.id}/sell`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shares,
+          sale_price: sellPrice ? parseFloat(sellPrice) : null,
+          sale_date: new Date().toISOString().slice(0, 10),
+          notes: sellNotes,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        addToast(body.detail || 'Satış kaydedilemedi', 'error');
+        return;
+      }
+      addToast(body.fully_sold
+        ? `${sellHolding.symbol}: pozisyon tamamen kapatıldı`
+        : `${sellHolding.symbol}: ${fmt(shares, 4)} adet satıldı, kalan ${fmt(body.remaining_shares, 4)}`,
+      'success');
+      setSellHolding(null);
+      load();
+    } catch {
+      addToast('Satış kaydedilemedi', 'error');
+    }
+  };
+
+  const sectors = uniqueSectors(data.holdings, specificSector);
   const q = query.trim().toLowerCase();
   const filteredHoldings = data.holdings.filter(
     (h) =>
       (marketFilter === 'all' || h.market === marketFilter) &&
-      (sectorFilter === 'all' || h.sector === sectorFilter) &&
-      (!q || (h.symbol || '').toLowerCase().includes(q) || (h.sector || '').toLowerCase().includes(q))
+      (sectorFilter === 'all' || specificSector(h) === sectorFilter) &&
+      (!q || (h.symbol || '').toLowerCase().includes(q) || specificSector(h).toLowerCase().includes(q))
   );
   const visibleHoldings = sortBy
     ? [...filteredHoldings].sort((a, b) => (b[sortBy] ?? -Infinity) - (a[sortBy] ?? -Infinity))
@@ -177,7 +226,7 @@ export default function PortfolioPanel() {
             <thead className="bg-gray-900 text-gray-500">
               <tr>
                 <th className="text-left px-3 py-2">Hisse</th>
-                <th className="text-left px-3 py-2 hidden lg:table-cell">Sektör</th>
+                <th className="text-left px-3 py-2 hidden lg:table-cell">Sektör / Endüstri</th>
                 <th className="text-right px-3 py-2">Adet</th>
                 <th className="text-right px-3 py-2 hidden sm:table-cell">Maliyet</th>
                 <th className="text-right px-3 py-2">Fiyat</th>
@@ -196,7 +245,7 @@ export default function PortfolioPanel() {
                   <td className="px-3 py-2 font-mono font-bold text-white cursor-pointer hover:text-blue-400" onClick={() => setReportTicker(h.ticker)}>
                     {h.market === 'us' ? '🇺🇸' : '🇹🇷'} {h.symbol} 📊
                   </td>
-                  <td className="px-3 py-2 hidden lg:table-cell text-gray-400 text-xs max-w-[150px] truncate">{h.sector || '—'}</td>
+                  <td className="px-3 py-2 hidden lg:table-cell text-gray-400 text-xs max-w-[150px] truncate" title={h.sector || ''}>{specificSector(h) || '—'}</td>
                   <td className="px-3 py-2 text-right font-mono text-gray-300">{fmt(h.shares, 0)}</td>
                   <td className="px-3 py-2 text-right font-mono text-gray-400 hidden sm:table-cell">{h.currency}{fmt(h.cost_basis)}</td>
                   <td className="px-3 py-2 text-right font-mono text-gray-300">{h.price == null ? '—' : `${h.currency}${fmt(h.price)}`}</td>
@@ -209,7 +258,10 @@ export default function PortfolioPanel() {
                   <td className={`px-3 py-2 text-right font-mono font-bold hidden lg:table-cell ${scoreColor(h.growth_score)}`}>{h.growth_score == null ? '—' : Math.round(h.growth_score)}</td>
                   <td className={`px-3 py-2 text-right font-mono font-extrabold hidden md:table-cell ${scoreColor(h.overall_score)}`}>{h.overall_score == null ? '—' : Math.round(h.overall_score)}</td>
                   <td className="px-3 py-2 text-right">
-                    <button onClick={() => removeHolding(h.id)} className="text-red-400 hover:text-red-300 text-xs">Sil</button>
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => openSell(h)} className="text-orange-400 hover:text-orange-300 text-xs font-bold">Sat</button>
+                      <button onClick={() => removeHolding(h.id)} className="text-red-400 hover:text-red-300 text-xs">Sil</button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -222,6 +274,39 @@ export default function PortfolioPanel() {
 
       {reportTicker && (
         <StockReportModal ticker={reportTicker} onClose={() => setReportTicker(null)} />
+      )}
+
+      {sellHolding && (
+        <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4" onClick={() => setSellHolding(null)}>
+          <form onSubmit={sell} onClick={(e) => e.stopPropagation()} className="w-full max-w-md bg-gray-900 border border-gray-700 rounded-xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-white">📤 Kademeli Satış — {sellHolding.symbol}</h3>
+                <p className="text-xs text-gray-500 mt-1">Mevcut adet: {fmt(sellHolding.shares, 4)}</p>
+              </div>
+              <button type="button" onClick={() => setSellHolding(null)} className="text-gray-400 hover:text-white text-xl">✕</button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Satılacak adet</label>
+                <input type="number" min="0" max={sellHolding.shares} step="any" autoFocus value={sellShares} onChange={(e) => setSellShares(e.target.value)} className="w-full bg-gray-800 border border-gray-700 text-white px-2 py-2 rounded text-sm font-mono" placeholder="Örn. 25" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Satış fiyatı ({sellHolding.currency})</label>
+                <input type="number" min="0" step="any" value={sellPrice} onChange={(e) => setSellPrice(e.target.value)} className="w-full bg-gray-800 border border-gray-700 text-white px-2 py-2 rounded text-sm font-mono" placeholder="İsteğe bağlı" />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Not (isteğe bağlı)</label>
+              <input value={sellNotes} onChange={(e) => setSellNotes(e.target.value)} className="w-full bg-gray-800 border border-gray-700 text-white px-2 py-2 rounded text-sm" placeholder="Örn. %25 kâr realizasyonu" />
+            </div>
+            <p className="text-[11px] text-gray-500">Kalan hisselerin ortalama maliyeti değişmez. Tümünü satarsan pozisyon portföyden kaldırılır.</p>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setSellHolding(null)} className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm">İptal</button>
+              <button type="submit" className="px-3 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded text-sm font-bold">Satışı Kaydet</button>
+            </div>
+          </form>
+        </div>
       )}
     </div>
   );

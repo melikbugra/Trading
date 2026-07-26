@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import StockReportModal from './StockReportModal';
-import ListFilters, { uniqueSectors, SearchBox } from './ListFilters';
+import ListFilters, { uniqueSectors, specificSector, SearchBox } from './ListFilters';
 import AnalyzeButton from './AnalyzeButton';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
@@ -55,13 +55,13 @@ export default function WatchlistPanel() {
     load();
   };
 
-  const sectors = uniqueSectors(items, (it) => it.scores?.sector);
+  const sectors = uniqueSectors(items, (it) => specificSector(it.scores));
   const q = query.trim().toLowerCase();
   const filtered = items.filter(
     (it) =>
       (marketFilter === 'all' || it.market === marketFilter) &&
-      (sectorFilter === 'all' || it.scores?.sector === sectorFilter) &&
-      (!q || (it.symbol || '').toLowerCase().includes(q) || (it.scores?.sector || '').toLowerCase().includes(q))
+      (sectorFilter === 'all' || specificSector(it.scores) === sectorFilter) &&
+      (!q || (it.symbol || '').toLowerCase().includes(q) || specificSector(it.scores).toLowerCase().includes(q))
   );
   const sorted = sortBy
     ? [...filtered].sort((a, b) => (b.scores?.[sortBy] ?? -1) - (a.scores?.[sortBy] ?? -1))
@@ -108,7 +108,7 @@ export default function WatchlistPanel() {
             <thead className="bg-gray-900 text-gray-500">
               <tr>
                 <th className="text-left px-3 py-2">Hisse</th>
-                <th className="text-left px-3 py-2 hidden lg:table-cell">Sektör</th>
+                <th className="text-left px-3 py-2 hidden lg:table-cell">Sektör / Endüstri</th>
                 <th className="text-left px-3 py-2 hidden sm:table-cell">Etiket</th>
                 <th className="text-right px-3 py-2"><SortBtn field="dividend_score">Temettü</SortBtn></th>
                 <th className="text-right px-3 py-2"><SortBtn field="growth_score">Büyüme</SortBtn></th>
@@ -124,7 +124,7 @@ export default function WatchlistPanel() {
                     <td className="px-3 py-2 font-mono font-bold text-white cursor-pointer hover:text-blue-400" onClick={() => setReportTicker(it.ticker)}>
                       {it.market === 'us' ? '🇺🇸' : '🇹🇷'} {it.symbol} 📊
                     </td>
-                    <td className="px-3 py-2 hidden lg:table-cell text-gray-400 text-xs max-w-[150px] truncate">{s?.sector || '—'}</td>
+                    <td className="px-3 py-2 hidden lg:table-cell text-gray-400 text-xs max-w-[150px] truncate" title={s?.sector || ''}>{specificSector(s) || '—'}</td>
                     <td className="px-3 py-2 hidden sm:table-cell text-gray-400 text-xs">{s?.label || '—'}</td>
                     <td className={`px-3 py-2 text-right font-mono font-bold ${scoreColor(s?.dividend_score)}`}>{s?.dividend_score == null ? '—' : Math.round(s.dividend_score)}</td>
                     <td className={`px-3 py-2 text-right font-mono font-bold ${scoreColor(s?.growth_score)}`}>{s?.growth_score == null ? '—' : Math.round(s.growth_score)}</td>

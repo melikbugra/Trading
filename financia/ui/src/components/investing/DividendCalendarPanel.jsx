@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import ListFilters, { uniqueSectors } from './ListFilters';
+import ListFilters, { uniqueSectors, specificSector } from './ListFilters';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -22,9 +22,9 @@ export default function DividendCalendarPanel() {
   useEffect(() => { load(); }, []);
 
   const needsScan = data.holdings?.some((h) => !h.has_snapshot);
-  const sectors = uniqueSectors(data.holdings, (h) => h.sector);
+  const sectors = uniqueSectors(data.holdings, specificSector);
   const filtered = data.holdings.filter(
-    (h) => (marketFilter === 'all' || h.market === marketFilter) && (sectorFilter === 'all' || h.sector === sectorFilter)
+    (h) => (marketFilter === 'all' || h.market === marketFilter) && (sectorFilter === 'all' || specificSector(h) === sectorFilter)
   );
 
   return (
@@ -64,7 +64,7 @@ export default function DividendCalendarPanel() {
             <thead className="bg-gray-900 text-gray-500">
               <tr>
                 <th className="text-left px-3 py-2">Hisse</th>
-                <th className="text-left px-3 py-2 hidden lg:table-cell">Sektör</th>
+                <th className="text-left px-3 py-2 hidden lg:table-cell">Sektör / Endüstri</th>
                 <th className="text-right px-3 py-2">Adet</th>
                 <th className="text-right px-3 py-2">Temettü Verimi</th>
                 <th className="text-right px-3 py-2">Tahmini Yıllık Gelir</th>
@@ -74,7 +74,7 @@ export default function DividendCalendarPanel() {
               {filtered.map((h) => (
                 <tr key={h.ticker} className="border-t border-gray-800 hover:bg-gray-800/30">
                   <td className="px-3 py-2 font-mono font-bold text-white">{h.market === 'us' ? '🇺🇸' : '🇹🇷'} {h.symbol}</td>
-                  <td className="px-3 py-2 hidden lg:table-cell text-gray-400 text-xs max-w-[150px] truncate">{h.sector || '—'}</td>
+                  <td className="px-3 py-2 hidden lg:table-cell text-gray-400 text-xs max-w-[150px] truncate" title={h.sector || ''}>{specificSector(h) || '—'}</td>
                   <td className="px-3 py-2 text-right font-mono text-gray-300">{fmt(h.shares, 0)}</td>
                   <td className="px-3 py-2 text-right font-mono text-gray-300">{h.dividend_yield == null ? '—' : `${fmt(h.dividend_yield)}%`}</td>
                   <td className="px-3 py-2 text-right font-mono text-yellow-400 font-bold">{h.annual_income == null ? '—' : `${h.currency}${fmt(h.annual_income)}`}</td>

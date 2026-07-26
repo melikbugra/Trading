@@ -20,6 +20,7 @@ from financia.web_api.database import (
     SessionLocal,
     now_turkey,
     LongTermHolding,
+    LongTermSale,
     LongTermWatchlistItem,
     FundamentalSnapshot,
     FundamentalOverride,
@@ -51,6 +52,13 @@ class HoldingUpdate(BaseModel):
     cost_basis: Optional[float] = None
     purchase_date: Optional[date] = None
     notes: Optional[str] = None
+
+
+class HoldingSell(BaseModel):
+    shares: float
+    sale_price: Optional[float] = None
+    sale_date: Optional[date] = None
+    notes: str = ""
 
 
 class WatchlistCreate(BaseModel):
@@ -226,6 +234,7 @@ def list_holdings(db: Session = Depends(get_db)):
         cur = get_market_config(h.market)["currency_symbol"]
         snap = snaps.get(h.ticker)
         sector = (snap.metrics or {}).get("sector") if snap else None
+        industry = (snap.metrics or {}).get("industry") if snap else None
         cost_value = h.shares * h.cost_basis
         market_value = h.shares * price if price is not None else None
         pnl = (market_value - cost_value) if market_value is not None else None
@@ -238,6 +247,7 @@ def list_holdings(db: Session = Depends(get_db)):
             "symbol": h.ticker.replace(".IS", ""),
             "market": h.market,
             "sector": sector,
+            "industry": industry,
             "dividend_score": snap.dividend_score if snap else None,
             "growth_score": snap.growth_score if snap else None,
             "overall_score": snap.overall_score if snap else None,
@@ -293,6 +303,57 @@ def update_holding(holding_id: int, item: HoldingUpdate, db: Session = Depends(g
         setattr(holding, field, value)
     db.commit()
     return {"id": holding.id}
+
+
+@router.post("/holdings/{holding_id}/sell")
+def sell_holding(holding_id: int, item: HoldingSell, db: Session = Depends(get_db)):
+    """Sell part or all of a long-term holding.
+
+    The remaining position keeps its existing average cost basis. A full sale
+    removes the holding, matching the existing manual delete behavior.
+    """
+    holding = db.query(LongTermHolding).filter(LongTermHolding.id == holding_id).first()
+    if not holding:
+        raise HTTPException(status_code=404, detail="Holding bulunamadı")
+    import math
+
+    if not math.isfinite(item.shares) or item.shares <= 0:
+        raise HTTPException(status_code=400, detail="Satış adedi sıfırdan büyük olmalı")
+    if item.shares > holding.shares:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Satış adedi mevcut adetten fazla olamaz ({holding.shares:g})",
+        )
+    if item.sale_price is not None and (not math.isfinite(item.sale_price) or item.sale_price <= 0):
+        raise HTTPException(status_code=400, detail="Satış fiyatı sıfırdan büyük olmalı")
+
+    remaining = holding.shares - item.shares
+    # Avoid tiny floating-point remnants after selling the full position.
+    fully_sold = remaining <= 1e-9
+    db.add(LongTermSale(
+        holding_id=holding.id,
+        ticker=holding.ticker,
+        market=holding.market,
+        shares=item.shares,
+        sale_price=item.sale_price,
+        sale_date=item.sale_date or date.today(),
+        notes=item.notes,
+    ))
+    if fully_sold:
+        db.delete(holding)
+    else:
+        holding.shares = remaining
+        if item.notes:
+            holding.notes = f"{holding.notes}\nSatış: {item.notes}".strip()
+    db.commit()
+    return {
+        "id": holding_id,
+        "sold_shares": item.shares,
+        "remaining_shares": 0 if fully_sold else remaining,
+        "fully_sold": fully_sold,
+        "sale_price": item.sale_price,
+        "sale_date": item.sale_date.isoformat() if item.sale_date else None,
+    }
 
 
 @router.delete("/holdings/{holding_id}")
@@ -674,6 +735,7 @@ def dividends_calendar(db: Session = Depends(get_db)):
             "symbol": h.ticker.replace(".IS", ""),
             "market": h.market,
             "sector": (snap.metrics or {}).get("sector") if snap else None,
+            "industry": (snap.metrics or {}).get("industry") if snap else None,
             "currency": cur,
             "shares": h.shares,
             "dividend_yield": yield_pct,

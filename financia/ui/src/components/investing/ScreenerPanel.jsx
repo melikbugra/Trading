@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 import { useWebSocket } from '../../contexts/WebSocketContext';
 import StockReportModal from './StockReportModal';
-import ListFilters, { uniqueSectors } from './ListFilters';
+import ListFilters, { uniqueSectors, specificSector } from './ListFilters';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -97,13 +97,13 @@ export default function ScreenerPanel() {
     }
   };
 
-  const sectors = uniqueSectors(results, (r) => r.sector);
+  const sectors = uniqueSectors(results, specificSector);
   const q = query.trim().toLowerCase();
   const filtered = results.filter(
     (r) =>
       (marketFilter === 'all' || r.market === marketFilter) &&
-      (sectorFilter === 'all' || r.sector === sectorFilter) &&
-      (!q || (r.symbol || '').toLowerCase().includes(q) || (r.sector || '').toLowerCase().includes(q))
+      (sectorFilter === 'all' || specificSector(r) === sectorFilter) &&
+      (!q || (r.symbol || '').toLowerCase().includes(q) || specificSector(r).toLowerCase().includes(q))
   );
   const sorted = [...filtered].sort((a, b) => (b[sortBy] ?? -1) - (a[sortBy] ?? -1));
 
@@ -265,7 +265,7 @@ export default function ScreenerPanel() {
             <thead className="bg-gray-900 text-gray-500">
               <tr>
                 <th className="text-left px-3 py-2">Hisse</th>
-                <th className="text-left px-3 py-2 hidden lg:table-cell">Sektör</th>
+                <th className="text-left px-3 py-2 hidden lg:table-cell">Sektör / Endüstri</th>
                 <th className="text-left px-3 py-2 hidden sm:table-cell">Etiket</th>
                 <th className="text-right px-3 py-2"><SortBtn field="dividend_yield">Tem.%</SortBtn></th>
                 <th className="text-right px-3 py-2 hidden sm:table-cell">F/K</th>
@@ -288,7 +288,7 @@ export default function ScreenerPanel() {
                     {r.market === 'us' ? '🇺🇸' : '🇹🇷'} {r.symbol}
                   </td>
                   <td className="px-3 py-2 hidden lg:table-cell text-gray-400 text-xs max-w-[160px] truncate" title={r.industry || ''}>
-                    {r.sector || '—'}
+                    {specificSector(r) || '—'}
                   </td>
                   <td className="px-3 py-2 hidden sm:table-cell">
                     {r.label && <span className={`px-2 py-0.5 rounded text-xs font-bold border ${LABEL_BADGE[r.label] || ''}`}>{r.label}</span>}
