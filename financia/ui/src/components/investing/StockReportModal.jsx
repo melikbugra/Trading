@@ -281,7 +281,8 @@ export default function StockReportModal({ ticker, market, onClose }) {
         }),
       });
       if (res.ok) {
-        addToast('Portföye eklendi', 'success');
+        const data = await res.json();
+        addToast(data.merged ? 'Alış eklendi, ortalama maliyet güncellendi' : 'Portföye eklendi', 'success');
         setShowBuy(false);
         setBuyShares('');
       } else {

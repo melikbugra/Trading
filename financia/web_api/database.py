@@ -681,6 +681,17 @@ class LongTermSale(Base):
     created_at = Column(DateTime, default=now_turkey)
 
 
+class LongTermHoldingIncome(Base):
+    """Current dividend credit attached to an open long-term holding."""
+
+    __tablename__ = "lt_holding_income"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    holding_id = Column(Integer, nullable=False, unique=True)
+    amount = Column(Float, nullable=False, default=0.0)
+    updated_at = Column(DateTime, default=now_turkey, onupdate=now_turkey)
+
+
 class LongTermWatchlistItem(Base):
     """A long-term candidate being tracked (not yet owned)."""
 

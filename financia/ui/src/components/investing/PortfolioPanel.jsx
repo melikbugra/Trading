@@ -13,7 +13,7 @@ const emptyForm = { ticker: '', market: 'bist', shares: '', cost_basis: '', purc
 
 export default function PortfolioPanel() {
   const { addToast } = useToast();
-  const [data, setData] = useState({ holdings: [], totals: [] });
+  const [data, setData] = useState({ holdings: [], totals: [], summary: [] });
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -22,6 +22,8 @@ export default function PortfolioPanel() {
   const [sellShares, setSellShares] = useState('');
   const [sellPrice, setSellPrice] = useState('');
   const [sellNotes, setSellNotes] = useState('');
+  const [dividendHolding, setDividendHolding] = useState(null);
+  const [dividendAmount, setDividendAmount] = useState('');
   const [marketFilter, setMarketFilter] = useState('all');
   const [sectorFilter, setSectorFilter] = useState('all');
   const [query, setQuery] = useState('');
@@ -63,7 +65,8 @@ export default function PortfolioPanel() {
         }),
       });
       if (res.ok) {
-        addToast(`${ticker} eklendi`, 'success');
+        const body = await res.json();
+        addToast(body.merged ? `${ticker} alışa eklendi, ortalama maliyet güncellendi` : `${ticker} eklendi`, 'success');
         setForm(emptyForm);
         setShowForm(false);
         load();
@@ -127,6 +130,37 @@ export default function PortfolioPanel() {
     }
   };
 
+  const openDividend = (holding) => {
+    setDividendHolding(holding);
+    setDividendAmount('');
+  };
+
+  const addDividend = async (e) => {
+    e.preventDefault();
+    const amount = parseFloat(dividendAmount);
+    if (!dividendHolding || !Number.isFinite(amount) || amount <= 0) {
+      addToast('Geçerli bir temettü tutarı gir', 'error');
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/investing/holdings/${dividendHolding.id}/dividend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        addToast(body.detail || 'Temettü kaydedilemedi', 'error');
+        return;
+      }
+      addToast(`${dividendHolding.symbol}: temettü eklendi`, 'success');
+      setDividendHolding(null);
+      load();
+    } catch {
+      addToast('Temettü kaydedilemedi', 'error');
+    }
+  };
+
   const sectors = uniqueSectors(data.holdings, specificSector);
   const q = query.trim().toLowerCase();
   const filteredHoldings = data.holdings.filter(
@@ -167,6 +201,28 @@ export default function PortfolioPanel() {
           {showForm ? '✕ Kapat' : '+ Hisse Ekle'}
         </button>
       </div>
+
+      {data.summary?.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
+          {data.summary.map((s) => (
+            <div key={s.currency} className="bg-gray-900 border border-gray-800 rounded-lg p-3">
+              <div className="text-xs text-gray-500 mb-2">Portföy Özeti ({s.currency})</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <span className="text-gray-500">Güncel K/Z</span>
+                <span className={`text-right font-mono font-bold ${(s.pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {s.pnl == null ? '—' : `${s.pnl >= 0 ? '+' : ''}${s.currency}${fmt(s.pnl)}`}
+                </span>
+                <span className="text-gray-500">Temettü</span>
+                <span className="text-right font-mono font-bold text-yellow-400">{s.currency}{fmt(s.dividends)}</span>
+                <span className="text-gray-500">Toplam getiri</span>
+                <span className={`text-right font-mono font-bold ${(s.total_return ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {s.total_return == null ? '—' : `${s.total_return >= 0 ? '+' : ''}${s.currency}${fmt(s.total_return)}`}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Add form */}
       {showForm && (
@@ -259,6 +315,7 @@ export default function PortfolioPanel() {
                   <td className={`px-3 py-2 text-right font-mono font-extrabold hidden md:table-cell ${scoreColor(h.overall_score)}`}>{h.overall_score == null ? '—' : Math.round(h.overall_score)}</td>
                   <td className="px-3 py-2 text-right">
                     <div className="flex justify-end gap-2">
+                      <button onClick={() => openDividend(h)} className="text-yellow-400 hover:text-yellow-300 text-xs font-bold" title="Temettü ekle">Tem.</button>
                       <button onClick={() => openSell(h)} className="text-orange-400 hover:text-orange-300 text-xs font-bold">Sat</button>
                       <button onClick={() => removeHolding(h.id)} className="text-red-400 hover:text-red-300 text-xs">Sil</button>
                     </div>
@@ -304,6 +361,26 @@ export default function PortfolioPanel() {
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setSellHolding(null)} className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm">İptal</button>
               <button type="submit" className="px-3 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded text-sm font-bold">Satışı Kaydet</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {dividendHolding && (
+        <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4" onClick={() => setDividendHolding(null)}>
+          <form onSubmit={addDividend} onClick={(e) => e.stopPropagation()} className="w-full max-w-sm bg-gray-900 border border-gray-700 rounded-xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-white">💰 Temettü Ekle — {dividendHolding.symbol}</h3>
+              <button type="button" onClick={() => setDividendHolding(null)} className="text-gray-400 hover:text-white text-xl">✕</button>
+            </div>
+            <p className="text-xs text-gray-500">Bu pozisyon açık kaldığı sürece portföy toplamına dahil edilir.</p>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Alınan temettü ({dividendHolding.currency})</label>
+              <input type="number" min="0" step="any" autoFocus value={dividendAmount} onChange={(e) => setDividendAmount(e.target.value)} className="w-full bg-gray-800 border border-gray-700 text-white px-2 py-2 rounded text-sm font-mono" placeholder="Örn. 1250" />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setDividendHolding(null)} className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm">İptal</button>
+              <button type="submit" className="px-3 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded text-sm font-bold">Temettüyü Ekle</button>
             </div>
           </form>
         </div>

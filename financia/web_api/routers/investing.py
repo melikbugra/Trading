@@ -21,6 +21,7 @@ from financia.web_api.database import (
     now_turkey,
     LongTermHolding,
     LongTermSale,
+    LongTermHoldingIncome,
     LongTermWatchlistItem,
     FundamentalSnapshot,
     FundamentalOverride,
@@ -59,6 +60,10 @@ class HoldingSell(BaseModel):
     sale_price: Optional[float] = None
     sale_date: Optional[date] = None
     notes: str = ""
+
+
+class DividendAdd(BaseModel):
+    amount: float
 
 
 class WatchlistCreate(BaseModel):
@@ -222,10 +227,12 @@ def list_holdings(db: Session = Depends(get_db)):
     """All long-term holdings with live valuation, P/L and per-currency weight."""
     holdings = db.query(LongTermHolding).order_by(LongTermHolding.created_at.desc()).all()
     snaps = {s.ticker: s for s in db.query(FundamentalSnapshot).all()}
+    incomes = {i.holding_id: i.amount for i in db.query(LongTermHoldingIncome).all()}
 
     rows = []
     # value totals per currency symbol so BIST (₺) and US ($) stay separate
     totals: Dict[str, float] = {}
+    summary_by_currency: Dict[str, dict] = {}
     price_cache: Dict[str, Optional[float]] = {}
     for h in holdings:
         if h.ticker not in price_cache:
@@ -239,8 +246,17 @@ def list_holdings(db: Session = Depends(get_db)):
         market_value = h.shares * price if price is not None else None
         pnl = (market_value - cost_value) if market_value is not None else None
         pnl_pct = (pnl / cost_value * 100) if (pnl is not None and cost_value) else None
+        dividend_total = incomes.get(h.id, 0.0)
         if market_value is not None:
             totals[cur] = totals.get(cur, 0.0) + market_value
+        summary = summary_by_currency.setdefault(cur, {"cost_value": 0.0, "market_value": 0.0, "pnl": 0.0, "dividends": 0.0, "has_price": True})
+        summary["cost_value"] += cost_value
+        summary["dividends"] += dividend_total
+        if market_value is None:
+            summary["has_price"] = False
+        else:
+            summary["market_value"] += market_value
+            summary["pnl"] += pnl
         rows.append({
             "id": h.id,
             "ticker": h.ticker,
@@ -261,6 +277,7 @@ def list_holdings(db: Session = Depends(get_db)):
             "market_value": round(market_value, 2) if market_value is not None else None,
             "pnl": round(pnl, 2) if pnl is not None else None,
             "pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None,
+            "dividend_total": round(dividend_total, 2),
         })
 
     # compute weights within each currency bucket
@@ -274,24 +291,87 @@ def list_holdings(db: Session = Depends(get_db)):
     return {
         "holdings": rows,
         "totals": [{"currency": c, "market_value": round(v, 2)} for c, v in totals.items()],
+        "summary": [
+            {
+                "currency": cur,
+                "cost_value": round(s["cost_value"], 2),
+                "market_value": round(s["market_value"], 2) if s["has_price"] else None,
+                "pnl": round(s["pnl"], 2) if s["has_price"] else None,
+                "dividends": round(s["dividends"], 2),
+                "total_return": round(s["pnl"] + s["dividends"], 2) if s["has_price"] else None,
+            }
+            for cur, s in summary_by_currency.items()
+        ],
     }
 
 
 @router.post("/holdings")
 def add_holding(item: HoldingCreate, db: Session = Depends(get_db)):
-    ticker = item.ticker.strip().upper()
-    holding = LongTermHolding(
-        ticker=ticker,
-        market=_norm(ticker, item.market),
-        shares=item.shares,
-        cost_basis=item.cost_basis,
-        purchase_date=item.purchase_date,
-        notes=item.notes,
+    import math
+
+    ticker = _normalize_ticker(item.ticker, item.market)
+    market = _norm(ticker, item.market)
+    if not math.isfinite(item.shares) or item.shares <= 0:
+        raise HTTPException(status_code=400, detail="Alış adedi sıfırdan büyük olmalı")
+    if not math.isfinite(item.cost_basis) or item.cost_basis <= 0:
+        raise HTTPException(status_code=400, detail="Maliyet sıfırdan büyük olmalı")
+
+    # Merge repeated buys into one position. This also consolidates any older
+    # duplicate rows that may have been created before this behavior existed.
+    matches = (
+        db.query(LongTermHolding)
+        .filter(LongTermHolding.ticker == ticker, LongTermHolding.market == market)
+        .order_by(LongTermHolding.created_at.asc(), LongTermHolding.id.asc())
+        .all()
     )
-    db.add(holding)
+    if matches:
+        holding = matches[0]
+        old_shares = sum(h.shares for h in matches)
+        old_cost = sum(h.shares * h.cost_basis for h in matches)
+        total_shares = old_shares + item.shares
+        holding.shares = total_shares
+        holding.cost_basis = (old_cost + item.shares * item.cost_basis) / total_shares
+        if holding.purchase_date is None or (
+            item.purchase_date is not None and item.purchase_date < holding.purchase_date
+        ):
+            holding.purchase_date = item.purchase_date
+        if item.notes:
+            holding.notes = f"{holding.notes}\nAlış: {item.notes}".strip()
+        for duplicate in matches[1:]:
+            duplicate_income = db.query(LongTermHoldingIncome).filter(
+                LongTermHoldingIncome.holding_id == duplicate.id
+            ).first()
+            if duplicate_income:
+                primary_income = db.query(LongTermHoldingIncome).filter(
+                    LongTermHoldingIncome.holding_id == holding.id
+                ).first()
+                if primary_income:
+                    primary_income.amount += duplicate_income.amount
+                else:
+                    db.add(LongTermHoldingIncome(holding_id=holding.id, amount=duplicate_income.amount))
+                db.delete(duplicate_income)
+            db.delete(duplicate)
+        merged = True
+    else:
+        holding = LongTermHolding(
+            ticker=ticker,
+            market=market,
+            shares=item.shares,
+            cost_basis=item.cost_basis,
+            purchase_date=item.purchase_date,
+            notes=item.notes,
+        )
+        db.add(holding)
+        merged = False
     db.commit()
     db.refresh(holding)
-    return {"id": holding.id, "ticker": holding.ticker}
+    return {
+        "id": holding.id,
+        "ticker": holding.ticker,
+        "merged": merged,
+        "shares": holding.shares,
+        "cost_basis": holding.cost_basis,
+    }
 
 
 @router.put("/holdings/{holding_id}")
@@ -303,6 +383,29 @@ def update_holding(holding_id: int, item: HoldingUpdate, db: Session = Depends(g
         setattr(holding, field, value)
     db.commit()
     return {"id": holding.id}
+
+
+@router.post("/holdings/{holding_id}/dividend")
+def add_dividend(holding_id: int, item: DividendAdd, db: Session = Depends(get_db)):
+    """Add a dividend received while the holding is part of the portfolio."""
+    import math
+
+    holding = db.query(LongTermHolding).filter(LongTermHolding.id == holding_id).first()
+    if not holding:
+        raise HTTPException(status_code=404, detail="Holding bulunamadı")
+    if not math.isfinite(item.amount) or item.amount <= 0:
+        raise HTTPException(status_code=400, detail="Temettü tutarı sıfırdan büyük olmalı")
+
+    income = db.query(LongTermHoldingIncome).filter(
+        LongTermHoldingIncome.holding_id == holding.id
+    ).first()
+    if income:
+        income.amount += item.amount
+    else:
+        income = LongTermHoldingIncome(holding_id=holding.id, amount=item.amount)
+        db.add(income)
+    db.commit()
+    return {"holding_id": holding.id, "dividend_total": income.amount}
 
 
 @router.post("/holdings/{holding_id}/sell")
@@ -330,6 +433,13 @@ def sell_holding(holding_id: int, item: HoldingSell, db: Session = Depends(get_d
     remaining = holding.shares - item.shares
     # Avoid tiny floating-point remnants after selling the full position.
     fully_sold = remaining <= 1e-9
+    income = db.query(LongTermHoldingIncome).filter(
+        LongTermHoldingIncome.holding_id == holding.id
+    ).first()
+    if income:
+        income.amount *= remaining / holding.shares if not fully_sold else 0
+        if fully_sold:
+            db.delete(income)
     db.add(LongTermSale(
         holding_id=holding.id,
         ticker=holding.ticker,
@@ -361,6 +471,7 @@ def delete_holding(holding_id: int, db: Session = Depends(get_db)):
     holding = db.query(LongTermHolding).filter(LongTermHolding.id == holding_id).first()
     if not holding:
         raise HTTPException(status_code=404, detail="Holding bulunamadı")
+    db.query(LongTermHoldingIncome).filter(LongTermHoldingIncome.holding_id == holding.id).delete()
     db.delete(holding)
     db.commit()
     return {"deleted": holding_id}
