@@ -692,6 +692,18 @@ class LongTermHoldingIncome(Base):
     updated_at = Column(DateTime, default=now_turkey, onupdate=now_turkey)
 
 
+class LongTermPortfolioAdvice(Base):
+    """Latest explainable hold/reduce advice for an open holding."""
+
+    __tablename__ = "lt_portfolio_advice"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    holding_id = Column(Integer, nullable=False, unique=True)
+    ticker = Column(String, nullable=False)
+    advice = Column(JSON, default={})
+    updated_at = Column(DateTime, default=now_turkey, onupdate=now_turkey)
+
+
 class LongTermWatchlistItem(Base):
     """A long-term candidate being tracked (not yet owned)."""
 

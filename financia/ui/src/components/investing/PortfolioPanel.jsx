@@ -175,6 +175,7 @@ export default function PortfolioPanel() {
 
   const scoreColor = (s) =>
     s == null ? 'text-gray-500' : s >= 70 ? 'text-green-400' : s >= 50 ? 'text-blue-400' : s >= 30 ? 'text-yellow-400' : 'text-red-400';
+  const adviceColor = (action) => action === 'TUT' ? 'text-green-400' : action === 'KADEMELİ AZALT' ? 'text-red-400' : action === 'VERİ YETERSİZ' ? 'text-gray-500' : 'text-yellow-400';
   const SortBtn = ({ field, children }) => (
     <button onClick={() => setSortBy((cur) => (cur === field ? null : field))} className={`hover:text-white ${sortBy === field ? 'text-white' : ''}`}>
       {children}{sortBy === field ? ' ▼' : ''}
@@ -268,7 +269,7 @@ export default function PortfolioPanel() {
           <SearchBox value={query} onChange={setQuery} />
           <ListFilters market={marketFilter} setMarket={setMarketFilter} sector={sectorFilter} setSector={setSectorFilter} sectors={sectors} />
           <AnalyzeButton
-            getBody={() => (data.holdings.length ? { tickers: data.holdings.map((h) => h.ticker) } : null)}
+            getBody={() => (data.holdings.length ? { tickers: data.holdings.map((h) => h.ticker), portfolio: true } : null)}
             label="🔄 Portföyü Analiz Et"
             onDone={load}
             className="px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 text-white rounded text-xs font-bold transition-colors"
@@ -292,6 +293,7 @@ export default function PortfolioPanel() {
                 <th className="text-right px-3 py-2 hidden lg:table-cell"><SortBtn field="dividend_score">Temettü</SortBtn></th>
                 <th className="text-right px-3 py-2 hidden lg:table-cell"><SortBtn field="growth_score">Büyüme</SortBtn></th>
                 <th className="text-right px-3 py-2 hidden md:table-cell"><SortBtn field="overall_score">Genel</SortBtn></th>
+                <th className="text-right px-3 py-2">Portföy Kararı</th>
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
@@ -313,6 +315,14 @@ export default function PortfolioPanel() {
                   <td className={`px-3 py-2 text-right font-mono font-bold hidden lg:table-cell ${scoreColor(h.dividend_score)}`}>{h.dividend_score == null ? '—' : Math.round(h.dividend_score)}</td>
                   <td className={`px-3 py-2 text-right font-mono font-bold hidden lg:table-cell ${scoreColor(h.growth_score)}`}>{h.growth_score == null ? '—' : Math.round(h.growth_score)}</td>
                   <td className={`px-3 py-2 text-right font-mono font-extrabold hidden md:table-cell ${scoreColor(h.overall_score)}`}>{h.overall_score == null ? '—' : Math.round(h.overall_score)}</td>
+                  <td className="px-3 py-2 text-right" title={h.portfolio_advice?.reasons?.join(' · ') || 'Portföyü Analiz Et ile hesaplanır'}>
+                    {h.portfolio_advice ? (
+                      <div>
+                        <div className={`text-xs font-bold ${adviceColor(h.portfolio_advice.action)}`}>{h.portfolio_advice.action}</div>
+                        <div className="text-[10px] text-gray-500 font-mono">{h.portfolio_advice.score == null ? '—' : `${h.portfolio_advice.score}/100`}</div>
+                      </div>
+                    ) : <span className="text-gray-600 text-xs">—</span>}
+                  </td>
                   <td className="px-3 py-2 text-right">
                     <div className="flex justify-end gap-2">
                       <button onClick={() => openDividend(h)} className="text-yellow-400 hover:text-yellow-300 text-xs font-bold" title="Temettü ekle">Tem.</button>

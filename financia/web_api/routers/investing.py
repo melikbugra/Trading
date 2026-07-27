@@ -22,6 +22,7 @@ from financia.web_api.database import (
     LongTermHolding,
     LongTermSale,
     LongTermHoldingIncome,
+    LongTermPortfolioAdvice,
     LongTermWatchlistItem,
     FundamentalSnapshot,
     FundamentalOverride,
@@ -78,6 +79,7 @@ class ScanRequest(BaseModel):
     tickers: Optional[List[str]] = None  # explicit list
     use_watchlist: bool = False  # scan the long-term watchlist
     limit: Optional[int] = None  # cap number of tickers (full-market scans are slow)
+    portfolio: bool = False  # add portfolio-specific hold/reduce advice
 
 
 class OverrideUpdate(BaseModel):
@@ -228,6 +230,7 @@ def list_holdings(db: Session = Depends(get_db)):
     holdings = db.query(LongTermHolding).order_by(LongTermHolding.created_at.desc()).all()
     snaps = {s.ticker: s for s in db.query(FundamentalSnapshot).all()}
     incomes = {i.holding_id: i.amount for i in db.query(LongTermHoldingIncome).all()}
+    advice_map = {a.holding_id: a.advice for a in db.query(LongTermPortfolioAdvice).all()}
 
     rows = []
     # value totals per currency symbol so BIST (₺) and US ($) stay separate
@@ -278,6 +281,7 @@ def list_holdings(db: Session = Depends(get_db)):
             "pnl": round(pnl, 2) if pnl is not None else None,
             "pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None,
             "dividend_total": round(dividend_total, 2),
+            "portfolio_advice": advice_map.get(h.id),
         })
 
     # compute weights within each currency bucket
@@ -450,6 +454,7 @@ def sell_holding(holding_id: int, item: HoldingSell, db: Session = Depends(get_d
         notes=item.notes,
     ))
     if fully_sold:
+        db.query(LongTermPortfolioAdvice).filter(LongTermPortfolioAdvice.holding_id == holding.id).delete()
         db.delete(holding)
     else:
         holding.shares = remaining
@@ -472,6 +477,7 @@ def delete_holding(holding_id: int, db: Session = Depends(get_db)):
     if not holding:
         raise HTTPException(status_code=404, detail="Holding bulunamadı")
     db.query(LongTermHoldingIncome).filter(LongTermHoldingIncome.holding_id == holding.id).delete()
+    db.query(LongTermPortfolioAdvice).filter(LongTermPortfolioAdvice.holding_id == holding.id).delete()
     db.delete(holding)
     db.commit()
     return {"deleted": holding_id}
@@ -597,7 +603,131 @@ async def _broadcast_scan(data: dict):
 _SCAN_CONCURRENCY = 8
 
 
-async def _run_scan(tickers: List[str], label: str):
+def _days_until(value) -> Optional[int]:
+    if not value:
+        return None
+    try:
+        return (date.fromisoformat(str(value)[:10]) - date.today()).days
+    except (TypeError, ValueError):
+        return None
+
+
+def _portfolio_advice(report: dict, technical: dict, pnl_pct: Optional[float]) -> dict:
+    """Build a transparent hold/reduce score from existing analysis outputs."""
+    metrics = report.get("metrics") or {}
+    available = []
+
+    def ramp(value, low, high):
+        if value is None:
+            return None
+        return max(0.0, min(100.0, (float(value) - low) / (high - low) * 100))
+
+    quality_parts = [
+        ramp(metrics.get("roe"), 0, 30),
+        ramp(metrics.get("profit_margin"), 0, 25),
+        ramp(metrics.get("revenue_growth"), 0, 30),
+        (100 - max(0.0, min(100.0, (float(metrics["debt_to_equity"]) - 50) / 150 * 100)))
+        if metrics.get("debt_to_equity") is not None else None,
+    ]
+    quality_parts = [x for x in quality_parts if x is not None]
+    quality = sum(quality_parts) / len(quality_parts) if quality_parts else None
+    overall = report.get("overall_score")
+    fundamental = (
+        (float(overall) * 0.6 + quality * 0.4) if overall is not None and quality is not None
+        else float(overall) if overall is not None
+        else quality
+    )
+    if fundamental is not None:
+        available.append("temel")
+
+    tech = (technical or {}).get("technical") or {}
+    technical_score = tech.get("score")
+    if technical_score is not None:
+        available.append("teknik")
+
+    ex_days = _days_until((report.get("calendar") or {}).get("ex_dividend_date"))
+    if ex_days is None:
+        dividend_timing = 50.0
+    elif 0 <= ex_days <= 30:
+        dividend_timing = 90.0
+    elif 31 <= ex_days <= 90:
+        dividend_timing = 70.0
+    elif ex_days < 0:
+        dividend_timing = 40.0
+    else:
+        dividend_timing = 55.0
+    if ex_days is not None:
+        available.append("temettü takvimi")
+
+    earnings_days = _days_until((report.get("calendar") or {}).get("earnings_date"))
+    if earnings_days is not None and 0 <= earnings_days <= 14:
+        earnings_risk = 35.0
+    elif earnings_days is not None and 15 <= earnings_days <= 30:
+        earnings_risk = 50.0
+    else:
+        earnings_risk = 70.0
+    if earnings_days is not None:
+        available.append("bilanço takvimi")
+
+    position_score = 60.0
+    rsi = tech.get("rsi")
+    if pnl_pct is not None and pnl_pct >= 30 and rsi is not None and rsi >= 70:
+        position_score = 35.0
+    elif pnl_pct is not None and pnl_pct <= -20 and (fundamental or 0) >= 60:
+        position_score = 70.0
+
+    components = {
+        "fundamental": round(fundamental, 1) if fundamental is not None else None,
+        "technical": round(float(technical_score), 1) if technical_score is not None else None,
+        "dividend_timing": round(dividend_timing, 1),
+        "earnings_risk": round(earnings_risk, 1),
+        "position": round(position_score, 1),
+    }
+    weighted = [
+        (fundamental, 0.35),
+        (technical_score, 0.30),
+        (dividend_timing, 0.15),
+        (earnings_risk, 0.10),
+        (position_score, 0.10),
+    ]
+    known = [(value, weight) for value, weight in weighted if value is not None]
+    score = round(sum(value * weight for value, weight in known) / sum(weight for _, weight in known)) if known else None
+
+    reasons = []
+    if fundamental is not None:
+        reasons.append(f"Temel/bilanço skoru {fundamental:.0f}/100")
+    if technical_score is not None:
+        reasons.append(f"Teknik skor {technical_score:.0f}/100 ({tech.get('trend', '—')})")
+    if ex_days is not None and 0 <= ex_days <= 30:
+        reasons.append(f"Ex-temettü tarihi {ex_days} gün içinde")
+    if earnings_days is not None and 0 <= earnings_days <= 14:
+        reasons.append(f"Bilanço açıklaması yaklaşık {earnings_days} gün içinde; oynaklık riski var")
+    if pnl_pct is not None and pnl_pct >= 30 and rsi is not None and rsi >= 70:
+        reasons.append("Kâr yüksek ve RSI aşırı alımda; kademeli kâr realizasyonu düşünülebilir")
+    if pnl_pct is not None and pnl_pct <= -20 and (fundamental or 0) >= 60:
+        reasons.append("Zarar var ama temel skor güçlü; panik satışı yerine tezi kontrol et")
+    if not reasons:
+        reasons.append("Yeterli analiz verisi oluşmadı; kararı tek başına bu puana göre verme")
+
+    if score is None:
+        action = "VERİ YETERSİZ"
+    elif score >= 72:
+        action = "TUT"
+    elif score >= 55:
+        action = "İZLE / KADEMELİ TUT"
+    else:
+        action = "KADEMELİ AZALT"
+    return {
+        "score": score,
+        "action": action,
+        "confidence": round(min(100, len(available) / 4 * 100)),
+        "components": components,
+        "reasons": reasons,
+        "updated_at": datetime.now().isoformat(),
+    }
+
+
+async def _run_scan(tickers: List[str], label: str, portfolio: bool = False):
     """Background bulk scan: score each ticker (.info only), cache, stream progress.
 
     yfinance fetches run in a bounded thread pool (concurrency-limited) so the
@@ -615,6 +745,7 @@ async def _run_scan(tickers: List[str], label: str):
     db = SessionLocal()
     # pre-load overrides once (avoid per-ticker DB reads inside workers)
     overrides_map = {o.ticker: (o.fields or {}) for o in db.query(FundamentalOverride).all()}
+    holdings_map = {h.ticker: h for h in db.query(LongTermHolding).all()} if portfolio else {}
     sem = asyncio.Semaphore(_SCAN_CONCURRENCY)
 
     async def _worker(t: str):
@@ -623,11 +754,25 @@ async def _run_scan(tickers: List[str], label: str):
             async with sem:
                 # network + compute in a thread; statements off for speed
                 report = await asyncio.to_thread(
-                    fundamental_service.analyze, t, overrides_map.get(t), False
+                    fundamental_service.analyze, t, overrides_map.get(t), portfolio
                 )
+                technical = await asyncio.to_thread(fundamental_service.fetch_technical, t) if portfolio else None
             # back on the event loop: DB + broadcast are serialized here
             if report.get("valid"):
                 _upsert_snapshot(db, report)
+                if portfolio and t in holdings_map:
+                    holding = holdings_map[t]
+                    price = report.get("price")
+                    pnl_pct = ((price - holding.cost_basis) / holding.cost_basis * 100) if price is not None and holding.cost_basis else None
+                    advice = _portfolio_advice(report, technical, pnl_pct)
+                    existing = db.query(LongTermPortfolioAdvice).filter(
+                        LongTermPortfolioAdvice.holding_id == holding.id
+                    ).first()
+                    if existing:
+                        existing.ticker = t
+                        existing.advice = advice
+                    else:
+                        db.add(LongTermPortfolioAdvice(holding_id=holding.id, ticker=t, advice=advice))
                 db.commit()
                 count += 1
             else:
@@ -702,7 +847,7 @@ async def scan(body: ScanRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Taranacak hisse yok")
 
     _scan_state["running"] = True
-    asyncio.create_task(_run_scan(tickers, label))
+    asyncio.create_task(_run_scan(tickers, label, body.portfolio))
     return {"status": "started", "total": len(tickers), "label": label}
 
 
