@@ -613,7 +613,13 @@ def _days_until(value) -> Optional[int]:
 
 
 def _portfolio_advice(report: dict, technical: dict, pnl_pct: Optional[float]) -> dict:
-    """Build a transparent hold/reduce score from existing analysis outputs."""
+    """Build a transparent 12+ month hold/add/review score.
+
+    Daily RSI and short-term overbought readings must not turn a long-term
+    holding into a sell signal. Fundamental deterioration is intentionally the
+    strongest reason to reduce; a technically weak but fundamentally healthy
+    holding can instead become an accumulate-on-weakness candidate.
+    """
     metrics = report.get("metrics") or {}
     available = []
 
@@ -641,7 +647,18 @@ def _portfolio_advice(report: dict, technical: dict, pnl_pct: Optional[float]) -
         available.append("temel")
 
     tech = (technical or {}).get("technical") or {}
-    technical_score = tech.get("score")
+    price_vs_ema200 = tech.get("price_vs_ema200")
+    drawdown = tech.get("drawdown")
+    if price_vs_ema200 is None:
+        technical_score = None
+    elif price_vs_ema200 >= 8:
+        technical_score = 85.0
+    elif price_vs_ema200 >= 0:
+        technical_score = 70.0
+    elif price_vs_ema200 >= -10:
+        technical_score = 50.0
+    else:
+        technical_score = 30.0
     if technical_score is not None:
         available.append("teknik")
 
@@ -661,20 +678,19 @@ def _portfolio_advice(report: dict, technical: dict, pnl_pct: Optional[float]) -
 
     earnings_days = _days_until((report.get("calendar") or {}).get("earnings_date"))
     if earnings_days is not None and 0 <= earnings_days <= 14:
-        earnings_risk = 35.0
+        earnings_risk = 55.0
     elif earnings_days is not None and 15 <= earnings_days <= 30:
-        earnings_risk = 50.0
+        earnings_risk = 65.0
     else:
         earnings_risk = 70.0
     if earnings_days is not None:
         available.append("bilanço takvimi")
 
+    # For a long-term investor, drawdowns are not automatically negative.
+    # Strong fundamentals + a large drawdown is a possible staged-buy setup.
     position_score = 60.0
-    rsi = tech.get("rsi")
-    if pnl_pct is not None and pnl_pct >= 30 and rsi is not None and rsi >= 70:
-        position_score = 35.0
-    elif pnl_pct is not None and pnl_pct <= -20 and (fundamental or 0) >= 60:
-        position_score = 70.0
+    if pnl_pct is not None and pnl_pct <= -20 and (fundamental or 0) >= 60:
+        position_score = 80.0
 
     components = {
         "fundamental": round(fundamental, 1) if fundamental is not None else None,
@@ -684,10 +700,10 @@ def _portfolio_advice(report: dict, technical: dict, pnl_pct: Optional[float]) -
         "position": round(position_score, 1),
     }
     weighted = [
-        (fundamental, 0.35),
-        (technical_score, 0.30),
-        (dividend_timing, 0.15),
-        (earnings_risk, 0.10),
+        (fundamental, 0.50),
+        (technical_score, 0.25),
+        (dividend_timing, 0.10),
+        (earnings_risk, 0.05),
         (position_score, 0.10),
     ]
     known = [(value, weight) for value, weight in weighted if value is not None]
@@ -697,27 +713,39 @@ def _portfolio_advice(report: dict, technical: dict, pnl_pct: Optional[float]) -
     if fundamental is not None:
         reasons.append(f"Temel/bilanço skoru {fundamental:.0f}/100")
     if technical_score is not None:
-        reasons.append(f"Teknik skor {technical_score:.0f}/100 ({tech.get('trend', '—')})")
+        reasons.append(f"Uzun vadeli trend skoru {technical_score:.0f}/100 ({tech.get('trend', '—')})")
     if ex_days is not None and 0 <= ex_days <= 30:
         reasons.append(f"Ex-temettü tarihi {ex_days} gün içinde")
     if earnings_days is not None and 0 <= earnings_days <= 14:
         reasons.append(f"Bilanço açıklaması yaklaşık {earnings_days} gün içinde; oynaklık riski var")
-    if pnl_pct is not None and pnl_pct >= 30 and rsi is not None and rsi >= 70:
-        reasons.append("Kâr yüksek ve RSI aşırı alımda; kademeli kâr realizasyonu düşünülebilir")
     if pnl_pct is not None and pnl_pct <= -20 and (fundamental or 0) >= 60:
-        reasons.append("Zarar var ama temel skor güçlü; panik satışı yerine tezi kontrol et")
+        reasons.append("Düşüş var ama temel skor güçlü; panik satışı yerine kademeli alım değerlendirilebilir")
+    if earnings_days is not None and 0 <= earnings_days <= 14:
+        reasons.append("Yaklaşan bilanço kısa vadeli oynaklık yaratabilir; uzun vadeli karar için tek başına satış sebebi değil")
     if not reasons:
         reasons.append("Yeterli analiz verisi oluşmadı; kararı tek başına bu puana göre verme")
 
     if score is None:
         action = "VERİ YETERSİZ"
-    elif score >= 72:
-        action = "TUT"
-    elif score >= 55:
-        action = "İZLE / KADEMELİ TUT"
-    else:
+    # A reduce signal requires a genuine long-term breakdown: very weak
+    # fundamentals AND a broken long-term trend. Normal drawdowns, high RSI,
+    # profit-taking and an upcoming earnings date never trigger it alone.
+    elif (
+        fundamental is not None
+        and fundamental < 30
+        and technical_score is not None
+        and technical_score <= 30
+    ):
         action = "KADEMELİ AZALT"
+        reasons.append("Temel/bilanço göstergeleri çok zayıf ve uzun vadeli trend kırılmış; yatırım tezini yeniden değerlendir")
+    elif fundamental is not None and fundamental >= 60 and drawdown is not None and drawdown <= -15:
+        action = "DÜŞÜŞTE KADEMELİ AL"
+    elif score >= 55:
+        action = "TUT"
+    else:
+        action = "İZLE / TUT"
     return {
+        "horizon": "uzun vade (12+ ay)",
         "score": score,
         "action": action,
         "confidence": round(min(100, len(available) / 4 * 100)),
