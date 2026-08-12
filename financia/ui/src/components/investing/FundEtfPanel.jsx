@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useToast } from '../../contexts/ToastContext';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
@@ -18,15 +18,15 @@ export default function FundEtfPanel() {
   const [selected, setSelected] = useState(null);
   const [buy, setBuy] = useState({ units: '', cost_basis: '' });
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/investing/funds/screener`);
       const data = await res.json();
       setResults(data.results || []);
     } catch { addToast('Fon/ETF sonuçları yüklenemedi', 'error'); }
-  };
+  }, [addToast]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
 
   const scan = async (body, label) => {
     setLoading(true);
@@ -86,18 +86,19 @@ export default function FundEtfPanel() {
   return (
     <div>
       <div className="flex flex-wrap gap-2 mb-4">
-        <button disabled={loading} onClick={() => scan({ universe: 'us_etf' }, 'ABD ETF')} className="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 rounded text-sm font-bold text-white">🇺🇸 Temel ETF’leri Tara</button>
+        <button disabled={loading} onClick={() => scan({ universe: 'us_etf' }, 'ABD ETF')} className="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 rounded text-sm font-bold text-white">🇺🇸 Geniş ETF Evrenini Tara</button>
         <button disabled={loading} onClick={() => scan({ universe: 'us_fund', asset_type: 'fund' }, 'Endeks fonları')} className="px-3 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-700 rounded text-sm font-bold text-white">📚 Endeks Fonlarını Tara</button>
         <button disabled={loading} onClick={() => scan({ universe: 'bist_etf', market: 'bist', asset_type: 'etf' }, 'BIST ETF')} className="px-3 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-700 rounded text-sm font-bold text-white">🇹🇷 BIST ETF’lerini Tara</button>
+        <button disabled={loading} onClick={() => scan({ universe: 'tefas_top30', market: 'bist', asset_type: 'fund' }, 'TEFAS en büyük 30')} className="px-3 py-2 bg-teal-700 hover:bg-teal-600 disabled:bg-gray-700 rounded text-sm font-bold text-white">🇹🇷 TEFAS En Büyük 30</button>
         {loading && <span className="text-xs text-gray-400 self-center animate-pulse">Analiz ediliyor…</span>}
       </div>
 
       <form onSubmit={analyzeOne} className="bg-gray-900 border border-gray-800 rounded-lg p-3 mb-4 flex flex-wrap gap-2 items-end">
         <div><label className="block text-xs text-gray-500 mb-1">Pazar</label><select value={form.market} onChange={(e) => setForm({ ...form, market: e.target.value })} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-2 text-sm"><option value="us">🇺🇸 ABD</option><option value="bist">🇹🇷 BIST</option></select></div>
         <div><label className="block text-xs text-gray-500 mb-1">Tür</label><select value={form.asset_type} onChange={(e) => setForm({ ...form, asset_type: e.target.value })} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-2 text-sm"><option value="etf">ETF</option><option value="fund">Fon</option></select></div>
-        <div><label className="block text-xs text-gray-500 mb-1">Kod</label><input value={form.ticker} onChange={(e) => setForm({ ...form, ticker: e.target.value.toUpperCase() })} placeholder={form.market === 'us' ? 'VOO / VFIAX' : 'GLDTR'} className="bg-gray-800 border border-gray-700 text-white rounded px-3 py-2 text-sm font-mono w-44" /></div>
+        <div><label className="block text-xs text-gray-500 mb-1">Kod</label><input value={form.ticker} onChange={(e) => setForm({ ...form, ticker: e.target.value.toUpperCase() })} placeholder={form.market === 'us' ? 'VOO / VFIAX' : form.asset_type === 'fund' ? 'TI2 / IPB' : 'GLDTR'} className="bg-gray-800 border border-gray-700 text-white rounded px-3 py-2 text-sm font-mono w-44" /></div>
         <button disabled={loading} className="px-3 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 rounded text-sm font-bold text-white">Analiz Et</button>
-        <span className="text-[11px] text-gray-500 self-center">Türkiye yatırım fonlarında Yahoo verisi olmayan kodlar analiz edilemeyebilir; ETF kodları desteklenir.</span>
+        <span className="text-[11px] text-gray-500 self-center">Türkiye fon ve ETF verileri TEFAS’tan alınır.</span>
       </form>
 
       <div className="flex flex-wrap gap-2 mb-2">
@@ -110,14 +111,15 @@ export default function FundEtfPanel() {
 
       <div className="overflow-x-auto border border-gray-800 rounded-lg">
         <table className="w-full text-sm">
-          <thead className="bg-gray-900 text-gray-500"><tr><th className="text-left px-3 py-2">Fon / ETF</th><th className="text-left px-3 py-2">Kategori</th><th className="text-right px-3 py-2">1Y</th><th className="text-right px-3 py-2">3Y yıllık</th><th className="text-right px-3 py-2">Oynaklık</th><th className="text-right px-3 py-2">Maks. düşüş</th><th className="text-right px-3 py-2">Gider</th><th className="text-right px-3 py-2">Puan</th><th className="px-3 py-2"></th></tr></thead>
+          <thead className="bg-gray-900 text-gray-500"><tr><th className="text-left px-3 py-2">Fon / ETF</th><th className="text-left px-3 py-2">Kategori</th><th className="text-left px-3 py-2">Nakit dağıtım</th><th className="text-right px-3 py-2">1Y</th><th className="text-right px-3 py-2">3Y yıllık</th><th className="text-right px-3 py-2">Risk / Oynaklık</th><th className="text-right px-3 py-2">Maks. düşüş</th><th className="text-right px-3 py-2">Gider</th><th className="text-right px-3 py-2">Puan</th><th className="px-3 py-2"></th></tr></thead>
           <tbody>{filtered.map((row) => { const m = row.metrics || {}; return (
             <tr key={row.ticker} onClick={() => { setSelected(row); setBuy({ units: '', cost_basis: row.price == null ? '' : String(row.price) }); }} className="border-t border-gray-800 hover:bg-gray-800/40 cursor-pointer">
               <td className="px-3 py-2"><div className="font-mono font-bold text-white">{flag(row.market)} {row.symbol || row.ticker.replace('.IS', '')} <span className="text-[10px] text-gray-500 uppercase">{row.asset_type}</span></div><div className="text-[11px] text-gray-500 max-w-[220px] truncate">{row.name}</div></td>
               <td className="px-3 py-2 text-xs text-gray-400 max-w-[160px] truncate">{row.category || '—'}</td>
+              <td className={`px-3 py-2 text-xs ${row.distributes_cash ? 'text-green-400' : 'text-gray-500'}`} title={row.distribution_status}>{row.distribution_status || 'Bilinmiyor'}</td>
               <td className={`px-3 py-2 text-right font-mono ${(m.return_1y ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{m.return_1y == null ? '—' : `%${fmt(m.return_1y)}`}</td>
               <td className={`px-3 py-2 text-right font-mono ${(m.return_3y ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{m.return_3y == null ? '—' : `%${fmt(m.return_3y)}`}</td>
-              <td className="px-3 py-2 text-right font-mono text-gray-300">{m.volatility_1y == null ? '—' : `%${fmt(m.volatility_1y)}`}</td>
+              <td className="px-3 py-2 text-right font-mono text-gray-300">{m.risk_level != null ? `${fmt(m.risk_level, 0)}/7` : m.volatility_1y == null ? '—' : `%${fmt(m.volatility_1y)}`}</td>
               <td className="px-3 py-2 text-right font-mono text-red-300">{m.max_drawdown_3y == null ? '—' : `%${fmt(m.max_drawdown_3y)}`}</td>
               <td className="px-3 py-2 text-right font-mono text-gray-300">{m.expense_ratio == null ? '—' : `%${fmt(m.expense_ratio, 3)}`}</td>
               <td className={`px-3 py-2 text-right font-mono font-bold ${scoreCls(row.score)}`}>{row.score == null ? '—' : row.score}</td>
@@ -129,7 +131,7 @@ export default function FundEtfPanel() {
       </div>
 
       {selected && <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={() => setSelected(null)}><div onClick={(e) => e.stopPropagation()} className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-2xl p-5 space-y-4">
-        <div className="flex justify-between"><div><h3 className="text-lg font-bold text-white">{flag(selected.market)} {selected.symbol || selected.ticker} — {selected.name}</h3><p className="text-xs text-gray-500">{selected.category || 'Kategori yok'} · {selected.label}</p></div><button onClick={() => setSelected(null)} className="text-gray-400 hover:text-white text-xl">✕</button></div>
+        <div className="flex justify-between"><div><h3 className="text-lg font-bold text-white">{flag(selected.market)} {selected.symbol || selected.ticker} — {selected.name}</h3><p className="text-xs text-gray-500">{selected.category || 'Kategori yok'} · {selected.label}</p><p className={`text-xs mt-1 ${selected.distributes_cash ? 'text-green-400' : 'text-gray-500'}`}>Nakit dağıtım: {selected.distribution_status || 'Bilinmiyor'}</p></div><button onClick={() => setSelected(null)} className="text-gray-400 hover:text-white text-xl">✕</button></div>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">{Object.entries(selected.components || {}).map(([key, value]) => <div key={key} className="bg-gray-800/60 rounded p-2 text-center"><div className="text-[10px] text-gray-500">{{ performance: 'Getiri', risk: 'Risk', cost: 'Maliyet', trend: 'Trend', income: 'Gelir' }[key] || key}</div><div className={`font-bold ${scoreCls(value)}`}>{value == null ? '—' : Math.round(value)}</div></div>)}</div>
         <div className="text-sm text-gray-300 space-y-1">{(selected.reasons || []).map((r, i) => <div key={i}>• {r}</div>)}</div>
         <div className={`text-sm font-bold ${scoreCls(selected.score)}`}>Uzun vade kararı: {selected.portfolio_action} · {selected.score ?? '—'}/100</div>

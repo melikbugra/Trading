@@ -2142,6 +2142,25 @@ typing-extensions = {version = ">=4.10.0", markers = "python_version < \"3.13\""
 full = ["httpx (>=0.27.0,<0.29.0)", "itsdangerous", "jinja2", "python-multipart (>=0.0.18)", "pyyaml"]
 
 [[package]]
+name = "tefasmak"
+version = "1.0.1"
+description = "TEFAS (Türkiye Elektronik Fon Alım Satım Platformu) için modern Python sarmalayıcısı — Akamai TSPD bypass için curl_cffi TLS impersonation kullanır."
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "tefasmak-1.0.1-py3-none-any.whl", hash = "sha256:2ba349c6f0a3da090ab3115b26ab3666572c6827ea573400f99ffa5082d608a2"},
+    {file = "tefasmak-1.0.1.tar.gz", hash = "sha256:8584a7d97e400adcda742b286a92cc62604d217b636f4b94e21b96f9a1cf36eb"},
+]
+
+[package.dependencies]
+curl-cffi = ">=0.7.0"
+
+[package.extras]
+dev = ["pytest (>=7)", "pytest-cov", "ruff"]
+requests = ["requests (>=2.31.0)"]
+
+[[package]]
 name = "typing-extensions"
 version = "4.15.0"
 description = "Backported and Experimental Type Hints for Python 3.9+"
@@ -2474,4 +2493,4 @@ repair = ["scipy (>=1.6.3)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11"
-content-hash = "bc8ac299ca6f073fe7419d5663b41937822ae9779b0d8d74587f3455c76922b4"
+content-hash = "bd0e31a9c15caf418832a8c0576187523c342e40dec1d1454ef42300d6b312d7"

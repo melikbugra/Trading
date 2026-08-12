@@ -16,7 +16,8 @@ dependencies = [
     "uvicorn (>=0.40.0,<0.41.0)",
     "sqlalchemy (>=2.0.45,<3.0.0)",
     "websockets (>=13.0,<15.0)",
-    "ccxt (>=4.5.33,<5.0.0)"
+    "ccxt (>=4.5.33,<5.0.0)",
+    "tefasmak (==1.0.1)"
 ]
 
 [build-system]

@@ -135,6 +135,16 @@ def _normalize_ticker(ticker: str, market: Optional[str]) -> str:
     return t
 
 
+def _normalize_fund_ticker(ticker: str, market: Optional[str], asset_type: Optional[str] = None) -> str:
+    """Normalize fund codes without turning TEFAS codes into Yahoo symbols."""
+    t = ticker.strip().upper()
+    if market and normalize_market(market) == "bist":
+        if (asset_type or "fund").lower() == "fund":
+            return t.removesuffix(".IS")
+        return t if t.endswith(".IS") else f"{t}.IS"
+    return t
+
+
 def _live_price(ticker: str) -> Optional[float]:
     """Best-effort current price via yfinance fast_info.
 
@@ -651,7 +661,7 @@ def _fund_holding_rows(db: Session) -> list[dict]:
     for holding in holdings:
         snap = snaps.get(holding.ticker)
         analysis = _fund_snapshot_row(snap, holding.ticker, holding.market, holding.asset_type)
-        price = _live_price(holding.ticker)
+        price = None if analysis.get("data_source") == "tefas" else _live_price(holding.ticker)
         if price is None:
             price = analysis.get("price")
         currency = get_market_config(holding.market)["currency_symbol"]
@@ -690,7 +700,7 @@ def add_fund_holding(item: FundHoldingCreate, db: Session = Depends(get_db)):
     import math
 
     market = _norm(item.ticker, item.market)
-    ticker = _normalize_ticker(item.ticker, market)
+    ticker = _normalize_fund_ticker(item.ticker, market, item.asset_type)
     asset_type = item.asset_type.lower()
     if asset_type not in ("etf", "fund"):
         raise HTTPException(status_code=400, detail="Varlık türü etf veya fund olmalı")
@@ -778,14 +788,17 @@ def list_fund_watchlist(db: Session = Depends(get_db)):
 @router.post("/funds/watchlist")
 def add_fund_watchlist(item: FundWatchlistCreate, db: Session = Depends(get_db)):
     market = _norm(item.ticker, item.market)
-    ticker = _normalize_ticker(item.ticker, market)
+    ticker = _normalize_fund_ticker(item.ticker, market, item.asset_type)
+    asset_type = item.asset_type.lower()
+    if asset_type not in ("etf", "fund"):
+        raise HTTPException(status_code=400, detail="Varlık türü etf veya fund olmalı")
     exists = db.query(LongTermFundWatchlistItem).filter(LongTermFundWatchlistItem.ticker == ticker).first()
     if exists:
         raise HTTPException(status_code=400, detail="Fon/ETF zaten izleme listesinde")
     row = LongTermFundWatchlistItem(
         ticker=ticker,
         market=market,
-        asset_type=item.asset_type.lower(),
+        asset_type=asset_type,
         notes=item.notes,
     )
     db.add(row)
@@ -806,8 +819,14 @@ def delete_fund_watchlist(item_id: int, db: Session = Depends(get_db)):
 
 @router.get("/funds/analysis/{ticker}")
 def get_fund_analysis(ticker: str, market: Optional[str] = None, asset_type: Optional[str] = None, db: Session = Depends(get_db)):
-    ticker = _normalize_ticker(ticker, market)
-    report = fund_service.analyze(ticker, market, asset_type)
+    market = normalize_market(market) if market else infer_market(ticker)
+    asset_type = (asset_type or "etf").lower()
+    ticker = _normalize_fund_ticker(ticker, market, asset_type)
+    report = (
+        fund_service.analyze_tefas(ticker, asset_type)
+        if market == "bist" and asset_type == "fund"
+        else fund_service.analyze(ticker, market, asset_type)
+    )
     if report.get("valid"):
         _upsert_fund_snapshot(db, report)
         db.commit()
@@ -816,22 +835,76 @@ def get_fund_analysis(ticker: str, market: Optional[str] = None, asset_type: Opt
 
 @router.post("/funds/scan")
 async def scan_funds(body: FundScanRequest, db: Session = Depends(get_db)):
+    if body.universe == "tefas_top30":
+        try:
+            reports = await asyncio.to_thread(fund_service.tefas_reports, "YAT", 30)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"TEFAS verisi alınamadı: {exc}") from exc
+        # Keep old snapshots for portfolio/watchlist history, but hide funds
+        # that have dropped out of the current largest-30 screener universe.
+        for snap in db.query(FundSnapshot).all():
+            data = dict(snap.data or {})
+            if data.get("data_source") == "tefas" and data.get("asset_type") == "fund":
+                data["in_top30"] = False
+                snap.data = data
+        for report in reports:
+            report["in_top30"] = True
+            _upsert_fund_snapshot(db, report)
+        db.commit()
+        return {"scanned": len(reports), "valid": len(reports), "errors": 0}
+
     tickers = [t.strip().upper() for t in body.tickers or [] if t.strip()]
     if body.universe:
         tickers.extend(fund_service.universe(body.universe))
     tickers = [
-        _normalize_ticker(ticker, body.market) if body.market else ticker
+        _normalize_fund_ticker(ticker, body.market, body.asset_type) if body.market else ticker
         for ticker in tickers
     ]
     tickers = list(dict.fromkeys(tickers))
     if not tickers:
         raise HTTPException(status_code=400, detail="Taranacak fon/ETF yok")
 
-    async def worker(ticker: str):
-        market = body.market or infer_market(ticker)
-        return await asyncio.to_thread(fund_service.analyze, ticker, market, body.asset_type)
+    metadata: dict[str, tuple[str, str, Optional[str]]] = {}
+    for holding in db.query(LongTermFundHolding).all():
+        metadata[holding.ticker] = (holding.market, holding.asset_type, None)
+    for item in db.query(LongTermFundWatchlistItem).all():
+        metadata[item.ticker] = (item.market, item.asset_type, None)
+    for snap in db.query(FundSnapshot).all():
+        source = (snap.data or {}).get("data_source")
+        metadata[snap.ticker] = (snap.market, snap.asset_type, source)
 
-    reports = await asyncio.gather(*(worker(ticker) for ticker in tickers))
+    tefas_groups: dict[str, set[str]] = {"YAT": set(), "BYF": set()}
+    yahoo_items: list[tuple[str, str, Optional[str]]] = []
+    for ticker in tickers:
+        known_market, known_type, source = metadata.get(
+            ticker,
+            (body.market or infer_market(ticker), body.asset_type or "etf", None),
+        )
+        market = normalize_market(known_market)
+        asset_type = (body.asset_type or known_type or "etf").lower()
+        if source == "tefas" or (market == "bist" and asset_type == "fund"):
+            tefas_groups["BYF" if asset_type == "etf" else "YAT"].add(ticker.removesuffix(".IS"))
+        else:
+            yahoo_items.append((ticker, market, asset_type))
+
+    reports = []
+    for fund_type, requested in tefas_groups.items():
+        if not requested:
+            continue
+        try:
+            available = await asyncio.to_thread(fund_service.tefas_reports, fund_type, None)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"TEFAS verisi alınamadı: {exc}") from exc
+        reports.extend(report for report in available if report["ticker"] in requested)
+
+    semaphore = asyncio.Semaphore(6)
+
+    async def worker(item: tuple[str, str, Optional[str]]):
+        ticker, market, asset_type = item
+        async with semaphore:
+            return await asyncio.to_thread(fund_service.analyze, ticker, market, asset_type)
+
+    reports.extend(await asyncio.gather(*(worker(item) for item in yahoo_items)))
     valid = 0
     for report in reports:
         if report.get("valid"):
@@ -843,7 +916,10 @@ async def scan_funds(body: FundScanRequest, db: Session = Depends(get_db)):
 
 @router.get("/funds/screener")
 def fund_screener(db: Session = Depends(get_db)):
-    rows = [snap.data for snap in db.query(FundSnapshot).all() if snap.data]
+    rows = [
+        snap.data for snap in db.query(FundSnapshot).all()
+        if snap.data and snap.data.get("in_top30") is not False
+    ]
     rows.sort(key=lambda row: row.get("score") if row.get("score") is not None else -1, reverse=True)
     return {"count": len(rows), "results": rows}
 
@@ -1440,7 +1516,8 @@ def diversification(
     for holding in fund_holdings:
         snap = fund_snaps.get(holding.ticker)
         data = (snap.data or {}) if snap else {}
-        price = _live_price(holding.ticker) or data.get("price")
+        price = None if data.get("data_source") == "tefas" else _live_price(holding.ticker)
+        price = price or data.get("price")
         cur = get_market_config(holding.market)["currency_symbol"]
         mv = holding.units * price if price else 0.0
         if normalize_market(holding.market) == "us":
