@@ -3,6 +3,7 @@ import { useToast } from '../../contexts/ToastContext';
 import StockReportModal from './StockReportModal';
 import ListFilters, { uniqueSectors, specificSector, SearchBox } from './ListFilters';
 import AnalyzeButton from './AnalyzeButton';
+import FundWatchlistTable from './FundWatchlistTable';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -12,6 +13,7 @@ const scoreColor = (s) =>
 export default function WatchlistPanel() {
   const { addToast } = useToast();
   const [items, setItems] = useState([]);
+  const [fundItems, setFundItems] = useState([]);
   const [form, setForm] = useState({ ticker: '', market: 'bist' });
   const [reportTicker, setReportTicker] = useState(null);
   const [marketFilter, setMarketFilter] = useState('all');
@@ -24,6 +26,7 @@ export default function WatchlistPanel() {
       const res = await fetch(`${API_BASE}/investing/watchlist`);
       const data = await res.json();
       setItems(data.watchlist || []);
+      setFundItems(data.fund_watchlist || []);
     } catch { /* ignore */ }
   };
 
@@ -139,6 +142,8 @@ export default function WatchlistPanel() {
         )}
         </>
       )}
+
+      <FundWatchlistTable items={fundItems} onChanged={load} />
 
       {reportTicker && <StockReportModal ticker={reportTicker} onClose={() => { setReportTicker(null); load(); }} />}
     </div>

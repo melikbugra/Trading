@@ -4,6 +4,7 @@ import StockReportModal from './StockReportModal';
 import DiversificationCard from './DiversificationCard';
 import ListFilters, { uniqueSectors, specificSector, SearchBox } from './ListFilters';
 import AnalyzeButton from './AnalyzeButton';
+import FundHoldingsTable from './FundHoldingsTable';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -13,7 +14,7 @@ const emptyForm = { ticker: '', market: 'bist', shares: '', cost_basis: '', purc
 
 export default function PortfolioPanel() {
   const { addToast } = useToast();
-  const [data, setData] = useState({ holdings: [], totals: [], summary: [] });
+  const [data, setData] = useState({ holdings: [], fund_holdings: [], totals: [], summary: [] });
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -185,7 +186,7 @@ export default function PortfolioPanel() {
   return (
     <div>
       {/* Risk & diversification */}
-      {data.holdings.length > 0 && <DiversificationCard />}
+      {(data.holdings.length > 0 || data.fund_holdings?.length > 0) && <DiversificationCard />}
 
       {/* Totals */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
@@ -338,6 +339,8 @@ export default function PortfolioPanel() {
         )}
         </>
       )}
+
+      <FundHoldingsTable holdings={data.fund_holdings || []} onChanged={load} />
 
       {reportTicker && (
         <StockReportModal ticker={reportTicker} onClose={() => setReportTicker(null)} />

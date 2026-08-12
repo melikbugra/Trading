@@ -82,7 +82,7 @@ export default function DiversificationCard() {
               <div className="text-xs text-gray-500 mb-1">En Büyük Pozisyonlar</div>
               {data.positions.slice(0, 5).map((p) => (
                 <div key={p.symbol} className="flex justify-between text-xs text-gray-300 border-b border-gray-800/50 py-0.5">
-                  <span>{p.market === 'us' ? '🇺🇸' : '🇹🇷'} {p.symbol}</span><span className="font-mono">%{p.weight}</span>
+                  <span>{p.asset_type && p.asset_type !== 'stock' ? '🧺' : (p.market === 'us' ? '🇺🇸' : '🇹🇷')} {p.symbol}</span><span className="font-mono">%{p.weight}</span>
                 </div>
               ))}
             </div>

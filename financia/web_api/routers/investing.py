@@ -23,13 +23,16 @@ from financia.web_api.database import (
     LongTermSale,
     LongTermHoldingIncome,
     LongTermPortfolioAdvice,
+    LongTermFundHolding,
+    LongTermFundWatchlistItem,
+    FundSnapshot,
     LongTermWatchlistItem,
     FundamentalSnapshot,
     FundamentalOverride,
 )
 from financia.web_api.websocket_manager import manager
 from financia.markets import normalize_market, get_market_config, get_market_tickers, infer_market
-from financia import fundamental_service
+from financia import fundamental_service, fund_service
 
 router = APIRouter(prefix="/investing", tags=["investing"])
 
@@ -65,6 +68,34 @@ class HoldingSell(BaseModel):
 
 class DividendAdd(BaseModel):
     amount: float
+
+
+class FundHoldingCreate(BaseModel):
+    ticker: str
+    market: Optional[str] = None
+    asset_type: str = "etf"
+    units: float
+    cost_basis: float
+    purchase_date: Optional[date] = None
+    notes: str = ""
+
+
+class FundHoldingSell(BaseModel):
+    units: float
+
+
+class FundWatchlistCreate(BaseModel):
+    ticker: str
+    market: Optional[str] = None
+    asset_type: str = "etf"
+    notes: str = ""
+
+
+class FundScanRequest(BaseModel):
+    universe: Optional[str] = None
+    tickers: Optional[List[str]] = None
+    market: Optional[str] = None
+    asset_type: Optional[str] = None
 
 
 class WatchlistCreate(BaseModel):
@@ -141,6 +172,45 @@ def _upsert_snapshot(db: Session, report: dict):
     snap.overall_score = report.get("overall_score")
     snap.label = report.get("label")
     snap.fetched_at = now_turkey()
+
+
+def _upsert_fund_snapshot(db: Session, report: dict):
+    snap = db.query(FundSnapshot).filter(FundSnapshot.ticker == report["ticker"]).first()
+    if not snap:
+        snap = FundSnapshot(ticker=report["ticker"])
+        db.add(snap)
+    snap.market = report["market"]
+    snap.asset_type = report["asset_type"]
+    snap.name = report.get("name")
+    snap.category = report.get("category")
+    snap.data = report
+    snap.score = report.get("score")
+    snap.label = report.get("label")
+    snap.fetched_at = now_turkey()
+
+
+def _fund_snapshot_row(snap: Optional[FundSnapshot], ticker: str, market: str, asset_type: str) -> dict:
+    if snap:
+        return snap.data or {
+            "ticker": ticker,
+            "market": market,
+            "asset_type": asset_type,
+            "name": snap.name,
+            "category": snap.category,
+            "score": snap.score,
+            "label": snap.label,
+        }
+    return {
+        "ticker": ticker,
+        "symbol": ticker.replace(".IS", ""),
+        "market": market,
+        "asset_type": asset_type,
+        "name": ticker,
+        "category": None,
+        "score": None,
+        "label": "Henüz analiz edilmedi",
+        "metrics": {},
+    }
 
 
 # A sector needs at least this many scanned peers for a relative value score.
@@ -284,6 +354,21 @@ def list_holdings(db: Session = Depends(get_db)):
             "portfolio_advice": advice_map.get(h.id),
         })
 
+    fund_rows = _fund_holding_rows(db)
+    for fund in fund_rows:
+        cur = fund["currency"]
+        summary = summary_by_currency.setdefault(
+            cur,
+            {"cost_value": 0.0, "market_value": 0.0, "pnl": 0.0, "dividends": 0.0, "has_price": True},
+        )
+        summary["cost_value"] += fund["cost_value"]
+        if fund["market_value"] is None:
+            summary["has_price"] = False
+        else:
+            totals[cur] = totals.get(cur, 0.0) + fund["market_value"]
+            summary["market_value"] += fund["market_value"]
+            summary["pnl"] += fund["pnl"]
+
     # compute weights within each currency bucket
     for r in rows:
         cur = r["currency"]
@@ -291,9 +376,17 @@ def list_holdings(db: Session = Depends(get_db)):
             r["weight"] = round(r["market_value"] / totals[cur] * 100, 1)
         else:
             r["weight"] = None
+    for fund in fund_rows:
+        cur = fund["currency"]
+        fund["weight"] = (
+            round(fund["market_value"] / totals[cur] * 100, 1)
+            if fund["market_value"] is not None and totals.get(cur)
+            else None
+        )
 
     return {
         "holdings": rows,
+        "fund_holdings": fund_rows,
         "totals": [{"currency": c, "market_value": round(v, 2)} for c, v in totals.items()],
         "summary": [
             {
@@ -501,7 +594,24 @@ def list_watchlist(db: Session = Depends(get_db)):
             "notes": it.notes,
             "scores": _snapshot_summary(snap) if snap else None,
         })
-    return {"watchlist": out}
+    fund_snaps = {s.ticker: s for s in db.query(FundSnapshot).all()}
+    fund_out = [
+        {
+            "id": item.id,
+            "ticker": item.ticker,
+            "symbol": item.ticker.replace(".IS", ""),
+            "market": item.market,
+            "asset_type": item.asset_type,
+            "notes": item.notes,
+            "analysis": _fund_snapshot_row(
+                fund_snaps.get(item.ticker), item.ticker, item.market, item.asset_type
+            ),
+        }
+        for item in db.query(LongTermFundWatchlistItem)
+        .order_by(LongTermFundWatchlistItem.added_at.desc())
+        .all()
+    ]
+    return {"watchlist": out, "fund_watchlist": fund_out}
 
 
 @router.post("/watchlist")
@@ -529,6 +639,223 @@ def delete_watchlist(item_id: int, db: Session = Depends(get_db)):
     db.delete(item)
     db.commit()
     return {"deleted": item_id}
+
+
+# ============= Funds & ETFs =============
+
+
+def _fund_holding_rows(db: Session) -> list[dict]:
+    holdings = db.query(LongTermFundHolding).order_by(LongTermFundHolding.created_at.desc()).all()
+    snaps = {s.ticker: s for s in db.query(FundSnapshot).all()}
+    rows = []
+    for holding in holdings:
+        snap = snaps.get(holding.ticker)
+        analysis = _fund_snapshot_row(snap, holding.ticker, holding.market, holding.asset_type)
+        price = _live_price(holding.ticker)
+        if price is None:
+            price = analysis.get("price")
+        currency = get_market_config(holding.market)["currency_symbol"]
+        cost_value = holding.units * holding.cost_basis
+        market_value = holding.units * price if price is not None else None
+        pnl = market_value - cost_value if market_value is not None else None
+        pnl_pct = pnl / cost_value * 100 if pnl is not None and cost_value else None
+        rows.append({
+            "id": holding.id,
+            "ticker": holding.ticker,
+            "symbol": holding.ticker.replace(".IS", ""),
+            "market": holding.market,
+            "asset_type": holding.asset_type,
+            "units": holding.units,
+            "cost_basis": holding.cost_basis,
+            "purchase_date": holding.purchase_date.isoformat() if holding.purchase_date else None,
+            "notes": holding.notes,
+            "currency": currency,
+            "price": round(price, 4) if price is not None else None,
+            "cost_value": round(cost_value, 2),
+            "market_value": round(market_value, 2) if market_value is not None else None,
+            "pnl": round(pnl, 2) if pnl is not None else None,
+            "pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None,
+            "analysis": analysis,
+        })
+    return rows
+
+
+@router.get("/funds/holdings")
+def list_fund_holdings(db: Session = Depends(get_db)):
+    return {"holdings": _fund_holding_rows(db)}
+
+
+@router.post("/funds/holdings")
+def add_fund_holding(item: FundHoldingCreate, db: Session = Depends(get_db)):
+    import math
+
+    market = _norm(item.ticker, item.market)
+    ticker = _normalize_ticker(item.ticker, market)
+    asset_type = item.asset_type.lower()
+    if asset_type not in ("etf", "fund"):
+        raise HTTPException(status_code=400, detail="Varlık türü etf veya fund olmalı")
+    if not math.isfinite(item.units) or item.units <= 0:
+        raise HTTPException(status_code=400, detail="Adet sıfırdan büyük olmalı")
+    if not math.isfinite(item.cost_basis) or item.cost_basis <= 0:
+        raise HTTPException(status_code=400, detail="Maliyet sıfırdan büyük olmalı")
+
+    holding = db.query(LongTermFundHolding).filter(
+        LongTermFundHolding.ticker == ticker,
+        LongTermFundHolding.market == market,
+    ).first()
+    if holding:
+        total_units = holding.units + item.units
+        holding.cost_basis = (
+            holding.units * holding.cost_basis + item.units * item.cost_basis
+        ) / total_units
+        holding.units = total_units
+        if item.notes:
+            holding.notes = f"{holding.notes}\nAlış: {item.notes}".strip()
+        merged = True
+    else:
+        holding = LongTermFundHolding(
+            ticker=ticker,
+            market=market,
+            asset_type=asset_type,
+            units=item.units,
+            cost_basis=item.cost_basis,
+            purchase_date=item.purchase_date,
+            notes=item.notes,
+        )
+        db.add(holding)
+        merged = False
+    db.commit()
+    db.refresh(holding)
+    return {"id": holding.id, "ticker": holding.ticker, "merged": merged}
+
+
+@router.post("/funds/holdings/{holding_id}/sell")
+def sell_fund_holding(holding_id: int, item: FundHoldingSell, db: Session = Depends(get_db)):
+    import math
+
+    holding = db.query(LongTermFundHolding).filter(LongTermFundHolding.id == holding_id).first()
+    if not holding:
+        raise HTTPException(status_code=404, detail="Fon/ETF pozisyonu bulunamadı")
+    if not math.isfinite(item.units) or item.units <= 0 or item.units > holding.units:
+        raise HTTPException(status_code=400, detail="Geçerli bir satış adedi gir")
+    remaining = holding.units - item.units
+    fully_sold = remaining <= 1e-9
+    if fully_sold:
+        db.delete(holding)
+    else:
+        holding.units = remaining
+    db.commit()
+    return {"sold_units": item.units, "remaining_units": 0 if fully_sold else remaining, "fully_sold": fully_sold}
+
+
+@router.delete("/funds/holdings/{holding_id}")
+def delete_fund_holding(holding_id: int, db: Session = Depends(get_db)):
+    holding = db.query(LongTermFundHolding).filter(LongTermFundHolding.id == holding_id).first()
+    if not holding:
+        raise HTTPException(status_code=404, detail="Fon/ETF pozisyonu bulunamadı")
+    db.delete(holding)
+    db.commit()
+    return {"deleted": holding_id}
+
+
+@router.get("/funds/watchlist")
+def list_fund_watchlist(db: Session = Depends(get_db)):
+    snaps = {s.ticker: s for s in db.query(FundSnapshot).all()}
+    rows = []
+    for item in db.query(LongTermFundWatchlistItem).order_by(LongTermFundWatchlistItem.added_at.desc()).all():
+        rows.append({
+            "id": item.id,
+            "ticker": item.ticker,
+            "symbol": item.ticker.replace(".IS", ""),
+            "market": item.market,
+            "asset_type": item.asset_type,
+            "notes": item.notes,
+            "analysis": _fund_snapshot_row(snaps.get(item.ticker), item.ticker, item.market, item.asset_type),
+        })
+    return {"watchlist": rows}
+
+
+@router.post("/funds/watchlist")
+def add_fund_watchlist(item: FundWatchlistCreate, db: Session = Depends(get_db)):
+    market = _norm(item.ticker, item.market)
+    ticker = _normalize_ticker(item.ticker, market)
+    exists = db.query(LongTermFundWatchlistItem).filter(LongTermFundWatchlistItem.ticker == ticker).first()
+    if exists:
+        raise HTTPException(status_code=400, detail="Fon/ETF zaten izleme listesinde")
+    row = LongTermFundWatchlistItem(
+        ticker=ticker,
+        market=market,
+        asset_type=item.asset_type.lower(),
+        notes=item.notes,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"id": row.id, "ticker": row.ticker}
+
+
+@router.delete("/funds/watchlist/{item_id}")
+def delete_fund_watchlist(item_id: int, db: Session = Depends(get_db)):
+    item = db.query(LongTermFundWatchlistItem).filter(LongTermFundWatchlistItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Fon/ETF bulunamadı")
+    db.delete(item)
+    db.commit()
+    return {"deleted": item_id}
+
+
+@router.get("/funds/analysis/{ticker}")
+def get_fund_analysis(ticker: str, market: Optional[str] = None, asset_type: Optional[str] = None, db: Session = Depends(get_db)):
+    ticker = _normalize_ticker(ticker, market)
+    report = fund_service.analyze(ticker, market, asset_type)
+    if report.get("valid"):
+        _upsert_fund_snapshot(db, report)
+        db.commit()
+    return report
+
+
+@router.post("/funds/scan")
+async def scan_funds(body: FundScanRequest, db: Session = Depends(get_db)):
+    tickers = [t.strip().upper() for t in body.tickers or [] if t.strip()]
+    if body.universe:
+        tickers.extend(fund_service.universe(body.universe))
+    tickers = [
+        _normalize_ticker(ticker, body.market) if body.market else ticker
+        for ticker in tickers
+    ]
+    tickers = list(dict.fromkeys(tickers))
+    if not tickers:
+        raise HTTPException(status_code=400, detail="Taranacak fon/ETF yok")
+
+    async def worker(ticker: str):
+        market = body.market or infer_market(ticker)
+        return await asyncio.to_thread(fund_service.analyze, ticker, market, body.asset_type)
+
+    reports = await asyncio.gather(*(worker(ticker) for ticker in tickers))
+    valid = 0
+    for report in reports:
+        if report.get("valid"):
+            _upsert_fund_snapshot(db, report)
+            valid += 1
+    db.commit()
+    return {"scanned": len(tickers), "valid": valid, "errors": len(tickers) - valid}
+
+
+@router.get("/funds/screener")
+def fund_screener(db: Session = Depends(get_db)):
+    rows = [snap.data for snap in db.query(FundSnapshot).all() if snap.data]
+    rows.sort(key=lambda row: row.get("score") if row.get("score") is not None else -1, reverse=True)
+    return {"count": len(rows), "results": rows}
+
+
+@router.delete("/funds/screener/{ticker}")
+def delete_fund_snapshot(ticker: str, db: Session = Depends(get_db)):
+    ticker = ticker.strip().upper()
+    deleted = db.query(FundSnapshot).filter(FundSnapshot.ticker == ticker).delete()
+    db.commit()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Fon/ETF bulunamadı")
+    return {"deleted": ticker}
 
 
 # ============= Analysis / Screener =============
@@ -1062,7 +1389,8 @@ def diversification(
     from concurrent.futures import ThreadPoolExecutor
 
     holdings = db.query(LongTermHolding).all()
-    if not holdings:
+    fund_holdings = db.query(LongTermFundHolding).all()
+    if not holdings and not fund_holdings:
         return {"holdings": 0, "warnings": [], "sectors": [], "positions": [], "currencies": []}
 
     snaps = {s.ticker: s for s in db.query(FundamentalSnapshot).all()}
@@ -1106,7 +1434,35 @@ def diversification(
         sec = sector or "Bilinmiyor"
         sector_vals[sec] = sector_vals.get(sec, 0.0) + base
         currency_vals[cur] = currency_vals.get(cur, 0.0) + base
-        positions.append({"symbol": h.ticker.replace(".IS", ""), "market": h.market, "sector": sec, "base": base})
+        positions.append({"symbol": h.ticker.replace(".IS", ""), "market": h.market, "sector": sec, "base": base, "asset_type": "stock"})
+
+    fund_snaps = {s.ticker: s for s in db.query(FundSnapshot).all()}
+    for holding in fund_holdings:
+        snap = fund_snaps.get(holding.ticker)
+        data = (snap.data or {}) if snap else {}
+        price = _live_price(holding.ticker) or data.get("price")
+        cur = get_market_config(holding.market)["currency_symbol"]
+        mv = holding.units * price if price else 0.0
+        if normalize_market(holding.market) == "us":
+            if usdtry:
+                base = mv * usdtry
+            else:
+                fx_ok = False
+                base = mv
+        else:
+            base = mv
+        total_base += base
+        category = data.get("category") or ("ETF" if holding.asset_type == "etf" else "Yatırım Fonu")
+        sec = f"Fon/ETF · {category}"
+        sector_vals[sec] = sector_vals.get(sec, 0.0) + base
+        currency_vals[cur] = currency_vals.get(cur, 0.0) + base
+        positions.append({
+            "symbol": holding.ticker.replace(".IS", ""),
+            "market": holding.market,
+            "sector": sec,
+            "base": base,
+            "asset_type": holding.asset_type,
+        })
 
     def _pct(v):
         return round(v / total_base * 100, 1) if total_base else 0.0
@@ -1120,7 +1476,7 @@ def diversification(
         key=lambda x: x["weight"], reverse=True,
     )
     pos_out = sorted(
-        [{"symbol": p["symbol"], "market": p["market"], "sector": p["sector"], "weight": _pct(p["base"])} for p in positions],
+        [{"symbol": p["symbol"], "market": p["market"], "sector": p["sector"], "asset_type": p["asset_type"], "weight": _pct(p["base"])} for p in positions],
         key=lambda x: x["weight"], reverse=True,
     )
 
@@ -1135,15 +1491,16 @@ def diversification(
     for c in currencies:
         if c["weight"] > currency_threshold:
             warnings.append({"level": "medium", "message": f"Portföyün %{c['weight']}'i {c['currency']} cinsinden — kur riski yüksek."})
-    if len(holdings) < 4:
-        warnings.append({"level": "medium", "message": f"Yalnızca {len(holdings)} pozisyon var — çeşitlendirme düşük."})
+    total_positions = len(holdings) + len(fund_holdings)
+    if total_positions < 4:
+        warnings.append({"level": "medium", "message": f"Yalnızca {total_positions} pozisyon var — çeşitlendirme düşük."})
     if not fx_ok:
         warnings.append({"level": "info", "message": "USD/TRY kuru alınamadı; $ pozisyonlar dönüştürülemedi, ağırlıklar yaklaşıktır."})
     if not warnings:
         warnings.append({"level": "ok", "message": "Belirgin bir yoğunlaşma riski görünmüyor."})
 
     return {
-        "holdings": len(holdings),
+        "holdings": total_positions,
         "base_currency": "₺",
         "usdtry": usdtry,
         "total_base": round(total_base, 2),

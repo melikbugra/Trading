@@ -4,10 +4,12 @@ import ScreenerPanel from './investing/ScreenerPanel';
 import DividendCalendarPanel from './investing/DividendCalendarPanel';
 import WatchlistPanel from './investing/WatchlistPanel';
 import NewsPanel from './investing/NewsPanel';
+import FundEtfPanel from './investing/FundEtfPanel';
 
 const TABS = [
   { key: 'portfolio', label: '💼 Portföy', color: 'blue' },
   { key: 'screener', label: '🔎 Analiz & Tarayıcı', color: 'green' },
+  { key: 'funds', label: '🧺 Fon & ETF', color: 'pink' },
   { key: 'news', label: '📰 Haberler', color: 'cyan' },
   { key: 'dividends', label: '💰 Temettü', color: 'yellow' },
   { key: 'watchlist', label: '⭐ İzleme', color: 'purple' },
@@ -65,6 +67,7 @@ export default function InvestingApp({ onHome }) {
       <div className="flex-1 max-w-6xl w-full mx-auto px-2 sm:px-8 py-4">
         {tab === 'portfolio' && <PortfolioPanel />}
         {tab === 'screener' && <ScreenerPanel />}
+        {tab === 'funds' && <FundEtfPanel />}
         {tab === 'news' && <NewsPanel />}
         {tab === 'dividends' && <DividendCalendarPanel />}
         {tab === 'watchlist' && <WatchlistPanel />}

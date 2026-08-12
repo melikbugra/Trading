@@ -704,6 +704,51 @@ class LongTermPortfolioAdvice(Base):
     updated_at = Column(DateTime, default=now_turkey, onupdate=now_turkey)
 
 
+class LongTermFundHolding(Base):
+    """A fund or ETF position, kept separate from individual stocks."""
+
+    __tablename__ = "lt_fund_holdings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String, nullable=False)
+    market = Column(String, nullable=False)  # "bist" or "us"
+    asset_type = Column(String, nullable=False, default="etf")  # etf | fund
+    units = Column(Float, nullable=False)
+    cost_basis = Column(Float, nullable=False)
+    purchase_date = Column(Date, nullable=True)
+    notes = Column(String, default="")
+    created_at = Column(DateTime, default=now_turkey)
+
+
+class LongTermFundWatchlistItem(Base):
+    """A fund or ETF being followed before purchase."""
+
+    __tablename__ = "lt_fund_watchlist"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String, nullable=False)
+    market = Column(String, nullable=False)
+    asset_type = Column(String, nullable=False, default="etf")
+    notes = Column(String, default="")
+    added_at = Column(DateTime, default=now_turkey)
+
+
+class FundSnapshot(Base):
+    """Latest cached long-term fund/ETF analysis."""
+
+    __tablename__ = "lt_fund_snapshots"
+
+    ticker = Column(String, primary_key=True)
+    market = Column(String, nullable=False)
+    asset_type = Column(String, nullable=False, default="etf")
+    name = Column(String, nullable=True)
+    category = Column(String, nullable=True)
+    data = Column(JSON, default={})
+    score = Column(Float, nullable=True)
+    label = Column(String, nullable=True)
+    fetched_at = Column(DateTime, default=now_turkey)
+
+
 class LongTermWatchlistItem(Base):
     """A long-term candidate being tracked (not yet owned)."""
 
